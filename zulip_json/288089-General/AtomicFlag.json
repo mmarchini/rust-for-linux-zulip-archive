@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> , I'm working on the atomic patchset and would like to replace some exisiting code that uses Rust native atomic, one of the examples is <code>Revocable</code>, which has an <code>AtomicBool</code> in it. Given that byte-wise atomic is suboptimal on some archs (false sharing, more instructions etc.), I'm going to replace that with a:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">AtomicFlag</span><span class=\"p\">(</span><span class=\"n\">Atomic</span><span class=\"o\">&lt;</span><span class=\"kt\">i32</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>Thoughts?</p>",
+        "id": 519452935,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1747766694
+    },
+    {
+        "content": "<p>sgtm</p>",
+        "id": 519453052,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1747766743
+    },
+    {
+        "content": "<p>Sound like a good improvement.</p>",
+        "id": 519455859,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747767711
+    },
+    {
+        "content": "<p>One problem though is that <code>AtomicFlag</code> won't have a <code>get_mut() -&gt; &amp;mut i32</code> method, because it's representing a flag/bool, so we could not have the optimizaion(?) in e.g.  <code>Revocable::drop()</code> functions.</p>",
+        "id": 523180664,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749509536
+    },
+    {
+        "content": "<p>you could have a <code>fn get_mut(&amp;mut self) -&gt; &amp;mut Flag</code> where <code>#[repr(transparent)] struct Flag(i32);</code></p>",
+        "id": 523180756,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749509591
+    },
+    {
+        "content": "<p>and you can only call <code>Flag::enable</code>/<code>Flag::disable</code></p>",
+        "id": 523180776,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749509604
+    },
+    {
+        "content": "<p>or just have a <code>fn set_mut(&amp;mut self, flag: bool)</code></p>",
+        "id": 523180825,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749509637
+    },
+    {
+        "content": "<p>in the real use case, the <code>get_mut()</code> is only for read</p>",
+        "id": 523180879,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749509677
+    },
+    {
+        "content": "<p>but the <code>Flag(i32)</code> idea probably also works.</p>",
+        "id": 523180949,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749509735
+    },
+    {
+        "content": "<p>Like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// in rust/kernel/sync/atomic.rs</span>\n\n<span class=\"sd\">/// A special `i32` that only represents `true` or `false`.</span>\n<span class=\"sd\">///</span>\n<span class=\"sd\">/// Used in an `Atomic` to provide efficient atomic bool values.</span>\n<span class=\"cp\">#[derive(Clone, Copy)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Flag</span><span class=\"p\">(</span><span class=\"kt\">i32</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>?</p>",
+        "id": 523181275,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749509862
+    },
+    {
+        "content": "<p>so disable/enable is not needed for Flag, only test() and that can take a &amp;self.</p>",
+        "id": 523182464,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749510588
+    },
+    {
+        "content": "<p>For now, of course</p>",
+        "id": 523182503,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749510609
+    },
+    {
+        "content": "<p>Would it make sense to make the flag <code>u8</code> on architectures where that works fine? For space savings</p>",
+        "id": 523636420,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1749674983
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/channel/288089-General/topic/AtomicFlag/near/523636420\">said</a>:</p>\n<blockquote>\n<p>Would it make sense to make the flag <code>u8</code> on architectures where that works fine? For space savings</p>\n</blockquote>\n<p>Maybe, but right now the important thing is to get it fixed. Using Rust atomics in kernel is incorrect and unsound.</p>",
+        "id": 526171005,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1751078296
+    }
+]

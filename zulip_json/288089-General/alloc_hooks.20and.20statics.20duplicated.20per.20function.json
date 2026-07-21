@@ -1,0 +1,200 @@
+[
+    {
+        "content": "<p>If you look in <code>include/linux/alloc_tag.h</code> you will find that many allocation functions are wrapped in <code>alloc_hooks()</code> using a <code>#define</code>. This macro is declared as follows:</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"c1\">// a few different variants of this one depending on config</span>\n<span class=\"cp\">#define DEFINE_ALLOC_TAG(_alloc_tag)                        \\</span>\n<span class=\"cp\">    static struct alloc_tag _alloc_tag __used __aligned(8)          \\</span>\n<span class=\"cp\">    __section(ALLOC_TAG_SECTION_NAME) = {                   \\</span>\n<span class=\"cp\">        .ct = CODE_TAG_INIT,                        \\</span>\n<span class=\"cp\">        .counters = NULL };</span>\n\n<span class=\"cp\">#define alloc_hooks_tag(_tag, _do_alloc)                \\</span>\n<span class=\"cp\">({                                  \\</span>\n<span class=\"cp\">    typeof(_do_alloc) _res;                     \\</span>\n<span class=\"cp\">    if (mem_alloc_profiling_enabled()) {                \\</span>\n<span class=\"cp\">        struct alloc_tag * __maybe_unused _old;         \\</span>\n<span class=\"cp\">        _old = alloc_tag_save(_tag);                \\</span>\n<span class=\"cp\">        _res = _do_alloc;                   \\</span>\n<span class=\"cp\">        alloc_tag_restore(_tag, _old);              \\</span>\n<span class=\"cp\">    } else                              \\</span>\n<span class=\"cp\">        _res = _do_alloc;                   \\</span>\n<span class=\"cp\">    _res;                               \\</span>\n<span class=\"cp\">})</span>\n\n<span class=\"cp\">#define alloc_hooks(_do_alloc)                      \\</span>\n<span class=\"cp\">({                                  \\</span>\n<span class=\"cp\">    DEFINE_ALLOC_TAG(_alloc_tag);                   \\</span>\n<span class=\"cp\">    alloc_hooks_tag(&amp;_alloc_tag, _do_alloc);            \\</span>\n<span class=\"cp\">})</span>\n</code></pre></div>\n<p>So this means that each call to <code>kmalloc</code> expands to declaring a new global variable for counting allocations from this call-site.</p>\n<p>Right now, all Rust code is going to share a single global declared in <code>rust/helpers/</code>, so <code>alloc_hooks()</code> combines all Rust code throughout the entire kernel. The INLINE_HELPERS patch doesn't help here (ok actually it helps a bit, because .ko modules get a separately compiled copy of helpers, so each module has its own global). To really fix it, we would need some way for things such as <code>KBox::new</code> to expand to a new instance of this static.</p>\n<p>But we can't really create these statics using Rust statics, afaict. We want them duplicated per callsite, including when generics is in play.</p>\n<p>What's the solution here? Is the only way to convert the C static into an inline asm block containing a section block? I think those do get duplicated by inlining and generics ...</p>\n<p>Thoughts?</p>\n<p>I made this about <code>alloc_hooks()</code>, but I don't think it's the only case in the kernel where this pattern occurs.</p>",
+        "id": 561657777,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764770168
+    },
+    {
+        "content": "<p>We could solve it similarly to how we solve lock class keys, with a macro.</p>",
+        "id": 562068689,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764930915
+    },
+    {
+        "content": "<p>But <code>KBox::new</code> isn't a macro today</p>",
+        "id": 562073594,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764932483
+    },
+    {
+        "content": "<p>Right. We could add a new kbox constructor that takes an alloc_tag, similar to lock class, and add a macro that generates the tag when calling the new constructor. We can then convert users to the new API over time.</p>",
+        "id": 562086802,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764936870
+    },
+    {
+        "content": "<p>A lot of churn, but I don't know how to do it without a macro.</p>",
+        "id": 562087013,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764936940
+    },
+    {
+        "content": "<p>Or rather, if we can do it without a macro, we can do the lock class thing without a macro as well.</p>",
+        "id": 562087095,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764936965
+    },
+    {
+        "content": "<p>I do think that inline asm works, but it might be a bit much ...</p>",
+        "id": 562087254,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937023
+    },
+    {
+        "content": "<p>since it takes something that's not platform specific and makes it platform specific</p>",
+        "id": 562087300,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937039
+    },
+    {
+        "content": "<p>How would you do it with inline asm?</p>",
+        "id": 562087470,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937102
+    },
+    {
+        "content": "<p>Inline asm can be used to define global variables</p>",
+        "id": 562087628,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937165
+    },
+    {
+        "content": "<p>With <code>pushsection</code></p>",
+        "id": 562087656,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937176
+    },
+    {
+        "content": "<p>It would still live inside <code>KBox::new</code>, there is nothing the inline asm block can read that would help it decide where we are called from. Unless you read the link register?</p>",
+        "id": 562087752,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937208
+    },
+    {
+        "content": "<p>Assuming that the call to <code>kmalloc</code> gets inlined, then the inline asm would be inlined with it. Duplicating the inline asm through inlining leads to multiple copies.</p>",
+        "id": 562088032,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937294
+    },
+    {
+        "content": "<p>In that case, would it work to define a static variable in pure rust in <code>KBox::new</code> and then force inlining of the function?</p>",
+        "id": 562088287,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937380
+    },
+    {
+        "content": "<p>That static variable would not be duplicated.</p>",
+        "id": 562088454,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937431
+    },
+    {
+        "content": "<p>it would be equivalent to declaring the static outside of the function at the top-level</p>",
+        "id": 562088540,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937465
+    },
+    {
+        "content": "<p>Ok. But one you define in assembly would be?</p>",
+        "id": 562088545,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937467
+    },
+    {
+        "content": "<p>yeah I believe so</p>",
+        "id": 562088696,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937527
+    },
+    {
+        "content": "<p>As far as I can tell from <code>pushsection</code> docs, it allows you to switch the ELF section momentarily (with a stack). What section would you switch to that is unique for the invocation site?</p>",
+        "id": 562088937,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937610
+    },
+    {
+        "content": "<p>Can you do something like <code>some_name_{PC}</code> or something like that?</p>",
+        "id": 562089126,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937666
+    },
+    {
+        "content": "<p>It looks like the C code uses a <code>#define</code> called <code>ALLOC_TAG_SECTION_NAME</code> for the section name.</p>",
+        "id": 562089206,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937691
+    },
+    {
+        "content": "<p>They do not have to be unique.</p>",
+        "id": 562089224,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937697
+    },
+    {
+        "content": "<p>Multiple instances of the same section name are concatenated.</p>",
+        "id": 562089250,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937704
+    },
+    {
+        "content": "<p>Each alloc call site would map to a unique counter, but they all live in the same section, which is ALLOC_TAG_SECTION_NAME?</p>",
+        "id": 562089866,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937923
+    },
+    {
+        "content": "<p>So how would you ID what counter to use?</p>",
+        "id": 562089918,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764937940
+    },
+    {
+        "content": "<p><code>alloc_hooks_tag</code> takes a pointer to the entry in the section</p>",
+        "id": 562090057,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764937983
+    },
+    {
+        "content": "<p>Right, so for my mental model, this pointer is equivalent to our lock class key. How do you obtain that pointer at the call site?</p>",
+        "id": 562090321,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764938073
+    },
+    {
+        "content": "<p>You could write the inline asm so that it stores the address in a specific register.</p>",
+        "id": 562090392,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764938102
+    },
+    {
+        "content": "<p>Then it would be an address somewhere inside the big section, to where this particular piece ended up.</p>",
+        "id": 562090433,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764938116
+    },
+    {
+        "content": "<p>OK, I guess that could work. Then we just have to be sure that the code is inlined.</p>",
+        "id": 562090922,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764938312
+    },
+    {
+        "content": "<p>And, as an added bonus we can use the same method to get rid of all the macros we have for lock class key. But the cost would be that constructors <em>must</em> be inlined.</p>",
+        "id": 562091265,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764938415
+    },
+    {
+        "content": "<p>I don't the use of target specific inline assembly should deter us. But I guess that is up for discussion.</p>",
+        "id": 562091497,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764938490
+    },
+    {
+        "content": "<p>Adding this for potential discussion at BoF</p>",
+        "id": 562303029,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765106896
+    }
+]

@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p>Hey, do we have a consensus on how to expose Rust kernel APIs to other C code, if said Rust code uses stack allocated objects? I want to allow C-callers to allocate the API objects on the stack, without necessarily exposing the struct details. I would have to somehow ensure the hand-crafted C header uses struct-sizes that are in-sync with the Rust objects, but that kinda requires a generator (as struct-layout is very much architecture dependent, even with repr(C)).</p>\n<p>Any hints or even previous art on what to do? My workaround for now is to always use heap-allocations, but that is a bit annoying for cheap operations.</p>",
+        "id": 469085907,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725973604
+    },
+    {
+        "content": "<p>You can make a struct on the C side with sufficient space and assert inside Rust that the size and alignment of the C struct is sufficient.</p>",
+        "id": 469086187,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725973675
+    },
+    {
+        "content": "<p>Yeah, but size requirements can differ greatly between architectures, especially when using repr(c) on the object.</p>",
+        "id": 469087844,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725974048
+    },
+    {
+        "content": "<p>And then object-size might depend heavily on CONFIG_* knobs. So imagine putting <code>struct mutex</code> into the object. It changes size heavily if you enable lockdep, for instance.</p>",
+        "id": 469088110,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725974133
+    },
+    {
+        "content": "<p>It's okay if the size is too large.</p>",
+        "id": 469088853,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725974319
+    },
+    {
+        "content": "<p>Other than that, we don't really have any way to do it right now.</p>",
+        "id": 469088894,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725974326
+    },
+    {
+        "content": "<p>Maybe you could set up some sort of makefile thing to generate a file containing the size at build time ... but that sounds complicated.</p>",
+        "id": 469089164,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725974375
+    },
+    {
+        "content": "<p>you could also try to export <code>size_of::&lt;T&gt;()</code> and <code>align_of::&lt;T&gt;()</code> to C</p>",
+        "id": 469104344,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725977509
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Exposing.20stack-allocated.20Rust.20APIs.20to.20C/near/469088853\">said</a>:</p>\n<blockquote>\n<p>It's okay if the size is too large.</p>\n</blockquote>\n<p>Sure, but size of some objects can triple or more if you enable debugging options. Not sure  vastly overallocating would be a viable strategy.</p>",
+        "id": 469175591,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725992162
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/Exposing.20stack-allocated.20Rust.20APIs.20to.20C/near/469104344\">said</a>:</p>\n<blockquote>\n<p>you could also try to export <code>size_of::&lt;T&gt;()</code> and <code>align_of::&lt;T&gt;()</code> to C</p>\n</blockquote>\n<p>But this would not end up being compile-time constant in C, would it? So I would end up using alloca() or a VLA if I wanted to allocate it on the stack, no?</p>",
+        "id": 469175901,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725992273
+    },
+    {
+        "content": "<p>I could store size/alignment under a special symbol, then have a simple Makefile target that extracts those and turns them into a trivial C header. Not very elegant though :-/</p>",
+        "id": 469176665,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725992477
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"748963\">David Rheinsberg</span> <a href=\"#narrow/stream/291565-Help/topic/Exposing.20stack-allocated.20Rust.20APIs.20to.20C/near/469175901\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/Exposing.20stack-allocated.20Rust.20APIs.20to.20C/near/469104344\">said</a>:</p>\n<blockquote>\n<p>you could also try to export <code>size_of::&lt;T&gt;()</code> and <code>align_of::&lt;T&gt;()</code> to C</p>\n</blockquote>\n<p>But this would not end up being compile-time constant in C, would it? So I would end up using alloca() or a VLA if I wanted to allocate it on the stack, no?</p>\n</blockquote>\n<p>sorry, I have no idea how that would actually work, as I have never done that. you probably can't export a <code>const</code> from Rust to C, but maybe it's good enough to use <code>alloca</code> and export a <code>static</code>?</p>",
+        "id": 469179268,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725993305
+    },
+    {
+        "content": "<p>I wouldn't mind alloca(), but the kernel does not have it, and they have been fighting VLAs for years, so don't think we should reintroduce them now.</p>",
+        "id": 469180520,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725993614
+    },
+    {
+        "content": "<p>I see, that is a bit unfortunate...</p>",
+        "id": 469187218,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725995076
+    },
+    {
+        "content": "<p>C/Rust interface is probably mostly using a struct defined by C. Why do you want to avoid expose the struct details to C callers?</p>",
+        "id": 469191233,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725996197
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Exposing.20stack-allocated.20Rust.20APIs.20to.20C/near/469191233\">said</a>:</p>\n<blockquote>\n<p>C/Rust interface is probably mostly using a struct defined by C. Why do you want to avoid expose the struct details to C callers?</p>\n</blockquote>\n<p>I don't mind exposing the info, I just don't necessarily need it. So I am fine either way.</p>",
+        "id": 469296602,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1726037154
+    },
+    {
+        "content": "<p>I could define the struct in C and then use it in Rust, but that means Rust would have to work on a raw struct, rather than a struct using the abstractions provided by <code>kernel</code>. E.g., if I put a mutex in it, the Rust side would have to work on the raw mutex, rather than the lock abstraction. Or I would have to transmute on each call, if the abstraction uses repr(transparent).</p>",
+        "id": 469296822,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1726037258
+    }
+]

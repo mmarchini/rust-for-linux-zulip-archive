@@ -1,0 +1,101 @@
+<html>
+<head><meta charset="utf-8"><title>Result::to_errno helper · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Result.3A.3Ato_errno.20helper.html">Result::to_errno helper</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="512175578"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Result%3A%3Ato_errno%20helper/near/512175578" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alyssa Rosenzweig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Result.3A.3Ato_errno.20helper.html#512175578">(Apr 14 2025 at 21:20)</a>:</h4>
+<p>While reviewing the DRM abstractions, I noticed a pattern:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">match</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">(),</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This seems to come up in other abstractions too. Time for a helper for this..?</p>
+
+
+
+<a name="512176074"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Result%3A%3Ato_errno%20helper/near/512176074" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alyssa Rosenzweig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Result.3A.3Ato_errno.20helper.html#512176074">(Apr 14 2025 at 21:23)</a>:</h4>
+<p>This should compose with map as well, the DRM code on-list has</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">T</span><span class="p">::</span><span class="n">open</span><span class="p">(</span><span class="n">drm</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">i</span><span class="p">,</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">file</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()).</span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">driver_priv</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="mi">0</span>
+</code></pre></div>
+<p>which with this helper could instead be something like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">T</span><span class="p">::</span><span class="n">open</span><span class="p">(</span><span class="n">drm</span><span class="p">).</span><span class="n">inspect</span><span class="p">(</span><span class="o">|</span><span class="n">inner</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">file</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()).</span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">driver_priv</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="p">}).</span><span class="n">to_errno</span><span class="p">()</span>
+</code></pre></div>
+
+
+
+<a name="512189563"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Result%3A%3Ato_errno%20helper/near/512189563" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Result.3A.3Ato_errno.20helper.html#512189563">(Apr 14 2025 at 23:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="876193">Alyssa Rosenzweig</span> <a href="#narrow/channel/288089-General/topic/Result.3A.3Ato_errno.20helper/near/512175578">said</a>:</p>
+<blockquote>
+<p>While reviewing the DRM abstractions, I noticed a pattern:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">match</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">(),</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This seems to come up in other abstractions too. Time for a helper for this..?</p>
+</blockquote>
+<p>One small ergonomic painpoint is that <code>Result</code> comes from the stdlib, so we can't just define methods for it, we need an extension trait instead. So we could do:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">IntoErrno</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_errno</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i32</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">IntoErrno</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nb">Result</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_errno</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i32</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><span class="user-mention silent" data-user-id="876193">Alyssa Rosenzweig</span> <a href="#narrow/channel/288089-General/topic/Result.3A.3Ato_errno.20helper/near/512176074">said</a>:</p>
+<blockquote>
+<p>This should compose with map as well, the DRM code on-list has</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">T</span><span class="p">::</span><span class="n">open</span><span class="p">(</span><span class="n">drm</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">i</span><span class="p">,</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">file</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()).</span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">driver_priv</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="mi">0</span>
+</code></pre></div>
+<p>which with this helper could instead be something like:</p>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">T</span><span class="p">::</span><span class="n">open</span><span class="p">(</span><span class="n">drm</span><span class="p">).</span><span class="n">inspect</span><span class="p">(</span><span class="o">|</span><span class="n">inner</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">file</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()).</span><span class="n">driver_priv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">driver_priv</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="p">}).</span><span class="n">to_errno</span><span class="p">()</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>this will need <code>.map</code> instead of <code>.inspect</code>, since it consumes the value. But then it composes with the helper I defined above. (<code>.inspect</code> wouldn't work with the helper above, as that expects <code>()</code> in the <code>Ok(val)</code> variant).</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

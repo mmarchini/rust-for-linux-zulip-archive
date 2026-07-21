@@ -1,0 +1,171 @@
+<html>
+<head><meta charset="utf-8"><title>✔ Deadlock caused by nested Devres · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html">✔ Deadlock caused by nested Devres</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="571032551"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571032551" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571032551">(Jan 30 2026 at 13:46)</a>:</h4>
+<p>We've recently been trying to solve an issue causing a deadlock on ::unbind() in Tyr, and after further investigation, the root cause seems to be nested Devres (an object wrapped into a Devres that also have Devres fields).</p>
+<p>My understanding of the situation is that <a href="https://elixir.bootlin.com/linux/v6.19-rc5/source/drivers/base/devres.c#L531">devres_release_all() moves all resources to a temporary list that's iterated to release each resource in reverse creation order</a>. If a root devres has its T::drop() function called, the nested devres will be dropped too, and we're going to hit <a href="https://elixir.bootlin.com/linux/v6.19-rc5/source/rust/kernel/devres.rs#L299">that path</a> because the resource list has been emptied earlier in <code>devres_release_all()</code>. So we're going to wait on the devm completion, which will never happen because this item is still in the temporary and will only be destroyed later on when <a href="https://elixir.bootlin.com/linux/v6.19-rc5/C/ident/release_nodes">release_nodes</a> reaches this item.</p>
+<p>Dunno if it's a bug, or if nested Devres are prohibited, but if it's the latter, then we should probably document it and find a way to avoid people shooting themselves in the foot.</p>
+
+
+
+<a name="571033396"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571033396" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571033396">(Jan 30 2026 at 13:49)</a>:</h4>
+<p>cc <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> ^</p>
+
+
+
+<a name="571036382"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571036382" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571036382">(Jan 30 2026 at 14:01)</a>:</h4>
+<p>Can you please share the code where the problem occurs?</p>
+
+
+
+<a name="571037219"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571037219" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571037219">(Jan 30 2026 at 14:04)</a>:</h4>
+<p>This is the workaround we have at the moment =&gt; <a href="https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56/diffs#dbdd2c5024317f2c80128c91a823e224b3a41550_96_114">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56/diffs#dbdd2c5024317f2c80128c91a823e224b3a41550_96_114</a></p>
+
+
+
+<a name="571037982"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571037982" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571037982">(Jan 30 2026 at 14:07)</a>:</h4>
+<p>root Devres comes from <a href="https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/driver.rs#L169">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/driver.rs#L169</a> (Registration object is bound to the device as a devres)</p>
+
+
+
+<a name="571038224"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571038224" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571038224">(Jan 30 2026 at 14:08)</a>:</h4>
+<p>that's one of the nested Devres =&gt; <a href="https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L74">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L74</a></p>
+
+
+
+<a name="571039147"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571039147" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571039147">(Jan 30 2026 at 14:11)</a>:</h4>
+<p>there's another one here =&gt; <a href="https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L94">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L94</a></p>
+
+
+
+<a name="571039380"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571039380" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571039380">(Jan 30 2026 at 14:12)</a>:</h4>
+<p>Thanks, do you have the commit sha of the workaround? (I'd assume that SHA^ would then be a commit where things are broken).</p>
+
+
+
+<a name="571039511"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571039511" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571039511">(Jan 30 2026 at 14:12)</a>:</h4>
+<p>I'll take a look then after lunch.</p>
+
+
+
+<a name="571040162"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571040162" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571040162">(Jan 30 2026 at 14:15)</a>:</h4>
+<p>Note that this lives in a downstream branch, so the sha is not super relevant, but here is the commit introducing the workaround <code>aac949032a0a ("driver.rs fw")</code></p>
+
+
+
+<a name="571040269"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571040269" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571040269">(Jan 30 2026 at 14:15)</a>:</h4>
+<p>the branch is here <a href="https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot</a></p>
+
+
+
+<a name="571040314"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571040314" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571040314">(Jan 30 2026 at 14:16)</a>:</h4>
+<p>/cc <span class="user-mention" data-user-id="981233">@Deborah Brouwer</span></p>
+
+
+
+<a name="571040841"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571040841" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571040841">(Jan 30 2026 at 14:18)</a>:</h4>
+<p>It's interesting because it also tells me the base you branched off of.</p>
+
+
+
+<a name="571041768"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571041768" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571041768">(Jan 30 2026 at 14:22)</a>:</h4>
+<p>It's likely that there's nothing working before/after that commit, because this patchset has not been cleaned up for submission yet, so my point about commit being not super relevant was more a "don't try to bisect" disclaimer</p>
+
+
+
+<a name="571042436"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571042436" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571042436">(Jan 30 2026 at 14:25)</a>:</h4>
+<p>I'm sure we can have a simple reproducer based on samples/rust/rust_driver_platform.rs, if that helps</p>
+
+
+
+<a name="571043188"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571043188" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571043188">(Jan 30 2026 at 14:27)</a>:</h4>
+<p>Oh yeah, I don't have hardware anyways, so I can't bisect this either way.</p>
+
+
+
+<a name="571043323"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571043323" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571043323">(Jan 30 2026 at 14:28)</a>:</h4>
+<p>But I already have a suspicion what's going on, so I just want to make sure I don't base conclusions on assumptions. :)</p>
+
+
+
+<a name="571055547"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571055547" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571055547">(Jan 30 2026 at 15:15)</a>:</h4>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span> Your understanding is correct, there is indeed nesting going on, but indirectly. When the <code>drm::Registration</code> is revoked you likely also drop the last reference of the <code>drm::Device</code>, which calls the destructor of its private data which holds the <code>Devres&lt;IoMem&gt;</code>. Which is a perfectly valid thing to do.</p>
+
+
+
+<a name="571055786"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571055786" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571055786">(Jan 30 2026 at 15:16)</a>:</h4>
+<p>Technically, this specific issue will go away with some changes I currently work on.</p>
+
+
+
+<a name="571055887"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571055887" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571055887">(Jan 30 2026 at 15:16)</a>:</h4>
+<p>But I think it would be good to have a separate fix for this -- will dig in.</p>
+
+
+
+<a name="571056391"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571056391" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571056391">(Jan 30 2026 at 15:18)</a>:</h4>
+<p>Thanks for the report!</p>
+
+
+
+<a name="571062931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571062931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571062931">(Jan 30 2026 at 15:45)</a>:</h4>
+<blockquote>
+<p>But I think it would be good to have a separate fix for this -- will dig in.</p>
+</blockquote>
+<p>OOC, what's your plan to fix the issue?</p>
+
+
+
+<a name="571071329"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571071329" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571071329">(Jan 30 2026 at 16:20)</a>:</h4>
+<p>The answer is a bit longer.</p>
+<p>The big hammer is an inner reference count, which I had in the past before getting rid of it for optimization purposes. (There is nothing wrong with the reference count, probe() and remove() are not hot paths at all and a separate allocation for a device resource does not hurt.)</p>
+<p>However, with the rework I'm working on the specific issue with registrations having a reference count of something else that owns a <code>Devres</code> goes away. The only issue being left would be if you do <code>Devres&lt;Devres&lt;T&gt;&gt;</code>etc. which makes no sense. In fact, <code>Devres</code> is not a mechanism for drivers to model lifetimes. The only valid pattern is <code>Devres&lt;DEVICE_RESOURCE&gt;</code>, which effectively makes direct nesting invalid.</p>
+<p>Therefore, once the rework is done, we would not need an inner reference count, but pay the price that <code>Devres::new</code> becomes unsafe, which I think is OK, since it should - with maybe a few minor exceptions - only be constructed by core code anyways.</p>
+
+
+
+<a name="571242441"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571242441" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571242441">(Feb 01 2026 at 00:16)</a>:</h4>
+<p>This topic was moved here from <a class="stream-topic" data-stream-id="415254" href="/#narrow/channel/415254-DRM/topic/Deadlock.20caused.20by.20nested.20Devres">#DRM &gt; Deadlock caused by nested Devres</a> by <span class="user-mention silent" data-user-id="413824">Gary Guo</span>.</p>
+
+
+
+<a name="571242651"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Deadlock%20caused%20by%20nested%20Devres/near/571242651" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Deadlock.20caused.20by.20nested.20Devres.html#571242651">(Feb 01 2026 at 00:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

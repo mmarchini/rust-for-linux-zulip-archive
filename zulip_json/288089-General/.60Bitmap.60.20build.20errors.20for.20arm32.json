@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"777855\">@Burak Emir</span> I am seeing the following link error when building v6.18 for arm32:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>ld.lld: error: undefined symbol: _find_next_bit\n&gt;&gt;&gt; referenced by bitmap.rs:459 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:459)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_bitmap_borrow) in archive vmlinux.a\n&gt;&gt;&gt; referenced by bitmap.rs:459 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:459)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_bitmap_set_clear_find) in archive vmlinux.a\n&gt;&gt;&gt; referenced by bitmap.rs:459 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:459)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_bitmap_set_clear_find) in archive vmlinux.a\n&gt;&gt;&gt; referenced 10 more times\n\nld.lld: error: undefined symbol: _find_next_zero_bit\n&gt;&gt;&gt; referenced by bitmap.rs:479 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:479)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_bitmap_copy) in archive vmlinux.a\n&gt;&gt;&gt; referenced by bitmap.rs:479 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:479)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_bitmap_set_clear_find) in archive vmlinux.a\n&gt;&gt;&gt; referenced by bitmap.rs:479 (/home/aeh/src/linux-rust/ktd-src-1e9cc877-bc37-4ae0-8614-1baaf3a05d5d/rust/kernel/bitmap.rs:479)\n&gt;&gt;&gt;               rust/kernel.o:(kernel::bitmap::tests::kunit_rust_wrapper_owned_bitmap_out_of_bounds) in archive vmlinux.a\n&gt;&gt;&gt; referenced 6 more times\n</code></pre></div>",
+        "id": 561677301,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764774541
+    },
+    {
+        "content": "<p>Looks like some bit counting functions are not available on arm32.</p>",
+        "id": 561677479,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764774577
+    },
+    {
+        "content": "<p>Hmm, <code>find_next_zero_bit</code> exists as a define in <code>arch/arm/include/asm/bitops.h</code></p>",
+        "id": 561679872,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764774955
+    },
+    {
+        "content": "<p>Looks like we need a helper on arm32</p>",
+        "id": 561680852,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764775099
+    },
+    {
+        "content": "<p>yeah, I'll do it</p>",
+        "id": 561681808,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764775247
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 561681883,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764775260
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> Could you double check this for me?</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/helpers/bitops.c b/rust/helpers/bitops.c</span>\n<span class=\"gh\">index 5d0861d29d3f..84061af591a2 100644</span>\n<span class=\"gd\">--- a/rust/helpers/bitops.c</span>\n<span class=\"gi\">+++ b/rust/helpers/bitops.c</span>\n<span class=\"gu\">@@ -1,6 +1,7 @@</span>\n<span class=\"w\"> </span>// SPDX-License-Identifier: GPL-2.0\n\n<span class=\"w\"> </span>#include &lt;linux/bitops.h&gt;\n<span class=\"gi\">+#include &lt;linux/find.h&gt;</span>\n\n<span class=\"w\"> </span>void rust_helper___set_bit(unsigned long nr, unsigned long *addr)\n<span class=\"w\"> </span>{\n<span class=\"gu\">@@ -21,3 +22,34 @@ void rust_helper_clear_bit(unsigned long nr, volatile unsigned long *addr)</span>\n<span class=\"w\"> </span>{\n<span class=\"w\"> </span>   clear_bit(nr, addr);\n<span class=\"w\"> </span>}\n<span class=\"gi\">+</span>\n<span class=\"gi\">+/*</span>\n<span class=\"gi\">+ * Rust normally calls the single-underscore-prefixed version of these</span>\n<span class=\"gi\">+ * functions, which are not inlined. However, on some platforms, they do not</span>\n<span class=\"gi\">+ * exist. In those cases, provide a rust helper for the underscored version.</span>\n<span class=\"gi\">+ */</span>\n<span class=\"gi\">+#ifdef find_next_zero_bit</span>\n<span class=\"gi\">+__rust_helper unsigned long</span>\n<span class=\"gi\">+rust_helper__find_next_zero_bit(const unsigned long *addr, unsigned long size,</span>\n<span class=\"gi\">+               unsigned long offset)</span>\n<span class=\"gi\">+{</span>\n<span class=\"gi\">+   return find_next_zero_bit(addr, size, offset);</span>\n<span class=\"gi\">+}</span>\n<span class=\"gi\">+#endif /* find_next_zero_bit */</span>\n<span class=\"gi\">+</span>\n<span class=\"gi\">+#ifdef find_next_bit</span>\n<span class=\"gi\">+__rust_helper unsigned long</span>\n<span class=\"gi\">+rust_helper__find_next_bit(const unsigned long *addr, unsigned long size,</span>\n<span class=\"gi\">+              unsigned long offset)</span>\n<span class=\"gi\">+{</span>\n<span class=\"gi\">+   return find_next_bit(addr, size, offset);</span>\n<span class=\"gi\">+}</span>\n<span class=\"gi\">+#endif /* find_next_bit */</span>\n<span class=\"gi\">+</span>\n<span class=\"gi\">+#ifdef find_last_bit</span>\n<span class=\"gi\">+__rust_helper unsigned long</span>\n<span class=\"gi\">+rust_helper__find_last_bit(const unsigned long *addr, unsigned long size)</span>\n<span class=\"gi\">+{</span>\n<span class=\"gi\">+   return find_last_bit(addr, size);</span>\n<span class=\"gi\">+}</span>\n<span class=\"gi\">+#endif /* find_last_bit */</span>\n</code></pre></div>",
+        "id": 561683939,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764775680
+    },
+    {
+        "content": "<p>Applying it now</p>",
+        "id": 561684913,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764775915
+    },
+    {
+        "content": "<p>It does not apply to my v6.18 tree</p>",
+        "id": 561685234,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764775985
+    },
+    {
+        "content": "<p>I'll see if I can wrestle it in place.</p>",
+        "id": 561685392,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764776011
+    },
+    {
+        "content": "<p>I used 54e3eae855629702c566bd2e130d9f40e7f35bde as the base</p>",
+        "id": 561685436,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764776020
+    },
+    {
+        "content": "<p>It's building now</p>",
+        "id": 561686804,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764776303
+    },
+    {
+        "content": "<p>Build succeeded <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 561686978,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764776346
+    },
+    {
+        "content": "<p>Do I have your Tested-by for v1?</p>",
+        "id": 561687044,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764776361
+    },
+    {
+        "content": "<p>Yep <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 561687094,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764776374
+    },
+    {
+        "content": "<p>Hold on <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span>  I think I messed up when I tested. Let me just run that again.</p>",
+        "id": 561755601,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764797743
+    },
+    {
+        "content": "<p>The patch you sent does not solve the issue. I messed up when testing.  The following works for me:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code>commit ded4dfa641304f7f62651082dacd77bd26bfd04c\nAuthor: Andreas Hindborg &lt;a.hindborg@kernel.org&gt;\nDate:   Wed Dec 3 16:43:48 2025 +0100\n\n<span class=\"w\"> </span>   alice fix for bitops\n\n<span class=\"gh\">diff --git a/rust/helpers/bitops.c b/rust/helpers/bitops.c</span>\n<span class=\"gh\">index 5d0861d29d3f0..4f15315bc47f2 100644</span>\n<span class=\"gd\">--- a/rust/helpers/bitops.c</span>\n<span class=\"gi\">+++ b/rust/helpers/bitops.c</span>\n<span class=\"gu\">@@ -21,3 +21,26 @@ void rust_helper_clear_bit(unsigned long nr, volatile unsigned long *addr)</span>\n<span class=\"w\"> </span>{\n<span class=\"w\"> </span>   clear_bit(nr, addr);\n<span class=\"w\"> </span>}\n<span class=\"gi\">+</span>\n<span class=\"gi\">+/*</span>\n<span class=\"gi\">+ * Rust normally calls the single-underscore-prefixed version of these</span>\n<span class=\"gi\">+ * functions, which are not inlined. However, on some platforms, they do not</span>\n<span class=\"gi\">+ * exist. In those cases, provide a rust helper for the underscored version.</span>\n<span class=\"gi\">+ */</span>\n<span class=\"gi\">+#ifdef find_next_zero_bit</span>\n<span class=\"gi\">+__rust_helper unsigned long</span>\n<span class=\"gi\">+rust_helper_r_find_next_zero_bit(const unsigned long *addr, unsigned long size,</span>\n<span class=\"gi\">+               unsigned long offset)</span>\n<span class=\"gi\">+{</span>\n<span class=\"gi\">+   return find_next_zero_bit(addr, size, offset);</span>\n<span class=\"gi\">+}</span>\n<span class=\"gi\">+#endif /* find_next_zero_bit */</span>\n<span class=\"gi\">+</span>\n<span class=\"gi\">+#ifdef find_next_bit</span>\n<span class=\"gi\">+__rust_helper unsigned long</span>\n<span class=\"gi\">+rust_helper_r_find_next_bit(const unsigned long *addr, unsigned long size,</span>\n<span class=\"gi\">+              unsigned long offset)</span>\n<span class=\"gi\">+{</span>\n<span class=\"gi\">+   return find_next_bit(addr, size, offset);</span>\n<span class=\"gi\">+}</span>\n<span class=\"gi\">+#endif /* find_next_bit */</span>\n<span class=\"gh\">diff --git a/rust/kernel/bitmap.rs b/rust/kernel/bitmap.rs</span>\n<span class=\"gh\">index aa8fc7bf06fc9..88af73edb0c21 100644</span>\n<span class=\"gd\">--- a/rust/kernel/bitmap.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/bitmap.rs</span>\n<span class=\"gu\">@@ -456,7 +456,7 @@ pub fn next_bit(&amp;self, start: usize) -&gt; Option&lt;usize&gt; {</span>\n<span class=\"w\"> </span>        );\n<span class=\"w\"> </span>        // SAFETY: `_find_next_bit` tolerates out-of-bounds arguments and returns a\n<span class=\"w\"> </span>        // value larger than or equal to `self.len()` in that case.\n<span class=\"gd\">-        let index = unsafe { bindings::_find_next_bit(self.as_ptr(), self.len(), start) };</span>\n<span class=\"gi\">+        let index = unsafe { bindings::r_find_next_bit(self.as_ptr(), self.len(), start) };</span>\n<span class=\"w\"> </span>        if index &gt;= self.len() {\n<span class=\"w\"> </span>            None\n<span class=\"w\"> </span>        } else {\n<span class=\"gu\">@@ -476,7 +476,7 @@ pub fn next_zero_bit(&amp;self, start: usize) -&gt; Option&lt;usize&gt; {</span>\n<span class=\"w\"> </span>        );\n<span class=\"w\"> </span>        // SAFETY: `_find_next_zero_bit` tolerates out-of-bounds arguments and returns a\n<span class=\"w\"> </span>        // value larger than or equal to `self.len()` in that case.\n<span class=\"gd\">-        let index = unsafe { bindings::_find_next_zero_bit(self.as_ptr(), self.len(), start) };</span>\n<span class=\"gi\">+        let index = unsafe { bindings::r_find_next_zero_bit(self.as_ptr(), self.len(), start) };</span>\n<span class=\"w\"> </span>        if index &gt;= self.len() {\n<span class=\"w\"> </span>            None\n<span class=\"w\"> </span>        } else {\n</code></pre></div>",
+        "id": 561757942,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764798866
+    },
+    {
+        "content": "<p>It appears that <code>bindgen</code> will emit an <code>extern \"C\"</code> declaration for those C functions, even though they are not in the symbol table. When we add the rust helpers, the declarations emitted based on the non-existent C functions will mask the rust helper functions.</p>",
+        "id": 561758140,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764798961
+    },
+    {
+        "content": "<p>We can circumvent this by using another name for our helper. It's not really a proper solution though.</p>",
+        "id": 561758237,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764799017
+    },
+    {
+        "content": "<p>I replied on list.</p>",
+        "id": 561763383,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764801368
+    },
+    {
+        "content": "<p>I looked at this issue again, and posted a new fix:<br>\n<a href=\"https://lore.kernel.org/all/20260105-bitops-find-helper-v2-1-ae70b4fc9ecc@google.com/\">https://lore.kernel.org/all/20260105-bitops-find-helper-v2-1-ae70b4fc9ecc@google.com/</a></p>",
+        "id": 566330429,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1767612286
+    }
+]

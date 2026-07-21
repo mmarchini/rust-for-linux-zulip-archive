@@ -1,0 +1,266 @@
+[
+    {
+        "content": "<p>I have a case that is essentially a <code>Mutex&lt;Arc&lt;LockedBy&lt;TheMutex&gt;&gt;&gt;</code>. Accessing the inner value mutably is a PITA because we also need a borrow of the guard to get to the <code>LockedBy</code>. Is there an easy way around this? I guess I can clone the arc...</p>",
+        "id": 418620952,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706529487
+    },
+    {
+        "content": "<p>Why is there a <code>LockedBy</code> inside the mutex? Wouldn't you be able to just remove it?</p>",
+        "id": 418633738,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706533935
+    },
+    {
+        "content": "<p>because Arc</p>",
+        "id": 418633812,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706533960
+    },
+    {
+        "content": "<p>Oh I see...</p>",
+        "id": 418633859,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706533980
+    },
+    {
+        "content": "<p>Why can't you swap the <code>Arc</code> and the <code>Mutex</code>?</p>",
+        "id": 418633901,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706533996
+    },
+    {
+        "content": "<p>It's really an <code>Mutex&lt;RbTree&lt;Arc&lt;...&gt;&gt;&gt;</code></p>",
+        "id": 418633962,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706534015
+    },
+    {
+        "content": "<p>Hmm I am not so sure if cloning the Arc would even work for mutable acccess</p>",
+        "id": 418635181,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706534426
+    },
+    {
+        "content": "<p>I guess I can add another field inside the mutex and use LockedBy with that field instead of the entire mutex.</p>",
+        "id": 418635247,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706534452
+    },
+    {
+        "content": "<p>After all, LockedBy just requires the <code>&amp;mut T</code> and not a guard.</p>",
+        "id": 418635286,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706534466
+    },
+    {
+        "content": "<p>that might work</p>",
+        "id": 418635317,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706534480
+    },
+    {
+        "content": "<p>Nevermind, the constructor for LockedBy doesn't allow that.</p>",
+        "id": 418638055,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706535378
+    },
+    {
+        "content": "<p>I think we might need a new function for this kind of stuff:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span>: <span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">access_nested_mut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span>: <span class=\"nc\">Backend</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">guard</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">inner</span>: <span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kp\">&amp;</span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 418676537,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706546218
+    },
+    {
+        "content": "<p>That's far from general enough for what I need.</p>",
+        "id": 418676985,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706546352
+    },
+    {
+        "content": "<p>can you elaborate?</p>",
+        "id": 418677177,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706546418
+    },
+    {
+        "content": "<p>For example, I might want to get an <code>Entry</code> for a specific key in the rbtree, then do some accesses based on the LockedBy data, and then I want to sometimes call <code>remove</code> on the entry to remove it from the rbtree.</p>",
+        "id": 418677569,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706546564
+    },
+    {
+        "content": "<p>so you only need readonly access to the data inside the <code>LockedBy</code>?</p>",
+        "id": 418677740,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706546627
+    },
+    {
+        "content": "<p>No, I need to modify it. Then, depending on what the new value is, I may remove it.</p>",
+        "id": 418677948,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706546692
+    },
+    {
+        "content": "<p>(basically, remove if a counter hits zero on decrement)</p>",
+        "id": 418677985,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706546704
+    },
+    {
+        "content": "<p>Why does this not work?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">tree</span>: <span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">RbTree</span><span class=\"o\">&lt;</span><span class=\"n\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">Data</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">tree</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">entry</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span>::<span class=\"n\">access_nested_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">tree</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">tree</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">key</span><span class=\"p\">));</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">entry</span><span class=\"p\">.</span><span class=\"n\">dec_and_zero_check</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">guard</span><span class=\"p\">.</span><span class=\"n\">remove</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">key</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 418678468,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706546872
+    },
+    {
+        "content": "<p>That performs an extra tree traversal, since it doesn't use the entry API.</p>",
+        "id": 418679199,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547078
+    },
+    {
+        "content": "<p>Also, the LockedBy contains both the integer and an Arc&lt;Node&gt;. I need to call a method on the <code>Node</code> that takes a reference to the entire <code>Arc&lt;Data&gt;</code> as argument.</p>",
+        "id": 418679727,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547230
+    },
+    {
+        "content": "<p>I could do that by cloning the <code>Arc&lt;Node&gt;</code>to let it escape, but then I need to look up a third time to get a reference to the <code>Data</code> that contains the <code>LockedBy</code> field.</p>",
+        "id": 418679896,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547277
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span>: <span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"p\">(</span><span class=\"n\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">Node</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Counter</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">list_links</span>: <span class=\"nc\">ListLinks</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span> <span class=\"nc\">Node</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">list</span>: <span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">List</span><span class=\"o\">&lt;</span><span class=\"n\">Data</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 418680225,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547388
+    },
+    {
+        "content": "<p>This is the idea.</p>",
+        "id": 418680240,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547393
+    },
+    {
+        "content": "<p>We need to both remove <code>Arc&lt;Data&gt;</code> from that rbtree (really, two rbtrees), and from the linked list in the node.</p>",
+        "id": 418680285,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547414
+    },
+    {
+        "content": "<p>Removing from the node's linked list requires a reference to both <code>Data</code> and <code>Node</code>.</p>",
+        "id": 418680350,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547441
+    },
+    {
+        "content": "<p>Why do you need the lockedby?</p>",
+        "id": 418680722,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706547559
+    },
+    {
+        "content": "<p>To change the counter.</p>",
+        "id": 418680747,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706547568
+    },
+    {
+        "content": "<p>Ah sorry, I forgot the <code>Arc</code></p>",
+        "id": 418680776,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706547576
+    },
+    {
+        "content": "<p>what is the problem that you are solving with this datastructure?</p>",
+        "id": 418682544,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706548112
+    },
+    {
+        "content": "<p>Please see this commit message: <a href=\"https://lore.kernel.org/rust-for-linux/20231101-rust-binder-v1-5-08ba9197f637@google.com/\">https://lore.kernel.org/rust-for-linux/20231101-rust-binder-v1-5-08ba9197f637@google.com/</a></p>",
+        "id": 418682711,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706548168
+    },
+    {
+        "content": "<p>This is \"The <code>node_refs</code> collection\"</p>",
+        "id": 418682741,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706548179
+    },
+    {
+        "content": "<p>Currently, there are only process-&gt;node references, but I need each node to have a list of processes too.</p>",
+        "id": 418682797,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706548200
+    },
+    {
+        "content": "<p><code>Data::inner</code>'s type is <code>LockedBy&lt;Counter, Arc&lt;Node&gt;&gt;</code>? Or I misunderstand something?</p>",
+        "id": 418685204,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1706549007
+    },
+    {
+        "content": "<p>No, it's <code>LockedBy&lt;(Arc&lt;Node&gt;, Counter), RbTree&lt;Arc&lt;Data&gt;&gt;&gt;</code></p>",
+        "id": 418685333,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706549047
+    },
+    {
+        "content": "<p>I see, looks like I was totally looking into other direction ;-)</p>",
+        "id": 418685441,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1706549091
+    },
+    {
+        "content": "<p>Data corresponds to NodeRefInfo. The tuple is NodeRef in binder</p>",
+        "id": 418685465,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706549100
+    },
+    {
+        "content": "<p>They have to be together because NodeRef holds both and has a bunch of methods. But the Arc&lt;Node&gt; is not actually mutable.</p>",
+        "id": 418685695,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706549177
+    },
+    {
+        "content": "<p>I've already introduced a concept of a special Arc that there only is one of for my linked list. I'm debating using that instead of LockedBy here. But it would require a double-rbtree that shares the Arc for both trees somehow....</p>",
+        "id": 418687255,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706549745
+    },
+    {
+        "content": "<p>So if we make <code>LockedBy::access</code> and <code>LockedBy::access_mut</code> take a <code>&amp;Guard</code> or <code>&amp;mut Guard</code> instead of <code>&amp;U</code> and <code>&amp;mut U</code>, then we can have the following function:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span>: <span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">access_owner_and_inner</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span>: <span class=\"nc\">Backend</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"n\">guard</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">inner</span>: <span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kp\">&amp;</span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>safely, right?</p>",
+        "id": 418704757,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1706556348
+    },
+    {
+        "content": "<p>For example, <code>access_mut</code> becomes:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">T</span>: <span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">access_mut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span>: <span class=\"nc\">Backend</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"o\">&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">guard</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span> <span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span> <span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 418705407,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1706556593
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/LockedBy.20surrounding.20data.20structure/near/418704757\">said</a>:</p>\n<blockquote>\n<p>So if we make <code>LockedBy::access</code> and <code>LockedBy::access_mut</code> take a <code>&amp;Guard</code> or <code>&amp;mut Guard</code> instead of <code>&amp;U</code> and <code>&amp;mut U</code>, then we can have the following function:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span>: <span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">access_owner_and_inner</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span>: <span class=\"nc\">Backend</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"n\">guard</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">inner</span>: <span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kp\">&amp;</span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">U</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>safely, right?</p>\n</blockquote>\n<p>no that is unsound:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span>: <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"nb\">String</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">Data</span><span class=\"o\">&gt;&gt;&gt;</span>\n<span class=\"p\">}</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data</span>: <span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">Data</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">pin_init</span><span class=\"p\">(</span><span class=\"n\">new_mutex</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">Data</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">inner</span>: <span class=\"nb\">None</span> <span class=\"p\">}));</span>\n\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"s\">\"foo\"</span><span class=\"p\">.</span><span class=\"n\">to_string</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;*</span><span class=\"n\">data</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">data</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">().</span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">inner</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">inner</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span>::<span class=\"n\">access_owner_and_inner</span><span class=\"p\">(</span><span class=\"n\">guard</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">data</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">.</span><span class=\"n\">inner</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">().</span><span class=\"n\">unwrap</span><span class=\"p\">());</span>\n<span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{:?}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">inner</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// prints \"foo\"</span>\n<span class=\"n\">data</span><span class=\"p\">.</span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">LockedBy</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"s\">\"bar\"</span><span class=\"p\">.</span><span class=\"n\">to_string</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;*</span><span class=\"n\">data</span><span class=\"p\">);</span>\n<span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{:?}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">inner</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// prints \"bar\"</span>\n</code></pre></div>",
+        "id": 418706280,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706556886
+    },
+    {
+        "content": "<p>Since we modified the value behind a <code>&amp;mut</code> without using that pointer</p>",
+        "id": 418706384,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1706556925
+    },
+    {
+        "content": "<p>Yeah, you're right</p>",
+        "id": 418706899,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1706557105
+    }
+]

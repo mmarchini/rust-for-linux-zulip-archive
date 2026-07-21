@@ -1,0 +1,105 @@
+<html>
+<head><meta charset="utf-8"><title>[PCI] Getting the driver privatedata in other calling paths? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html">[PCI] Getting the driver privatedata in other calling paths?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="548155098"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548155098" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548155098">(Oct 31 2025 at 13:18)</a>:</h4>
+<p>Hi  <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span>  and folks:</p>
+<p>In the patch<br>
+<a href="https://lore.kernel.org/all/20251030160315.451841-2-zhiw@nvidia.com/">https://lore.kernel.org/all/20251030160315.451841-2-zhiw@nvidia.com/</a>,<br>
+the driver callbacks will receive a <code>Device&lt;Bound&gt;</code> (it’s currently<br>
+<code>Device</code>, but I plan to refine it to <code>Device&lt;Bound&gt;</code> in the next spin).</p>
+<p>In that path, I need to convert it back to the reference of driver’s private<br>
+data. I’m wondering if there’s an <em>official</em> or <em>intended</em> way to do this.</p>
+<p>First, I need to turn a <code>&amp;Device::Bound</code> into a <code>&amp;Pci::Device&lt;Bound&gt;</code>:</p>
+<p>let pdev_bound: &amp;pci::Device&lt;Bound&gt; = unsafe { dev.as_bound().try_into()? };</p>
+<p>I was<br>
+thinking of using <code>drvdata_borrow::&lt;T&gt;()</code>, but that is in<br>
+<code>Pci::Device::&lt;CoreInternal&gt;</code>, so I have to do:</p>
+<p>let pdev: &amp;pci::Device&lt;CoreInternal&gt; = unsafe { &amp;*(pdev_bound as *const _ as *const pci::Device&lt;CoreInternal&gt;) };</p>
+<p>Then I can get it:<br>
+ let data = unsafe { pdev.as_ref().drvdata_borrow::&lt;Pin&lt;KBox&lt;NovaCore&gt;&gt;&gt;() };</p>
+<p>That doesn't look nice at all...<br>
+Also, I likely need a mutable reference to the driver data structure.</p>
+<p>Any suggestions or examples on the right way to handle this?</p>
+<hr>
+<p>I also encountered the same requirement in my POC, where I need to convert &amp;pci::Device to the reference of mutable driver data.</p>
+<p><a href="https://github.com/zhiwang-nvidia/linux/blob/8d6ddc8ecb5a73e9e884806d298a7c09c31a40a0/drivers/gpu/nova-core/driver.rs#L58">https://github.com/zhiwang-nvidia/linux/blob/8d6ddc8ecb5a73e9e884806d298a7c09c31a40a0/drivers/gpu/nova-core/driver.rs#L58</a></p>
+
+
+
+<a name="548158845"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548158845" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548158845">(Oct 31 2025 at 13:36)</a>:</h4>
+<p>See <a href="https://lore.kernel.org/all/20251020223516.241050-3-dakr@kernel.org/">https://lore.kernel.org/all/20251020223516.241050-3-dakr@kernel.org/</a></p>
+
+
+
+<a name="548167135"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548167135" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548167135">(Oct 31 2025 at 14:14)</a>:</h4>
+<p>Indeed, what Alice points out works and is technically correct to obtain the driver's bus device private data.</p>
+<p>However, the question here is whether you actually want the drivers's bus device private data or whether you should leverage the private data of the class device you receive the callback from, <code>fwctl</code> in this case.</p>
+<p>The driver's device private data should only be used in the context of the driver model (i.e. bus callbacks, driver to driver interaction, etc.). If you are within another scope, e.g. file operations, class device callbacks, etc. you should use the private data from those.</p>
+
+
+
+<a name="548167318"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548167318" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548167318">(Oct 31 2025 at 14:15)</a>:</h4>
+<p>If there is data structures needed in both the private data of the device and the private data of something else, then this sounds like shared ownership and you may want to consider reference counting with <code>Arc</code>.</p>
+
+
+
+<a name="548167793"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548167793" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548167793">(Oct 31 2025 at 14:17)</a>:</h4>
+<p>Regarding a mutable reference to the driver's private data, you won't ever get one since it can be accessed from multiple tasks concurrently. That means, if you need to modify a member within, you have to protect it with a lock, which if held will give you mutable access. In other words, this is the Rust compiler preventing you from implementing race conditions. :)</p>
+
+
+
+<a name="548168499"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548168499" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548168499">(Oct 31 2025 at 14:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F/near/548167318">said</a>:</p>
+<blockquote>
+<p>If there is data structures needed in both the private data of the device and the private data of something else, then this sounds like shared ownership and you may want to consider reference counting with <code>Arc</code>.</p>
+</blockquote>
+<p>You are right. In my vGPU RFC, I have to use Arc&lt;&gt; /Mutex&lt;&gt; and Guard. Or the compiler wouldn't let me move on. It is actually a nice way to do locking and sharing ownership. :)</p>
+
+
+
+<a name="548169584"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548169584" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548169584">(Oct 31 2025 at 14:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F/near/548167135">said</a>:</p>
+<blockquote>
+<p>Indeed, what Alice points out works and is technically correct to obtain the driver's bus device private data.</p>
+<p>However, the question here is whether you actually want the drivers's bus device private data or whether you should leverage the private data of the class device you receive the callback from, <code>fwctl</code> in this case.</p>
+<p>The driver's device private data should only be used in the context of the driver model (i.e. bus callbacks, driver to driver interaction, etc.). If you are within another scope, e.g. file operations, class device callbacks, etc. you should use the private data from those.</p>
+</blockquote>
+<p>I see your point. Mostly, I am trying to reach the GSP command queue from fw_rpc callback in my PoC. Guess we need to make the GSP cmdq with Arc&lt;&gt; as well.</p>
+
+
+
+<a name="548169929"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548169929" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548169929">(Oct 31 2025 at 14:25)</a>:</h4>
+<p>Or just share the whole GPU instance with Arc&lt;Gpu&gt;, so we don't scatter lots of separate reference counted allocations.</p>
+
+
+
+<a name="548170026"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548170026" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548170026">(Oct 31 2025 at 14:25)</a>:</h4>
+<p>We will need it in other places anyways.</p>
+
+
+
+<a name="548170615"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%5BPCI%5D%20Getting%20the%20driver%20privatedata%20in%20other%20calling%20paths%3F/near/548170615" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F.html#548170615">(Oct 31 2025 at 14:28)</a>:</h4>
+<p>Make sense. I will try that in my "RM control via fwctl" POC and see how deep I can go. :)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

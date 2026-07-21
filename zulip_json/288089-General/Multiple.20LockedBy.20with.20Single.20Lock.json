@@ -1,0 +1,194 @@
+[
+    {
+        "content": "<p>Is there a general recommendation how to use <code>LockedBy::access_mut()</code> on multiple objects simultaneously, protected by the same lock?  <code>access_mut()</code> takes a mutable reference to ensure safe access, but I obviously cannot provide the same reference to multiple calls at the same time.</p>\n<p>I have a patch (see below) to reduce the requirement to just providing the mutable reference once, without borrowing it for the entire lifetime (obviously making the interface unsafe). This makes it very flexible to use.</p>\n<p>But I would also be open to other suggestions like <code>LockedBy::access_mut_multiple(v: [&amp;'a LockedBy&lt;...&gt;; N], owner: &amp;'a mut U) -&gt; [&amp;'a mut T; N]</code>.</p>\n<p>Let me know whether you have better ideas! Or whether I missed something.</p>\n<p>We could also use field projections from <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> to make LockedBy generic over a field underneath the lock. Then split-borrows would be able to avoid sharing a mutable reference. But it does not solve the problem where one has to lock <code>n</code> instances of the same object underneath a single lock.</p>\n<div class=\"codehilite\" data-code-language=\"Darcs Patch\"><pre><span></span><code>From a7d06b1e5023b5af01fdbe219c4fce68d1cebd45 Mon Sep 17 00:00:00 2001\nFrom: David Rheinsberg &lt;david@readahead.eu&gt;\nDate: Thu, 12 Mar 2026 14:00:03 +0100\nSubject: [PATCH] rust/sync: add LockedBy::access_mut_unchecked()\n\nAdd a new accessor to `LockedBy`, which allows getting mutable access\nwithout mutably borrowing the owning object.\n\nThis is particularly useful when having to lock multiple objects under\ndifferent instances of `LockedBy`, but protected by the same lock. In\nthose cases, the caller needs to retain access to the mutable reference,\nso it can continue calling `access_mut()` on the other instances.\n\nIt is now up to the caller to ensure the provided reference is held long\nenough, and a single `LockedBy` instance is not accessed multiple times.\n\nSigned-off-by: David Rheinsberg &lt;david@readahead.eu&gt;\n<span class=\"gd\">---</span>\n rust/kernel/sync/locked_by.rs | 29 +++++++++++++++++++++++++++++\n 1 file changed, 29 insertions(+)\n\ndiff --git a/rust/kernel/sync/locked_by.rs b/rust/kernel/sync/locked_by.rs\nindex 61f100a45b35..8563412b17ae 100644\n<span class=\"gd\">--- a/rust/kernel/sync/locked_by.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/sync/locked_by.rs</span>\n@@ -166,4 +166,33 @@ pub fn access_mut&lt;'a&gt;(&amp;'a self, owner: &amp;'a mut U) -&gt; &amp;'a mut T {\n         // SAFETY: `owner` is evidence that there is only one reference to the owner.\n         unsafe { &amp;mut *self.data.get() }\n     }\n<span class=\"gi\">+</span>\n<span class=\"gi\">+    /// Returns a mutable reference to the protected data when the caller</span>\n<span class=\"gi\">+    /// provides evidence (via a mutable reference) that the owner is locked.</span>\n<span class=\"gi\">+    ///</span>\n<span class=\"gi\">+    /// Unlike [`Self::access_mut()`] this does not require the mutable</span>\n<span class=\"gi\">+    /// reference to be borrowed for the requested lifetime, and thus multiple</span>\n<span class=\"gi\">+    /// different [`LockedBy`] objects can be acquired simultaneously.</span>\n<span class=\"gi\">+    ///</span>\n<span class=\"gi\">+    /// # Panics</span>\n<span class=\"gi\">+    ///</span>\n<span class=\"gi\">+    /// Panics if `owner` is different from the data protected by the lock used</span>\n<span class=\"gi\">+    /// in [`new`](LockedBy::new).</span>\n<span class=\"gi\">+    ///</span>\n<span class=\"gi\">+    /// # Safety</span>\n<span class=\"gi\">+    ///</span>\n<span class=\"gi\">+    /// The caller must hold `owner` for `'a` and must not call into this</span>\n<span class=\"gi\">+    /// function more than once under the same lifetime `'a`.</span>\n<span class=\"gi\">+    pub fn access_mut_unchecked&lt;'a&gt;(&amp;'a self, owner: &amp;mut U) -&gt; &amp;'a mut T {</span>\n<span class=\"gi\">+        build_assert!(</span>\n<span class=\"gi\">+            size_of::&lt;U&gt;() &gt; 0,</span>\n<span class=\"gi\">+            \"`U` cannot be a ZST because `owner` wouldn't be unique\"</span>\n<span class=\"gi\">+        );</span>\n<span class=\"gi\">+        if !ptr::eq(owner, self.owner) {</span>\n<span class=\"gi\">+            panic!(\"mismatched owners\");</span>\n<span class=\"gi\">+        }</span>\n<span class=\"gi\">+</span>\n<span class=\"gi\">+        // SAFETY: `owner` is evidence that there is only one reference to the owner.</span>\n<span class=\"gi\">+        unsafe { &amp;mut *self.data.get() }</span>\n<span class=\"gi\">+    }</span>\n }\n<span class=\"gd\">--</span>\n2.53.0\n</code></pre></div>",
+        "id": 578920050,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773321719
+    },
+    {
+        "content": "<p>I think it would be sad if we used <code>unsafe</code> for this. the <code>access_mut_multiple</code> sounds like a good idea, but you probably want to use a tuple of <code>&amp;'a LockedBy&lt;...&gt;</code> instead of an array to allow different contents between the locks.</p>\n<p>I don't think field projection play a role in this, but maybe I misunderstood you.</p>",
+        "id": 578921666,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773322104
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578921666\">said</a>:</p>\n<blockquote>\n<p>I think it would be sad if we used <code>unsafe</code> for this. the <code>access_mut_multiple</code> sounds like a good idea, but you probably want to use a tuple of <code>&amp;'a LockedBy&lt;...&gt;</code> instead of an array to allow different contents between the locks.</p>\n<p>I don't think field projection play a role in this, but maybe I misunderstood you.</p>\n</blockquote>\n<p>Think of something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">PlatformDev</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">PlatformInner</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">PlatformInner</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">sound</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">SoundDev</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">input</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">InputDev</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">SoundDev</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">SoundInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PlatformInner</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">InputDev</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">InputInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PlatformInner</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Imagine you want to lock both <code>PlatformInner.{sound, input}.inner</code> at the same time. You cannot do that, since both would need <code>&amp;mut PlatformInner</code>. But you could instead use field-projections to say either only needs access to a field in <code>PlatformInner</code>, like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">SoundDev</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">SoundInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PlatformInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">field_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">PlatformInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">sound</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">InputDev</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">LockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">InputInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PlatformInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">field_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">PlatformInner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">input</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Now you can lock both at the same time. <code>LockedBy</code> can verify that you hold a reference to a field of the correct locked <code>PlatformInner</code>.</p>\n<p>Maybe a bit over the top, but I have run into situations like this multiple times.</p>",
+        "id": 578928376,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773323554
+    },
+    {
+        "content": "<p>That layout of data with <code>Mutex&lt;Arc&lt;LockedBy&lt;</code> nesting looks weird, why don't you store <code>SoundDev</code> and <code>InputDev</code> directly inside of <code>PlatformInner</code>?</p>",
+        "id": 578930809,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773324056
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578930809\">said</a>:</p>\n<blockquote>\n<p>That layout of data with <code>Mutex&lt;Arc&lt;LockedBy&lt;</code> nesting looks weird, why don't you store <code>SoundDev</code> and <code>InputDev</code> directly inside of <code>PlatformInner</code>?</p>\n</blockquote>\n<p>Because those devices are passed into the respective kernel subsystems, and those ref-count them. It is kinda the model of ref-counted devices, but they have \"userdata\" that is owned by a specific context.</p>",
+        "id": 578931757,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773324253
+    },
+    {
+        "content": "<p>if <code>SoundDev</code> &amp; <code>InputDev</code> also have other fields, I could see that (do they have extra fields?)</p>",
+        "id": 578932065,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773324317
+    },
+    {
+        "content": "<p>Yes.</p>",
+        "id": 578932136,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773324332
+    },
+    {
+        "content": "<p>Sorry, should have put some ellipses there.</p>",
+        "id": 578932240,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773324350
+    },
+    {
+        "content": "<p>okay. in that case, I think the following would work better: you store <code>LockedBy&lt;SoundInner, SoundInner&gt;</code> (&amp; the same for <code>InputDev</code>) instead and we add <code>LockedBy::new_of_field</code> that uses field projections to turn <code>&amp;Lock&lt;X, B&gt;</code> into <code>*const U</code> (where <code>X</code> has a field of type <code>U</code>)</p>",
+        "id": 578933233,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773324555
+    },
+    {
+        "content": "<p>we could probably use <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>'s field projection prototype infrastructure for this</p>",
+        "id": 578933321,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773324571
+    },
+    {
+        "content": "<p>so <code>new_of_field</code> would have to be a macro, but otherwise it should work</p>",
+        "id": 578933426,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773324592
+    },
+    {
+        "content": "<p>Right, that would avoid putting the Frt generic on the LockedBy. Much nicer to use.</p>\n<p>But yeah, this was just a thought I had. I think for now the access_mut_multiple() should work as well.</p>",
+        "id": 578933782,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773324658
+    },
+    {
+        "content": "<p>Why is this needed? Couldn't you just do <code>Lockedby&lt;SoundInner, Arc&lt;SoundDev&gt;&gt;</code> and call <code>access_mut(&amp;mut platform_inner.sound)</code>?</p>",
+        "id": 578936976,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773325358
+    },
+    {
+        "content": "<p>You're then relying on the borrow checker to ensure split mutable borrows are okay</p>",
+        "id": 578937156,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773325400
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578937156\">said</a>:</p>\n<blockquote>\n<p>You're then relying on the borrow checker to ensure split mutable borrows are okay</p>\n</blockquote>\n<p>That's the idea. Thing is, <code>LockedBy</code> requires <code>Lock&lt;U&gt;</code> in <code>new()</code>. So I think <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> was suggesting to change the constructor to take <code>Lock&lt;W&gt;</code> with <code>U</code> being a field of <code>W</code>, and guaranteeing that via field projections.</p>",
+        "id": 578940970,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773326307
+    },
+    {
+        "content": "<p>Even though in this case we would not have to make <code>LockedBy</code> generic over the field representing type, what is the recommendation on how to pin an FRT in a type? Assuming <code>Frt: Field&lt;Base = Foo, Type = Bar&gt;</code>, do you then store a simple <code>PhantomData&lt;Frt&gt;</code> in the type? Or <code>PhantomData&lt;*mut Frt&gt;</code> to be invariant over it, but allow <code>?Sized</code>? You don't technically need to store or access the FRT ever, you just need to pin it over the lifetime of your object.</p>",
+        "id": 579220057,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773394271
+    },
+    {
+        "content": "<p>what do you mean by \"pin\"? <a href=\"https://doc.rust-lang.org/std/pin/index.html\">my definition</a> of that word doesn't make sense in that context.</p>",
+        "id": 579222311,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773394963
+    },
+    {
+        "content": "<p>the <code>Field</code> trait has <code>Copy</code> as a super trait, so <code>?Sized</code> is not an issue. Do note that we're most likely not going to enable the language feature for FRTs in the kernel (at least for some while), since we still have to figure out if we have the correct design upstream.</p>",
+        "id": 579222536,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773395032
+    },
+    {
+        "content": "<p>I do want to experiment with it out-of-tree though, so having a git branch in the Rust-for-Linux/linux repo that allows people to try it</p>",
+        "id": 579222655,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773395064
+    },
+    {
+        "content": "<p>Oh, in the English sense of the word: How to make sure any member function of that type uses the same Frt. So if you create the object with a given Frt, any member function it should use the same. Meaning, you cannot make the functions generic over the Frt, but must \"pin\" it in the type (or \"lock\" it, or \"include\" it, or whatever English term here is more fitting).</p>",
+        "id": 579222817,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773395100
+    },
+    {
+        "content": "<p>Oh, I just copied the bits I need. The language feature is nice, but not necessary to get something similar.</p>",
+        "id": 579223821,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773395411
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"748963\">David Rheinsberg</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579222817\">said</a>:</p>\n<blockquote>\n<p>Oh, in the English sense of the word: How to make sure any member function of that type uses the same Frt. So if you create the object with a given Frt, any member function it should use the same. Meaning, you cannot make the functions generic over the Frt, but must \"pin\" it in the type (or \"lock\" it, or \"include\" it, or whatever English term here is more fitting).</p>\n</blockquote>\n<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>",
+        "id": 579225914,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773396010
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579225914\">said</a>:</p>\n<blockquote>\n<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>\n</blockquote>\n<p>Doesn't this make the structure covariant over the FRT? Not sure you could actually pull that off, but the safety requirements of <code>Field</code> do not prevent you from designing subtypable FRTs, do they? A <code>PhantomData&lt;*mut F&gt;</code> would avoid that.</p>",
+        "id": 579266005,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773407795
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578933426\">said</a>:</p>\n<blockquote>\n<p>so <code>new_of_field</code> would have to be a macro, but otherwise it should work</p>\n</blockquote>\n<p>If we add a lock view type, we could have <code>fn from_view&lt;L, B: Backend&gt;(owner: View&lt;'_, Lock&lt;L, B&gt;, U&gt;, data: T)</code>?</p>",
+        "id": 579266480,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773407944
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"748963\">David Rheinsberg</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579266005\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579225914\">said</a>:</p>\n<blockquote>\n<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>\n</blockquote>\n<p>Doesn't this make the structure covariant over the FRT? Not sure you could actually pull that off, but the safety requirements of <code>Field</code> do not prevent you from designing subtypable FRTs, do they? A <code>PhantomData&lt;*mut F&gt;</code> would avoid that.</p>\n</blockquote>\n<p>I tested it, and with higher-ranked function pointers I can create 2 conflicting FRTs which have a subtype relationship. So I think <code>PhantomData&lt;*mut F&gt;</code> is required (or some equivalent). I have to note that this is a known issue and documented in <a href=\"https://github.com/rust-lang/rust/issues/56105\">https://github.com/rust-lang/rust/issues/56105</a>.</p>",
+        "id": 579275908,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773410610
+    },
+    {
+        "content": "<p>hmm I guess FRTs themselves should be invariant... do you mind putting your example in the rust playground? (<a href=\"http://play.rust-lang.org\">play.rust-lang.org</a>)</p>",
+        "id": 579276868,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773410854
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579276868\">said</a>:</p>\n<blockquote>\n<p>hmm I guess FRTs themselves should be invariant... do you mind putting your example in the rust playground? (<a href=\"http://play.rust-lang.org\">play.rust-lang.org</a>)</p>\n</blockquote>\n<p>This is based on my own copy of <code>core::field</code>, so I did not convert this fully. But I think this gives an idea of what I did: <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=da212537a3b8e2bb638f6c8e0f646d67\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=da212537a3b8e2bb638f6c8e0f646d67</a></p>\n<p>I can try to get this to compile with core::field, if it is still unclear. But not before Monday.</p>\n<p>The trick really is the subtyping relationship of the types <code>A</code> and <code>B</code>, and using this to create distinc <code>Foo&lt;A&gt;</code> and <code>Foo&lt;B&gt;</code>, and implementing <code>Field</code> for those differently, but retaining the subtype relationship. Note especially the last line, where I coerce <code>a</code> to <code>b</code>, which is what I am concerned about.</p>",
+        "id": 579280419,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773411789
+    },
+    {
+        "content": "<p><code>core::field::Field</code> cannot be implemented, so not sure if you can observe the same thing there.</p>\n<p><em>But</em> <code>field_of!(T, field)</code> is a subtype of <code>field_of!(U, field)</code> when <code>T</code> is a subtype of <code>U</code>. That seems wrong &amp; I'll change it</p>",
+        "id": 579282318,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773412284
+    },
+    {
+        "content": "<p>It should be contravariant or invariant?</p>",
+        "id": 579282488,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773412332
+    },
+    {
+        "content": "<p>invariant</p>",
+        "id": 579282827,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1773412425
+    },
+    {
+        "content": "<p>I feel that it is somewhat similar to <code>fn(T) -&gt; field</code> so contravariant sounds plausible too</p>",
+        "id": 579282978,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773412464
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579282978\">said</a>:</p>\n<blockquote>\n<p>I feel that it is somewhat similar to <code>fn(T) -&gt; field</code> so contravariant sounds plausible too</p>\n</blockquote>\n<p>I am pretty sure FieldRepresentingType&lt;T&gt; must be invariant over T. field_of! can stay as it is. It has the former as fixed return type anyway.</p>",
+        "id": 579288565,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773413943
+    }
+]

@@ -1,0 +1,87 @@
+<html>
+<head><meta charset="utf-8"><title>pin-init `InPlaceInit` · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html">pin-init `InPlaceInit`</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="340404702"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/pin-init%20%60InPlaceInit%60/near/340404702" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html#340404702">(Mar 08 2023 at 16:11)</a>:</h4>
+<p>At the moment <code>pin-init</code> provides the following trait:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">InPlaceInit</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>: <span class="nb">Sized</span> <span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Use the given initializer to in-place initialize a `T`.</span>
+<span class="w">    </span><span class="sd">///</span>
+<span class="w">    </span><span class="sd">/// If `T: !Unpin` it will not be able to move afterwards.</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">pin_init</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">(</span><span class="n">init</span>: <span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">error</span>::<span class="nb">Result</span><span class="o">&lt;</span><span class="n">Pin</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">Error</span>: <span class="nb">From</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="sd">/// Use the given initializer to in-place initialize a `T`.</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">init</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">(</span><span class="n">init</span>: <span class="nc">impl</span><span class="w"> </span><span class="n">Init</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">error</span>::<span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">Error</span>: <span class="nb">From</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>it is implemented by <code>Box</code> and <code>UniqueArc</code>.</p>
+<p>My current problem is that this references the <code>error::Result</code>, i.e. the kernel <code>Error</code> type.<br>
+As I also want to publish this as a standalone crate - and the more rusty pattern is to allow arbitrary error types, I have to find a different error type. However, that is not as easy as using <code>Result&lt;_, E&gt;</code>, since inside of <code>pin_init</code> and <code>init</code>, I want to e.g. allocate a <code>Box</code>, so I first tried to do this (only showing <code>init</code> for simplicity):</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">InPlaceInit</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>: <span class="nb">Sized</span> <span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">init</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">(</span><span class="n">init</span>: <span class="nc">impl</span><span class="w"> </span><span class="n">Init</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">E</span>: <span class="nb">From</span><span class="o">&lt;</span><span class="n">AllocError</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This works, but places a type requirement on the initializer. Now one cannot do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="nb">Box</span>::<span class="n">init</span><span class="p">(</span><span class="n">init</span><span class="o">!</span><span class="p">(</span><span class="n">Foo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}));</span>
+</code></pre></div>
+<p>since <code>init!</code> returns <code>impl Init&lt;Foo, Infallible&gt;</code>.</p>
+<p>My next try was this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">InPlaceInit</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>: <span class="nb">Sized</span> <span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">init</span><span class="o">&lt;</span><span class="n">E</span><span class="p">,</span><span class="w"> </span><span class="n">Ei</span><span class="o">&gt;</span><span class="p">(</span><span class="n">init</span>: <span class="nc">impl</span><span class="w"> </span><span class="n">Init</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">Ei</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">E</span>: <span class="nb">From</span><span class="o">&lt;</span><span class="n">AllocError</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">E</span>: <span class="nb">From</span><span class="o">&lt;</span><span class="n">Ei</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This is better, since now one could theoretically do the above example with <code>Foo</code>, but <code>AllocError: From&lt;Infallible&gt;</code> is not satisfied (I think this could be added easily, I asked a question about this on the rust-zulip, but have not gotten an answer).</p>
+<p>Does anyone have any other ideas?</p>
+
+
+
+<a name="340404797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/pin-init%20%60InPlaceInit%60/near/340404797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html#340404797">(Mar 08 2023 at 16:11)</a>:</h4>
+<p>Also, should I change the implementation in the kernel to use this one as well? It will still allow using <code>Error</code>, but might result in worse type inference (sigh), since it permits more freely choosing the error type.</p>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="412316">@bjorn3</span> could you guys have a look at this?</p>
+
+
+
+<a name="340411775"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/pin-init%20%60InPlaceInit%60/near/340411775" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html#340411775">(Mar 08 2023 at 16:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60/near/340404797">said</a>:</p>
+<blockquote>
+<p>Also, should I change the implementation in the kernel to use this one as well? It will still allow using <code>Error</code>, but might result in worse type inference (sigh), since it permits more freely choosing the error type.</p>
+</blockquote>
+<p>You can also introduce the current version, and improve it in the future.</p>
+
+
+
+<a name="340417203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/pin-init%20%60InPlaceInit%60/near/340417203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html#340417203">(Mar 08 2023 at 17:02)</a>:</h4>
+<p>yeah, I plan to use the current version that uses <code>error::Result</code> regardless of <code>E</code> in the first patch</p>
+
+
+
+<a name="340417287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/pin-init%20%60InPlaceInit%60/near/340417287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/pin-init.20.60InPlaceInit.60.html#340417287">(Mar 08 2023 at 17:02)</a>:</h4>
+<p>but I have to solve this problem anyways</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

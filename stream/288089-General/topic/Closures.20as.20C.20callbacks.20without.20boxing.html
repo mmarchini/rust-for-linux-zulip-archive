@@ -1,0 +1,723 @@
+<html>
+<head><meta charset="utf-8"><title>Closures as C callbacks without boxing · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html">Closures as C callbacks without boxing</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="504518798"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504518798" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504518798">(Mar 10 2025 at 09:29)</a>:</h4>
+<p>I am wondering if one can get in work in halfway sane way to pass a small Rust closure to the kind of C callback API we see sometimes in the kernel without having to allocate heap memory.</p>
+<p>The kind of API I talk about looks like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">CObjectWithCallback</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="n">void</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">callback_func</span><span class="p">)(</span><span class="n">void</span><span class="w"> </span><span class="o">*</span><span class="p">);</span>
+<span class="w">    </span><span class="n">void</span><span class="o">*</span><span class="w"> </span><span class="n">user_data</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The question is, if the size of the closure is not more than the size of a pointer, could we store the closure somehow in the <code>user_data</code> pointer directly - to avoid the memory allocation - instead of boxing it and setting <code>user_data</code> to <code>Box::into_raw(closure)</code>.</p>
+<p>It looks to me that would be useful in kernel to do callbacks 'the rust way'.</p>
+<p>Unfortunately it seems using <code>mem::transmute</code> for that can result in UB.</p>
+<p>We had a discussion about the matter (without finding an elegant solution) here:</p>
+<p><a href="https://users.rust-lang.org/t/is-transmuting-a-value-to-a-pointer-and-back-safe/126296">https://users.rust-lang.org/t/is-transmuting-a-value-to-a-pointer-and-back-safe/126296</a></p>
+<p>The TLDR is, if the data (here: the closure) contains padding between values, like if it contains an <code>u16</code> and an <code>u32</code>, llvm treats the padding as unitialized memory. There seems to be no way to make the compiler assume it to be initialized in Rust (without knowing the exact layout of the data, which is impossible for a closure).</p>
+<p>I wonder if it would be worth the trouble to make that work anyway somehow, like with some C or assembly helpers. Would that feature be generally useful enough? Thoughts?</p>
+
+
+
+<a name="504552308"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504552308" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504552308">(Mar 10 2025 at 11:42)</a>:</h4>
+<p>I'm a bit confused, you're talking about storing a closure, but <code>user_data</code> is just a<code>void*</code>. What kinds of closures do you think this would apply to? If you're not capturing any data, you can cast a closure to a <code>fn</code> pointer, which you can store as the <code>void*</code> (it will be "statically allocated" like any other normal function).</p>
+
+
+
+<a name="504559546"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504559546" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504559546">(Mar 10 2025 at 12:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504552308">schrieb</a>:</p>
+<blockquote>
+<p>I'm a bit confused, you're talking about storing a closure, but <code>user_data</code> is just a<code>void*</code>. What kinds of closures do you think this would apply to?</p>
+</blockquote>
+<p>I mean, if the closure captures something simple, small, that is not larger than a pointer, like a an <code>u64</code> or a <code>Box</code>. I mean physically a pointer are 8 bytes (or 4 on 32bit), so in there is space to store anything that is &lt;= 8 bytes in size.</p>
+
+
+
+<a name="504593512"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504593512" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504593512">(Mar 10 2025 at 14:09)</a>:</h4>
+<p>do you have some concrete examples?</p>
+
+
+
+<a name="504606284"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504606284" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504606284">(Mar 10 2025 at 14:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504593512">schrieb</a>:</p>
+<blockquote>
+<p>do you have some concrete examples?</p>
+</blockquote>
+<p>You mean use case or implementation?</p>
+<p>My current use case is the completion callback of a <code>bio</code>. There you have</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">bio_end_io_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">::</span><span class="n">core</span><span class="p">::</span><span class="n">option</span><span class="p">::</span><span class="nb">Option</span><span class="o">&lt;</span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="n">arg1</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bio</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">bio</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">bi_end_io</span><span class="p">:</span><span class="w"> </span><span class="nc">bio_end_io_t</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">bi_private</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">ffi</span><span class="p">::</span><span class="n">c_void</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+</code></pre></div>
+<p>You get the <code>bio</code> passed to the callback and can get the closure back from <code>bi_private</code>.</p>
+<p>Currently I'm doing it like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">Bio</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">callback_wrapper</span><span class="o">&lt;</span><span class="n">CB</span><span class="p">:</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="n">Bio</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="p">(</span><span class="n">bio</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">bio</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">cb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="n">bio</span><span class="p">.</span><span class="n">read</span><span class="p">().</span><span class="n">bi_private</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">CB</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">submit_bio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">Self</span><span class="p">(</span><span class="n">NonNull</span><span class="p">::</span><span class="n">new_unchecked</span><span class="p">(</span><span class="n">bio</span><span class="p">));</span>
+<span class="w">            </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_inner</span><span class="p">(</span><span class="n">cb</span><span class="p">)(</span><span class="n">submit_bio</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">submit_noacct</span><span class="o">&lt;</span><span class="n">CB</span><span class="p">:</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="n">Bio</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">end_io_callback</span><span class="p">:</span><span class="w"> </span><span class="nc">CB</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">bio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">::</span><span class="n">ManuallyDrop</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="p">).</span><span class="n">as_raw_bio</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">cb</span><span class="p">:</span><span class="w"> </span><span class="nc">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="n">bio</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">bio</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">callback_wrapper</span><span class="p">::</span><span class="o">&lt;</span><span class="n">CB</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">,</span><span class="w"> </span><span class="n">alloc</span><span class="p">::</span><span class="n">flags</span><span class="p">::</span><span class="n">GFP_NOIO</span><span class="p">)</span><span class="o">?</span><span class="p">);</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="p">{</span>
+<span class="w">            </span><span class="p">(</span><span class="o">*</span><span class="n">bio</span><span class="p">).</span><span class="n">bi_end_io</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">cb</span><span class="p">);</span>
+<span class="w">            </span><span class="p">(</span><span class="o">*</span><span class="n">bio</span><span class="p">).</span><span class="n">bi_private</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">c_void</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="p">;</span>
+<span class="w">            </span><span class="n">bindings</span><span class="p">::</span><span class="n">submit_bio_noacct</span><span class="p">(</span><span class="n">bio</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>As you can see, I allocate a KBox on each call to <code>submit_noacct()</code>. What I would like to do is something like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// UB, depending on what the closure captures</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">transmute</span><span class="o">&lt;</span><span class="n">_</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="o">&gt;</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">,</span><span class="w"> </span><span class="n">alloc</span><span class="p">::</span><span class="n">flags</span><span class="p">::</span><span class="n">GFP_NOIO</span><span class="p">)</span><span class="o">?</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>It probably can be made sound with assembly or C, but correctness will be hard to check (without in-depth knowledge of the compiler). Thus the question if it is worth the trouble.</p>
+
+
+
+<a name="504607241"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504607241" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504607241">(Mar 10 2025 at 14:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504606284">said</a>:</p>
+<blockquote>
+<p>You mean use case or implementation?</p>
+</blockquote>
+<p>I mean the use-case.</p>
+<p>Thanks for the details, how do the <code>submit_noacct</code> call sites look like?</p>
+
+
+
+<a name="504651251"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504651251" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504651251">(Mar 10 2025 at 17:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504607241">schrieb</a>:</p>
+<blockquote>
+<p>Thanks for the details, how do the <code>submit_noacct</code> call sites look like?</p>
+</blockquote>
+<p>No really clear. It's supposed to be a generic interface.</p>
+<p>Sure, I could tailor it to my specific use cases, where I typically need to store an int, Box or ARef. No capturing closures, only func pointers with a fixed argument type. That would be plan B.</p>
+
+
+
+<a name="504687707"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504687707" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504687707">(Mar 10 2025 at 21:07)</a>:</h4>
+<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns, e.g.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bio</span><span class="p">.</span><span class="n">submit_noacct</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">do_sth</span><span class="p">();</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">});</span>
+<span class="p">}</span>
+<span class="c1">// the closure above gets dropped and so does `y`.</span>
+<span class="c1">// &lt;callback_wrapper&gt; will reference a dangling pointer</span>
+</code></pre></div>
+
+
+
+<a name="504688258"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504688258" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504688258">(Mar 10 2025 at 21:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504687707">schrieb</a>:</p>
+<blockquote>
+<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns</p>
+</blockquote>
+<p>But that should be possible to handle with <code>ManuallyDrop</code>, no?</p>
+
+
+
+<a name="504688337"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504688337" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504688337">(Mar 10 2025 at 21:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504687707">said</a>:</p>
+<blockquote>
+<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns, e.g.</p>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bio</span><span class="p">.</span><span class="n">submit_noacct</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">do_sth</span><span class="p">();</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">});</span>
+<span class="p">}</span>
+<span class="c1">// the closure above gets dropped and so does `y`.</span>
+<span class="c1">// &lt;callback_wrapper&gt; will reference a dangling pointer</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>that can't happen, since <code>CB</code> has to be <code>'static</code></p>
+
+
+
+<a name="504689849"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504689849" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504689849">(Mar 10 2025 at 21:22)</a>:</h4>
+<p>Oh, my bad. Shouldn't use word "dropped", if we don't move the closure in <code>Box</code>, the pointer will become dangling when the calling function stack popped.</p>
+
+
+
+<a name="504689909"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504689909" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504689909">(Mar 10 2025 at 21:22)</a>:</h4>
+<p>which pointer?</p>
+
+
+
+<a name="504689977"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504689977" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504689977">(Mar 10 2025 at 21:23)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689909">said</a>:</p>
+<blockquote>
+<p>which pointer?</p>
+</blockquote>
+<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>
+
+
+
+<a name="504690209"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690209" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690209">(Mar 10 2025 at 21:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689977">schrieb</a>:</p>
+<blockquote>
+<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>
+</blockquote>
+<p>It shouldn't. The closure will be moved into the function with normal move semantics. When dropping is prevented there using <code>ManuallyDrop</code> it should be fine.</p>
+
+
+
+<a name="504690296"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690296" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690296">(Mar 10 2025 at 21:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690209">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689977">schrieb</a>:</p>
+<blockquote>
+<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>
+</blockquote>
+<p>It shouldn't. The closure will be moved into the function with normal move semantics. When dropping is prevented there using <code>ManuallyDrop</code> it should be fine.</p>
+</blockquote>
+<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>
+
+
+
+<a name="504690601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690601">(Mar 10 2025 at 21:27)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">foo</span><span class="p">(</span><span class="n">bio</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">Bio</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bio</span><span class="p">.</span><span class="n">submit_noacct</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">do_sth</span><span class="p">();</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">});</span>
+<span class="w">  </span><span class="c1">// both y and the closure should be allocated on the stack of `foo()`.</span>
+<span class="p">}</span>
+
+<span class="n">foo</span><span class="p">(</span><span class="n">bio</span><span class="p">);</span>
+<span class="c1">// y and the closure are not valid. yet the callback may have not executed.</span>
+</code></pre></div>
+
+
+
+<a name="504690641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690641">(Mar 10 2025 at 21:27)</a>:</h4>
+<p>that doesn't work because of the <code>'static</code> bound</p>
+
+
+
+<a name="504690851"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690851" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690851">(Mar 10 2025 at 21:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690641">said</a>:</p>
+<blockquote>
+<p>that doesn't work because of the <code>'static</code> bound</p>
+</blockquote>
+<p>which doesn't work? I thought Oliver was proposing to use <code>ManuallyDrop</code></p>
+
+
+
+<a name="504690855"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690855" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690855">(Mar 10 2025 at 21:29)</a>:</h4>
+<p>but it might be implementation detail</p>
+
+
+
+<a name="504690876"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690876" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690876">(Mar 10 2025 at 21:29)</a>:</h4>
+<p>Yeah..</p>
+
+
+
+<a name="504690895"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690895" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690895">(Mar 10 2025 at 21:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296">schrieb</a>:</p>
+<blockquote>
+<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>
+</blockquote>
+<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>
+
+
+
+<a name="504690931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690931">(Mar 10 2025 at 21:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690895">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296">schrieb</a>:</p>
+<blockquote>
+<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>
+</blockquote>
+<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>
+</blockquote>
+<p>move to where?</p>
+
+
+
+<a name="504690938"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504690938" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504690938">(Mar 10 2025 at 21:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690851">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690641">said</a>:</p>
+<blockquote>
+<p>that doesn't work because of the <code>'static</code> bound</p>
+</blockquote>
+<p>which doesn't work? I thought Oliver was proposing to use <code>ManuallyDrop</code></p>
+</blockquote>
+<p>in your example the closure will be moved into the <code>submit_noacct</code> function and stay valid for as long as it exists</p>
+
+
+
+<a name="504691073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691073">(Mar 10 2025 at 21:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690931">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690895">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296">schrieb</a>:</p>
+<blockquote>
+<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>
+</blockquote>
+<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>
+</blockquote>
+<p>move to where?</p>
+</blockquote>
+<p>Or you mean <code>bi_private</code> should be able to hold the whole closure?</p>
+
+
+
+<a name="504691090"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691090" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691090">(Mar 10 2025 at 21:30)</a>:</h4>
+<p>yes that is the idea</p>
+
+
+
+<a name="504691152"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691152" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691152">(Mar 10 2025 at 21:31)</a>:</h4>
+<p>if we store the data inside of an <code>Opaque&lt;CB&gt;</code>, then it would work</p>
+
+
+
+<a name="504691206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691206">(Mar 10 2025 at 21:31)</a>:</h4>
+<p>but no idea how to bring that into C land...</p>
+
+
+
+<a name="504691380"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691380" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691380">(Mar 10 2025 at 21:32)</a>:</h4>
+<p>correct me if I'm wrong, a closure is at least a size of <code>usize</code> because it has a function pointer in it?</p>
+
+
+
+<a name="504691412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691412">(Mar 10 2025 at 21:32)</a>:</h4>
+<p>nope, if you have a <code>'static</code> closure, then it can be smaller</p>
+
+
+
+<a name="504691551"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691551" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691551">(Mar 10 2025 at 21:34)</a>:</h4>
+<p>for example:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">size</span><span class="o">&lt;</span><span class="n">F</span><span class="p">:</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i32</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="p">(</span><span class="n">f</span><span class="p">:</span><span class="w"> </span><span class="nc">F</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{}"</span><span class="p">,</span><span class="w"> </span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">F</span><span class="o">&gt;</span><span class="p">());</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">foo</span><span class="p">(</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="kt">i32</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">size</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">x</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">foo</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>prints <code>4</code>.</p>
+
+
+
+<a name="504691608"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691608" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691608">(Mar 10 2025 at 21:34)</a>:</h4>
+<p>(and the binary representation of that closure will just be its captured data, so in this case <code>42</code>)</p>
+
+
+
+<a name="504691706"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504691706" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504691706">(Mar 10 2025 at 21:35)</a>:</h4>
+<p>Ok, this makes sense.</p>
+
+
+
+<a name="504694050"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504694050" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504694050">(Mar 10 2025 at 21:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504691152">said</a>:</p>
+<blockquote>
+<p>if we store the data inside of an <code>Opaque&lt;CB&gt;</code>, then it would work</p>
+</blockquote>
+<p>what do you mean by this?</p>
+
+
+
+<a name="504694148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504694148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504694148">(Mar 10 2025 at 21:51)</a>:</h4>
+<p>if the <code>bi_private</code> field had the type <code>Opaque&lt;usize&gt;</code>, then we could store <code>CB</code> in there without padding bytes becoming an issue</p>
+
+
+
+<a name="504694392"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504694392" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504694392">(Mar 10 2025 at 21:53)</a>:</h4>
+<p>Oh, right. Because whatever the type of <code>bi_private</code> is, it needs to be valid.</p>
+
+
+
+<a name="504695022"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504695022" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504695022">(Mar 10 2025 at 21:57)</a>:</h4>
+<p>I guess if we have a <code>__opaque</code> on C side</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="cp">#define __opaque __attribute__((???))</span>
+</code></pre></div>
+<p>and bindgen can understand it. Generating <code>void *bi_private __opaque</code> into a <code>bi_private: Opaque&lt;*mut c_void&gt;</code>, then this could work.</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">bio</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">bi_private</span><span class="w"> </span><span class="n">__opaque</span><span class="p">;</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>into</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">Bio</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="n">bi_private</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="504695673"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504695673" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504695673">(Mar 10 2025 at 22:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504694148">schrieb</a>:</p>
+<blockquote>
+<p>if the <code>bi_private</code> field had the type <code>Opaque&lt;usize&gt;</code>, then we could store <code>CB</code> in there without padding bytes becoming an issue</p>
+</blockquote>
+<p>According to the forum discussion I linked, it seems not. If it were an <code>Opaque&lt;[u8; 8]&gt;</code> it might. Not sure. </p>
+<p>With an <code>Opaque&lt;usize&gt;</code>, converting the closure into that should be okay, but when you want to get the data back, you have a problem. Some bytes of the <code>usize</code> being uninitialized will make the compiler declare the whole <code>usize</code> to be uninitialized.</p>
+
+
+
+<a name="504696536"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504696536" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504696536">(Mar 10 2025 at 22:06)</a>:</h4>
+<p>you can probably do a:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">cb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="n">bio</span><span class="p">.</span><span class="n">bi_private</span><span class="p">.</span><span class="n">get</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">CB</span><span class="p">).</span><span class="n">read</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="n">cb</span><span class="p">();</span>
+</code></pre></div>
+<p>, that is, don't read it as a <code>unsize</code>.</p>
+
+
+
+<a name="504697784"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504697784" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504697784">(Mar 10 2025 at 22:15)</a>:</h4>
+<p><a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975</a></p>
+
+
+
+<a name="504698225"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504698225" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504698225">(Mar 10 2025 at 22:18)</a>:</h4>
+<p>(it makes miri happy)</p>
+
+
+
+<a name="504698738"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504698738" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504698738">(Mar 10 2025 at 22:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504697784">schrieb</a>:</p>
+<blockquote>
+<p><a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975</a></p>
+</blockquote>
+<p>Interesting. Works also for me, if I replace <code>usize</code> with <code>*mut c_void</code>.</p>
+
+
+
+<a name="504699095"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504699095" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504699095">(Mar 10 2025 at 22:23)</a>:</h4>
+<p>Now bindgen would need to be taught to generate <code>MaybeUninit&lt;*mut c_void&gt;</code> instead of <code>*mut c_void</code>...</p>
+
+
+
+<a name="504699354"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504699354" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504699354">(Mar 10 2025 at 22:25)</a>:</h4>
+<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>
+
+
+
+<a name="504699823"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504699823" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504699823">(Mar 10 2025 at 22:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699354">schrieb</a>:</p>
+<blockquote>
+<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>
+</blockquote>
+<p>Yes. Does that help?</p>
+
+
+
+<a name="504700015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504700015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504700015">(Mar 10 2025 at 22:29)</a>:</h4>
+<p>then you could do:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">CB</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">addr_mut_of</span><span class="o">!</span><span class="p">((</span><span class="o">*</span><span class="bp">self</span><span class="p">.</span><span class="mf">0.</span><span class="n">get</span><span class="p">()).</span><span class="n">bi_private</span><span class="p">).</span><span class="n">write</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">);</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="n">forget</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="kr">do</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">normal</span><span class="w"> </span><span class="k">box</span><span class="w"> </span><span class="n">thing</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="504700346"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504700346" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504700346">(Mar 10 2025 at 22:31)</a>:</h4>
+<p>the whole point is "don't read <code>.bi_private</code> directly, instead re-interpret it as a <code>CB</code>".</p>
+
+
+
+<a name="504700796"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504700796" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504700796">(Mar 10 2025 at 22:34)</a>:</h4>
+<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>
+
+
+
+<a name="504701257"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504701257" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504701257">(Mar 10 2025 at 22:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700346">schrieb</a>:</p>
+<blockquote>
+<p>the whole point is "don't read <code>.bi_private</code> directly, instead re-interpret it as a <code>CB</code>".</p>
+</blockquote>
+<p>Good idea. That make sense. If it is effectively never accesses as a <code>*c_void</code> it might indeed be okay.</p>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700796">schrieb</a>:</p>
+<blockquote>
+<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>
+</blockquote>
+<p>Is it actually possible, that it is not? If the size of CB is not greater than a pointer?</p>
+
+
+
+<a name="504702344"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504702344" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504702344">(Mar 10 2025 at 22:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504701257">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700796">schrieb</a>:</p>
+<blockquote>
+<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>
+</blockquote>
+<p>Is it actually possible, that it is not? If the size of CB is not greater than a pointer?</p>
+</blockquote>
+<p>No for right now, but these are compile time switches only, so it won't hurt being careful.</p>
+
+
+
+<a name="504703078"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504703078" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504703078">(Mar 10 2025 at 22:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504702344">schrieb</a>:</p>
+<blockquote>
+<p>No for right now, but these are compile time switches only, so it won't hurt being careful.</p>
+</blockquote>
+<p>True. </p>
+<p>But seems you indeed found a solution. Thanks a lot!</p>
+
+
+
+<a name="504704880"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/504704880" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#504704880">(Mar 10 2025 at 23:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699823">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699354">schrieb</a>:</p>
+<blockquote>
+<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>
+</blockquote>
+<p>Yes. Does that help?</p>
+</blockquote>
+<p><span aria-label="man facepalming" class="emoji emoji-1f926-200d-2642" role="img" title="man facepalming">:man_facepalming:</span>  oh right!</p>
+
+
+
+<a name="506120186"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506120186" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506120186">(Mar 17 2025 at 11:20)</a>:</h4>
+<p><span class="user-mention" data-user-id="783888">@Oliver Mangold</span> do you really need to be able to pass a closure here?</p>
+
+
+
+<a name="506120270"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506120270" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506120270">(Mar 17 2025 at 11:20)</a>:</h4>
+<p>Could the callback not be decided by a generic parameter on <code>Bio</code> ?</p>
+
+
+
+<a name="506179584"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506179584" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506179584">(Mar 17 2025 at 15:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506120270">schrieb</a>:</p>
+<blockquote>
+<p>Could the callback not be decided by a generic parameter on <code>Bio</code> ?</p>
+</blockquote>
+<p>Basically that's what I'm doing. But the question is about passing how to pass <code>user_data</code> to the callback in safe code. </p>
+<p>If doing things like above is not okay, I could still make it usable by only allowing a fixed set of types that can be used for that (like an <code>usize</code> or a <code>Box</code>). That said, being able to use closures seems to me to be most flexible way and also the common Rust idiom for callbacks, no?</p>
+
+
+
+<a name="506187287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506187287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506187287">(Mar 17 2025 at 15:33)</a>:</h4>
+<p>We do something similar for tag set private data. There we require foreignOwnable for the parameter I think, and then it is generic.</p>
+
+
+
+<a name="506187446"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506187446" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506187446">(Mar 17 2025 at 15:33)</a>:</h4>
+<p>As long as you always have the same type on a code path, that works well, it can be generic.</p>
+
+
+
+<a name="506199618"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506199618" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506199618">(Mar 17 2025 at 16:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506187446">schrieb</a>:</p>
+<blockquote>
+<p>As long as you always have the same type on a code path, that works well, it can be generic.</p>
+</blockquote>
+<p>Yes, it would. Don't get me wrong, I'm not saying closures are absolutely required.</p>
+
+
+
+<a name="506217266"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506217266" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506217266">(Mar 17 2025 at 17:25)</a>:</h4>
+<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>
+
+
+
+<a name="506220772"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506220772" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506220772">(Mar 17 2025 at 17:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266">said</a>:</p>
+<blockquote>
+<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>
+</blockquote>
+<p>Nope, compiler should figure if the data captured by the closure is relatively small.</p>
+
+
+
+<a name="506225694"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506225694" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506225694">(Mar 17 2025 at 18:03)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266">schrieb</a>:</p>
+<blockquote>
+<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>
+</blockquote>
+<p>As I understand the <code>value</code> of the closure is just the captured data, somehow packed into a kinda struct. How that struct is passed around is decided by the compiler, of course. But I think memcpy'ing it to move it is just as valid a thing to do as for any other struct. The complication is just the type coercion if you want to store it in the space dedicated for data of a different type with causing UB. (The compiler surely won't convert a boxing into inline storage for you, if the reference to the <code>Box</code> is an FFI pointer, right?). But I believe Boqun figured that part out.</p>
+
+
+
+<a name="506247665"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506247665" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506247665">(Mar 17 2025 at 19:53)</a>:</h4>
+<p>I guess some times it will be a fat pointer? A pointer for the function to jump to and a pointer to the captures?</p>
+
+
+
+<a name="506247805"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506247805" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506247805">(Mar 17 2025 at 19:54)</a>:</h4>
+<p>Unless it is static dispatch, both are required</p>
+
+
+
+<a name="506248013"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506248013" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506248013">(Mar 17 2025 at 19:55)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506220772">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266">said</a>:</p>
+<blockquote>
+<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>
+</blockquote>
+<p>Nope, compiler should figure if the data captured by the closure is relatively small.</p>
+</blockquote>
+<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>
+
+
+
+<a name="506253626"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506253626" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506253626">(Mar 17 2025 at 20:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506247665">schrieb</a>:</p>
+<blockquote>
+<p>I guess some times it will be a fat pointer? A pointer for the function to jump to and a pointer to the captures?</p>
+</blockquote>
+<p>No fat pointer in the regular sense. The function address is represented by the _type_ of the closure, while the capture is represented by it's value. Odd thing, I admit. If you want to have both addresses, you can get the function address by converting the closure to a function pointer and the data address by simply dereferencing the closure. I did that in my code here.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">submit_noacct</span><span class="o">&lt;</span><span class="n">CB</span><span class="p">:</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="n">Bio</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">end_io_callback</span><span class="p">:</span><span class="w"> </span><span class="nc">CB</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">bio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">::</span><span class="n">ManuallyDrop</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="p">).</span><span class="n">as_raw_bio</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">cb</span><span class="p">:</span><span class="w"> </span><span class="nc">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="n">bio</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">bio</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">callback_wrapper</span><span class="p">::</span><span class="o">&lt;</span><span class="n">CB</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">end_io_callback</span><span class="p">,</span><span class="w"> </span><span class="n">alloc</span><span class="p">::</span><span class="n">flags</span><span class="p">::</span><span class="n">GFP_NOIO</span><span class="p">)</span><span class="o">?</span><span class="p">);</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="p">{</span>
+<span class="w">            </span><span class="p">(</span><span class="o">*</span><span class="n">bio</span><span class="p">).</span><span class="n">bi_end_io</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">cb</span><span class="p">);</span>
+<span class="w">            </span><span class="p">(</span><span class="o">*</span><span class="n">bio</span><span class="p">).</span><span class="n">bi_private</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">end_io_callback</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">c_void</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_void</span><span class="p">;</span>
+<span class="w">            </span><span class="n">bindings</span><span class="p">::</span><span class="n">submit_bio_noacct</span><span class="p">(</span><span class="n">bio</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="506440087"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506440087" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506440087">(Mar 18 2025 at 10:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506248013">schrieb</a>:</p>
+<blockquote>
+<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>
+</blockquote>
+<p>That's what I did. You can do <code>mem::size_of::&lt;C&gt;()</code> on a closure just like on any other type.</p>
+
+
+
+<a name="506440878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506440878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506440878">(Mar 18 2025 at 10:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="783888">Oliver Mangold</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506440087">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506248013">schrieb</a>:</p>
+<blockquote>
+<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>
+</blockquote>
+<p>That's what I did. You can do <code>mem::size_of::&lt;C&gt;()</code> on a closure just like on any other type.</p>
+</blockquote>
+<p>Right. What I meant was, is it possible to restrict the closures to only be he kind that fits in a usize, with a trait bound?</p>
+
+
+
+<a name="506441014"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506441014" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506441014">(Mar 18 2025 at 10:30)</a>:</h4>
+<p>Maybe it is a stupid thing to do, but I am curious.</p>
+
+
+
+<a name="506441238"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Closures%20as%20C%20callbacks%20without%20boxing/near/506441238" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oliver Mangold <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing.html#506441238">(Mar 18 2025 at 10:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506440878">schrieb</a>:</p>
+<blockquote>
+<p>Right. What I meant was, is it possible to restrict the closures to only be he kind that fits in a usize, with a trait bound?</p>
+</blockquote>
+<p>Don't think so. But one can do the size check in a const section, producing a compile time error when it doesn't fit.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

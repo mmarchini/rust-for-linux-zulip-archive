@@ -1,0 +1,238 @@
+<html>
+<head><meta charset="utf-8"><title>ioctls: We should probably not pass Opaque to drivers · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html">ioctls: We should probably not pass Opaque to drivers</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="517557240"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517557240" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517557240">(May 12 2025 at 14:01)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> </p>
+<p>Hi Danilo, I see that you have changed from &amp;mut T to &amp;Opaque&lt;T&gt; in the ioctl macro.</p>
+<p>We should probably dereference that instead of handing the Opaque to the drivers to avoid the proliferation of unsafe and the handling of raw pointers at the driver level. This comes at a cost of two extra memcpy's per ioctl.</p>
+<p>My proposal is:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">                            </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                                </span><span class="o">&amp;*</span><span class="p">(</span><span class="n">raw_data</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">types</span><span class="p">::</span><span class="n">Opaque</span><span class="o">&lt;</span><span class="cp">$crate</span><span class="p">::</span><span class="n">uapi</span><span class="p">::</span><span class="cp">$struct</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="w">                            </span><span class="p">};</span>
+
+<span class="w">                            </span><span class="c1">// Copy into our stack and pass that to the drivers</span>
+<span class="w">                            </span><span class="c1">// so they get a &amp;mut T, instead of &amp;Opaque&lt;T&gt;</span>
+<span class="w">                            </span><span class="kd">let</span><span class="w"> </span><span class="n">args</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="o">*</span><span class="n">data</span><span class="p">.</span><span class="n">get</span><span class="p">()};</span>
+
+<span class="w">                            </span><span class="c1">// SAFETY: This is just the DRM file structure</span>
+<span class="w">                            </span><span class="kd">let</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">drm</span><span class="p">::</span><span class="n">File</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">raw_file</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">                            </span><span class="k">match</span><span class="w"> </span><span class="cp">$func</span><span class="p">(</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="n">file</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                                </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">to_errno</span><span class="p">(),</span>
+<span class="w">                                </span><span class="nb">Ok</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">i</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span>
+<span class="w">                                            </span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="cp">$crate</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">code</span><span class="p">::</span><span class="n">ERANGE</span><span class="p">.</span><span class="n">to_errno</span><span class="p">()),</span>
+<span class="w">                            </span><span class="p">}</span>
+
+<span class="w">                            </span><span class="c1">// Writeback the updates, if any.</span>
+<span class="w">                            </span><span class="n">core</span><span class="p">::</span><span class="n">ptr</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="n">data</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
+</code></pre></div>
+<p>WDYT?</p>
+
+
+
+<a name="517559299"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517559299" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517559299">(May 12 2025 at 14:07)</a>:</h4>
+<p>How do you guarantee that the data behind <code>data.get()</code> is valid? I think we can only ever guarantee that if we <em>only</em> allow uAPI structures that are impossible for userspace to create invalid instances from for Rust.</p>
+<p>But even if we do that, my reasoning was that it's not worth at all. uAPIs typically pass pointers through u64 fields to the kernel, which must be handled by drivers anyways.</p>
+<p>I think the correct answer is to provide generic helper infrastructure, to make it easy for drivers to generate the corresponding uAPI abstractions. See what I do in nova-drm [1], I think we should generalize that.</p>
+<p>[1] <a href="https://gitlab.freedesktop.org/drm/nova/-/blob/staging/nova-drm/drivers/gpu/drm/nova/uapi.rs?ref_type=heads">https://gitlab.freedesktop.org/drm/nova/-/blob/staging/nova-drm/drivers/gpu/drm/nova/uapi.rs?ref_type=heads</a></p>
+
+
+
+<a name="517561258"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517561258" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517561258">(May 12 2025 at 14:12)</a>:</h4>
+<p>IIUC the code correctly, I assume we need a proc-macro for that? Since we need the AST to know which functions to generate</p>
+
+
+
+<a name="517562426"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517562426" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517562426">(May 12 2025 at 14:16)</a>:</h4>
+<blockquote>
+<p>How do you guarantee that the data behind <code>data.get()</code> is valid?</p>
+</blockquote>
+<p>That is already a problem with the currently solution IIUC?</p>
+
+
+
+<a name="517569791"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517569791" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517569791">(May 12 2025 at 14:39)</a>:</h4>
+<p>Where do you see this problem with the current solution?</p>
+
+
+
+<a name="517572100"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517572100" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517572100">(May 12 2025 at 14:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers/near/517569791">said</a>:</p>
+<blockquote>
+<p>Where do you see this problem with the current solution?</p>
+</blockquote>
+<p>IIUC:</p>
+<p>The current solution builds an Opaque&lt;T&gt; from a raw pointer, i.e.:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">                            </span><span class="c1">// SAFETY: This is just the ioctl argument, which hopefully has the</span>
+<span class="w">                            </span><span class="c1">// right type (we've done our best checking the size).</span>
+<span class="w">                            </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="o">*</span><span class="p">(</span><span class="n">raw_data</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">uapi</span><span class="p">::</span><span class="cp">$struct</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>So the opaque is only as valid as is the raw pointer it wraps.</p>
+<p>The current solution then passes &amp;Opaque&lt;T&gt; to the drivers, which now have to call <code>.get()</code> to be able to actually access the uapi data, so the whole thing only works if we assume that <code>.get()</code> returns valid data. It's just that this responsibility now lays with the driver.</p>
+
+
+
+<a name="517573541"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517573541" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517573541">(May 12 2025 at 14:52)</a>:</h4>
+<p>Ah, maybe we're relying on the MaybeUnit&lt;T&gt; to save us here? In which case I see your point</p>
+
+
+
+<a name="517581915"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517581915" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517581915">(May 12 2025 at 15:20)</a>:</h4>
+<p>Yes, that's exactly the purpose of <code>Opaque</code>, to get us "rid of all the usual assumptions that Rust has for a value". <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+
+
+
+<a name="517582335"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517582335" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517582335">(May 12 2025 at 15:21)</a>:</h4>
+<p>And yes, the responsibility is on the driver. Unfortunately, it has to be -- none of the generic layers know the type and its semantics.</p>
+
+
+
+<a name="517582845"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517582845" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517582845">(May 12 2025 at 15:23)</a>:</h4>
+<p>That's why I said we should generalize what [1] does and yes, I think proc-macros would be a great option to describe the uAPI at a higher level to generate the uAPI abstraction.</p>
+
+
+
+<a name="517657929"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517657929" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alyssa Rosenzweig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517657929">(May 12 2025 at 20:39)</a>:</h4>
+<blockquote>
+<p>How do you guarantee that the data behind <code>data.get()</code> is valid? I think we can only ever guarantee that if we <em>only</em> allow uAPI structures that are impossible for userspace to create invalid instances from for Rust.</p>
+</blockquote>
+<p>Don't we effectively already have that requirement (at a uAPI design level, nothing specific to Rust)?</p>
+
+
+
+<a name="517927063"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517927063" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517927063">(May 13 2025 at 21:33)</a>:</h4>
+<p>I would expect that uapi data structures are always valid for any sequence of bytes, so we could just use them without opaque.</p>
+
+
+
+<a name="517927183"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517927183" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517927183">(May 13 2025 at 21:33)</a>:</h4>
+<p>Hm, I was looking for things like “bool” or similar where you could have an invalid byte pattern</p>
+
+
+
+<a name="517927284"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517927284" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517927284">(May 13 2025 at 21:34)</a>:</h4>
+<p>But I remembered that this is taken into account in C too, so I don’t think there’s anywhere where bool is used on the uAPI</p>
+
+
+
+<a name="517927348"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517927348" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517927348">(May 13 2025 at 21:35)</a>:</h4>
+<p>This leaves a bunch of u8 to u64, sized arrays and pointers</p>
+
+
+
+<a name="517927413"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517927413" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517927413">(May 13 2025 at 21:35)</a>:</h4>
+<p>I don’t think there’s any particular requirements on pointers either</p>
+
+
+
+<a name="517930081"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517930081" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517930081">(May 13 2025 at 21:56)</a>:</h4>
+<p>There shouldn't be pointer types, pointers are passed as u64.</p>
+
+
+
+<a name="517930134"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517930134" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517930134">(May 13 2025 at 21:56)</a>:</h4>
+<p>However, drivers would still need an abstraction for dealing with those pointers.</p>
+
+
+
+<a name="517930205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517930205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517930205">(May 13 2025 at 21:57)</a>:</h4>
+<p>Right but this is a different thing, right? We’re initially discussing the Opaque and whether it’s really needed</p>
+
+
+
+<a name="517931460"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517931460" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517931460">(May 13 2025 at 22:06)</a>:</h4>
+<p>That is true.</p>
+
+
+
+<a name="517931521"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517931521" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517931521">(May 13 2025 at 22:06)</a>:</h4>
+<p>Anyways, I tried to remember why I wasn't convinced that uAPI headers only ever contain types that in Rust are valid for any sequence of bytes.</p>
+
+
+
+<a name="517931555"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517931555" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517931555">(May 13 2025 at 22:07)</a>:</h4>
+<p>And I think my concern was mostly about unions.</p>
+
+
+
+<a name="517931722"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/517931722" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#517931722">(May 13 2025 at 22:08)</a>:</h4>
+<p>But I'd rather avoid them in uAPIs anyways...</p>
+
+
+
+<a name="518067519"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518067519" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518067519">(May 14 2025 at 13:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers/near/517931521">said</a>:</p>
+<blockquote>
+<p>Anyways, I tried to remember why I wasn't convinced that uAPI headers only ever contain types that in Rust are valid for any sequence of bytes.</p>
+</blockquote>
+<p>what is special about unions for this particular case?</p>
+
+
+
+<a name="518101288"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518101288" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518101288">(May 14 2025 at 15:45)</a>:</h4>
+<p>I think I thought about something like [1], even though we shouldn't do something like that.</p>
+<p>Anyways, if we can ensure that we never get undefined behavior without Opaque, that's great, we should do it then.</p>
+<p>[1] <a href="https://elixir.bootlin.com/linux/v6.14.6/source/include/uapi/drm/vmwgfx_drm.h#L1107">https://elixir.bootlin.com/linux/v6.14.6/source/include/uapi/drm/vmwgfx_drm.h#L1107</a></p>
+
+
+
+<a name="518146422"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518146422" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518146422">(May 14 2025 at 19:43)</a>:</h4>
+<p>hmm, this appears to be valid for any sequence of bytes, no?</p>
+<p>the enum will be converted to an integer, so there is no way to have an invalid variant or something like this, and the struct is just two integers</p>
+
+
+
+<a name="518146924"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518146924" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518146924">(May 14 2025 at 19:46)</a>:</h4>
+<p>also, rust unions do not have a discriminant, so they should be 1:1 compatible with C from that perspective as well</p>
+
+
+
+<a name="518146939"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518146939" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518146939">(May 14 2025 at 19:47)</a>:</h4>
+<p>yeah, I am starting to think that we should be good here even with unions</p>
+
+
+
+<a name="518147005"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/ioctls%3A%20We%20should%20probably%20not%20pass%20Opaque%20to%20drivers/near/518147005" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/ioctls.3A.20We.20should.20probably.20not.20pass.20Opaque.20to.20drivers.html#518147005">(May 14 2025 at 19:47)</a>:</h4>
+<p>Btw <span class="user-mention" data-user-id="878151">@Beata Michalska</span> , this conversation is probably interesting to you</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

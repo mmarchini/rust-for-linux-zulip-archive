@@ -1,0 +1,206 @@
+[
+    {
+        "content": "<p>I was thinking about how to justify the file descriptor stuff that I'm doing in my <a href=\"https://lore.kernel.org/all/20231206-alice-file-v2-0-af617c0d9d94@google.com/\">file patchset</a> and I came up with the following comment:</p>\n<blockquote>\n<p>Wraps the kernel's <code>struct file</code>.</p>\n<h1>Refcounting</h1>\n<p>Instances of this type are ref-counted according to the following rules. There are three kinds of refcounts:</p>\n<ul>\n<li>Normal refcounts. These are created with <code>fget</code>/<code>get_file</code> and dropped with <code>fput</code>.</li>\n<li>Fd refcounts. These correspond to an fd that a process has. Dropped when the fd is closed.</li>\n<li>A light refcount. Created with <code>fdget</code>, dropped with <code>fdput</code>.</li>\n</ul>\n<p>The two first kinds of refcounts are tracked using the <code>f_count</code> atomic in <code>struct file</code>. Both types of refcount correspond to one increment of <code>f_count</code>. Light refcounts are not tracked anywhere. The <code>ARef&lt;File&gt;</code> type corresponds to a normal refcount.</p>\n<p>Fd refcounts are normally held by a <code>struct files_struct</code> for a process. Closing a file is done by removing the file from the <code>struct files_struct</code> with <code>close_fd_get_file</code> and then using <code>filp_close</code> to actually close the file. The <code>filp_close</code> method takes ownership of a refcount and drops it. Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>\n<p>Light refcounts are always associated with an fd refcount. The idea is that we will not close the file between the <code>fdget</code> and <code>fdput</code> calls, which means that the fd refcount is guaranteed to be active between those two calls. Note that this doesn't work if another thread could close the file in that period, so <code>fdget</code> only creates a light refcount if the <code>struct files_struct</code> is not shared with other threads. Otherwise, <code>fdget</code> creates a normal refcount.</p>\n<h1>Invariants</h1>\n<ul>\n<li>Instances of this type are refcounted with three types of refcounts: normal refcounts, fd refcounts, light refcounts.</li>\n<li>The <code>f_count</code> field holds the total number of normal and fd refcounts.</li>\n<li>Each light refcount is associated with an fd refcount and can only be created when the associated <code>struct files_struct</code> is not shared.</li>\n<li>A light refcount must be dropped before returning to userspace.</li>\n<li>An fd refcount must not be dropped if there are active light refcounts associated with it.</li>\n</ul>\n</blockquote>\n<p>Thoughts?</p>",
+        "id": 408216416,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702657107
+    },
+    {
+        "content": "<p>Is this how we want to format this kind of thing?</p>",
+        "id": 408217642,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702657523
+    },
+    {
+        "content": "<p>The \"refcounting\" part looks good to me.</p>\n<p>So if we do any FFI that we pass a <code>struct file</code> pointer or an fd, we need also to reason about behaviors on light refcounts, right? Like \"this FFI doesn't inc or dec the light refcount\".</p>",
+        "id": 408219617,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1702658178
+    },
+    {
+        "content": "<p>I don't think we need to say \"this doesn't touch the refcounts\" for every single ffi call</p>",
+        "id": 408219740,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702658230
+    },
+    {
+        "content": "<p>Like, if we drop an fd refcount, we for sure need to justify why there are no light refcounts. But that's just that particular ffi call that drops it.</p>",
+        "id": 408220002,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702658329
+    },
+    {
+        "content": "<p>Ok, so if an FFI does nothing on the file refcount, we say nothing, otherwise, justify how the drop works with the type invariants.</p>",
+        "id": 408220141,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1702658393
+    },
+    {
+        "content": "<p>r? <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> <br>\n(hope I'm using \"r?\" correctly ;-))</p>",
+        "id": 408220759,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1702658646
+    },
+    {
+        "content": "<p>Some things about the text itself:</p>\n<ul>\n<li>there are \"fd refcounts\", but you do not increase/decrease them with <code>fdget</code>/<code>fdput</code>.</li>\n<li>how are \"fd refcounts\" created?</li>\n<li>are \"fd refcounts\" not just a normal refcount that are automatically managed (i.e. by opening and closing a file?)</li>\n</ul>\n<p>What did you mean by </p>\n<blockquote>\n<p>Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>\n</blockquote>\n<p><code>filp_close</code> takes two arguments, the file and the <code>fl_owner_t</code>, is this \"fd refcount\" contained in that?</p>",
+        "id": 408327646,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702721708
+    },
+    {
+        "content": "<p>I am not sure I understand the need for light refcounts, but that isn't part of what this should explain.</p>",
+        "id": 408327683,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702721744
+    },
+    {
+        "content": "<p>if you could explain that, I can better understand how to create an API for it.</p>",
+        "id": 408327814,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702721848
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/408219740\">said</a>:</p>\n<blockquote>\n<p>I don't think we need to say \"this doesn't touch the refcounts\" for every single ffi call</p>\n</blockquote>\n<p>I understand why you don't want to do this, but I am a bit skeptical...</p>\n<p>Normally refcounts are a runtime thing, so any safe function might increment the refcount. And as long as you have an object, you still have a refcount. So the only operation that is interesting is decrementing the refcount, since that can drop the object. But with the filedescriptors you have the extra burden of these weird \"light refcounts\" where you somehow™ (I don't actually know how you ensure this aside from doing it locally in a function) ensure that there are none left when you finally destroy it.</p>\n<p>Can I think of the \"light refcounts\" as borrowed values? So you only take a light refcount when you know somebody above you has an actual refcount? If so, we might be able to completely go without light refcounts on the Rust side (though I still wonder how this would be for files that are shared and where no light refcounts exist...)?</p>\n<p>The only problem is that the C side might take light refcounts at any time... Are there some rules in C on how to use them?</p>",
+        "id": 408328363,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702722351
+    },
+    {
+        "content": "<p>Fd refcounts are created whenever a new fd appears in a process. This could be because it opens the file, or because some other process sent it that file using e.g. unix sockets or binder. Fd refcounts are dropped whenever the fd is removed from the process' file table, usually because the file is closed.</p>",
+        "id": 408347888,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736127
+    },
+    {
+        "content": "<p>The <code>fdget</code>/<code>fdput</code> functions have those names because they _take_ an fd (that is, an integer), looks up that fd in the current task's fd table, then returns a pointer to the file it corresponds to.</p>",
+        "id": 408348001,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736210
+    },
+    {
+        "content": "<p>Basically, <code>fdget</code>/<code>fdput</code> return an</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">enum</span> <span class=\"nc\">FdGet</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">NotShared</span><span class=\"p\">(</span><span class=\"o\">&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">File</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"n\">Shared</span><span class=\"p\">(</span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">File</span><span class=\"o\">&gt;</span><span class=\"p\">),</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>the light refcount is the first case.</p>",
+        "id": 408348070,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736280
+    },
+    {
+        "content": "<p>With the logic being that between the <code>fdget</code> and <code>fdput</code> calls, there will not be anything that removes the fd from the current process's fd table. Therefore, an <code>&amp;File</code> is enough.</p>",
+        "id": 408348163,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736339
+    },
+    {
+        "content": "<p>(It only returns a <code>&amp;File</code> if the fd table is not shared with other threads, so there can't be some other thread removing the fd either.)</p>",
+        "id": 408348187,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736364
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/408328363\">said</a>:</p>\n<blockquote>\n<p>The only problem is that the C side might take light refcounts at any time... Are there some rules in C on how to use them?</p>\n</blockquote>\n<p>Yes. You can't close the file between <code>fdget</code> and <code>fdput</code>, and you must call <code>fdput</code> before the task in which you called <code>fdget</code> returns to userspace.</p>",
+        "id": 408348275,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736427
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/408327646\">said</a>:</p>\n<blockquote>\n<p>What did you mean by </p>\n<blockquote>\n<p>Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>\n</blockquote>\n<p><code>filp_close</code> takes two arguments, the file and the <code>fl_owner_t</code>, is this \"fd refcount\" contained in that?</p>\n</blockquote>\n<p>It takes two arguments: a pointer to the file being closed, and a pointer to the fd table that used to hold an fd to that file.</p>",
+        "id": 408348343,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736492
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/408328363\">said</a>:</p>\n<blockquote>\n<p>Normally refcounts are a runtime thing, so any safe function might increment the refcount. And as long as you have an object, you still have a refcount. So the only operation that is interesting is decrementing the refcount, since that can drop the object. But with the filedescriptors you have the extra burden of these weird \"light refcounts\" where you somehow™ (I don't actually know how you ensure this aside from doing it locally in a function) ensure that there are none left when you finally destroy it.</p>\n</blockquote>\n<p>It is still the case that only decrementing the refcount is interesting. It's just that decrementing a refcount you got by removing the file from an fd table is more involved than refcount decrements usually are.</p>",
+        "id": 408348484,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736580
+    },
+    {
+        "content": "<p>It would perhaps be reasonable to say that fd refcounts are not special. Rather, they're just normal refcounts owned by a collection (the process fd table) that has extra invariants about the refcounts it holds.</p>",
+        "id": 408348637,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1702736695
+    },
+    {
+        "content": "<p>hmm I guess this (light refcount inc/dec) is similar to the requirement that C doesn't just randomly destroy pointers</p>",
+        "id": 408367799,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702752915
+    },
+    {
+        "content": "<p>so for example we do not write down that e.g. <code>finish_wait(wait_list, wait_entry)</code> does not deallocate <code>wait_list</code> and <code>wait_entry</code>.</p>",
+        "id": 408367899,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1702752998
+    },
+    {
+        "content": "<p>New proposed wording:</p>\n<blockquote>\n<p>Wraps the kernel's <code>struct file</code>.</p>\n<h1>Refcounting</h1>\n<p>Instances of this type are reference-counted. The reference count is incremented by the <code>fget</code>/<code>get_file</code> functions and decremented by <code>fput</code>. The Rust type <code>ARef&lt;File&gt;</code> represents a pointer that owns a reference count on the file.</p>\n<p>Whenever a process opens a file descriptor (fd), it stores a pointer to the file in its <code>struct files_struct</code>. This pointer owns a reference count to the file, ensuring the file isn't prematurely deleted while the file descriptor is open. In Rust terminology, the pointers in <code>struct files_struct</code> are <code>ARef&lt;File&gt;</code> pointers.</p>\n<h2>Light refcounts</h2>\n<p>Whenever a process has an fd to a file, it may use something called a \"light refcount\" as a performance optimization. Light refcounts are acquired by calling <code>fdget</code> and released with <code>fdput</code>. The idea behind light refcounts is that if the fd is not closed between the calls to <code>fdget</code> and <code>fdput</code>, then the refcount cannot hit zero during that time, as the <code>struct files_struct</code> holds a reference until the fd is closed. This means that it's safe to access the file even if <code>fdget</code> does not increment the refcount.</p>\n<p>The requirement that the fd is not closed during a light refcount applies globally across all threads - not just on the thread using the light refcount. For this reason, light refcounts are only used when the <code>struct files_struct</code> is not shared with other threads, since this ensures that other unrelated threads cannot suddenly start using the fd and close it. Therefore, calling <code>fdget</code> on a shared <code>struct files_struct</code> creates a normal refcount instead of a light refcount.</p>\n<p>Note that if the <code>struct files_struct</code> becomes shared during a light refcount, then the requirement that the fd is not closed before the <code>fdput</code> call also applies to the other threads that it was shared with. That is, making a <code>struct files_struct</code> shared does not \"upgrade\" existing light refcounts to full refcounts; it just prevents the creation of new light refcounts. This also means that checking whether the <code>struct files_struct</code> is shared cannot be used to determine whether an fd has active light refcounts, since it could have light refcounts that were created before it was shared.</p>\n<p>Light reference counts must be released with <code>fdput</code> before the system call returns to userspace. This means that if you wait until the current system call returns to userspace, then all light refcounts that existed at the time have gone away.</p>\n<h2>Rust references</h2>\n<p>The reference type <code>&amp;File</code> is similar to light refcounts:</p>\n<ul>\n<li><code>&amp;File</code> references don't own a reference count. They can only exist as long as the reference count stays positive, and can only be created when there is some mechanism in place to ensure this.</li>\n<li>The Rust borrow-checker normally ensures this by enforcing that the <code>ARef&lt;File&gt;</code> from which a <code>&amp;File</code> is created outlives the <code>&amp;File</code>.</li>\n<li>Using the unsafe [<code>File::from_ptr</code>] means that it is up to the caller to ensure that the <code>&amp;File</code> only exists while the reference count is positive.</li>\n<li>You can think of <code>fdget</code> as using an fd to look up an <code>ARef&lt;File&gt;</code> in the <code>struct files_struct</code> and create an <code>&amp;File</code> from it. The \"fd cannot be closed\" rule is like the Rust rule \"the <code>ARef&lt;File&gt;</code> must outlive the <code>&amp;File</code>\".</li>\n<li>Light refcounts can only be created from <code>ARef&lt;File&gt;</code> pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</li>\n</ul>\n<h1>Invariants</h1>\n<ul>\n<li>Instances of this type are refcounted using the <code>f_count</code> field.</li>\n<li>If an fd with active light refcounts is closed, then it must be the case that the file refcount is positive until there are no more light refcounts created from the fd that got closed.</li>\n<li>A light refcount must be dropped before returning to userspace.</li>\n</ul>\n</blockquote>",
+        "id": 413137518,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705405814
+    },
+    {
+        "content": "<p>What I am a bit confused about -- and this is probably just the general design of  the <code>struct file</code> stuff -- is that you are allowed to share a <code>struct files_struct</code> even when you have light refcounts. Or that you have to upgrade those refcounts.<br>\nBut I guess we cannot really do anything about this.</p>\n<p>Do you also have an abstraction for light refcounts, or are they still exclusive to the C side?</p>\n<p>I would recommend the following wording change in the invariants:</p>\n<blockquote>\n<ul>\n<li>If an fd with active light refcounts is closed, then it must be the case that the file refcount is positive until there are no more light refcounts to the file of the fd that got closed.</li>\n</ul>\n</blockquote>",
+        "id": 416077150,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1705510520
+    },
+    {
+        "content": "<blockquote>\n<p>Note that if the <code>struct files_struct</code> becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>\n</blockquote>\n<p>I'd be interested how that could happen, only by cloning the current task after taking a light refount, or are there other scenarios (like <code>fdget</code>ting an fd from another task, if that is even legal)?</p>\n<blockquote>\n<p>Light refcounts can only be created from ARef&lt;File&gt; pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</p>\n</blockquote>\n<p>Just given the context of this post the above is a bit confusing to me. <br>\nIs this something that is enforced in your patch via the type system (i.e. there is a special type representing a light refcount that can only be created from <code>ARef&lt;File&gt;</code>s stored in the <code>files_struct</code>)?. <br>\nOr is it more of an analogy (i.e. <code>&amp;File</code> derived from an <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> is analogous to a C light reference)? <br>\nOr does it mean that only <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> may have light references to it from the C side pending?</p>",
+        "id": 416085927,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1705513360
+    },
+    {
+        "content": "<blockquote>\n<p>Note that if the struct files_struct becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>\n</blockquote>\n<p>I thought we cannot share the files_struct during a light refcount, because we <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust-next/fs/file.c#L1111\">must not clone the task</a>, is there anything I'm missing here? Maybe the comments are out-of-date?</p>",
+        "id": 416089864,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1705514730
+    },
+    {
+        "content": "<p>It's possible that the C side just doesn't allow you to make the files_struct shared while you have a light refcount.</p>",
+        "id": 416339183,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705527050
+    },
+    {
+        "content": "<p>Maybe I should just take that part out.</p>",
+        "id": 416339289,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705527098
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"678978\">Valentin Obst</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/416085927\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>Light refcounts can only be created from ARef&lt;File&gt; pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</p>\n</blockquote>\n<p>Just given the context of this post the above is a bit confusing to me. <br>\nIs this something that is enforced in your patch via the type system (i.e. there is a special type representing a light refcount that can only be created from <code>ARef&lt;File&gt;</code>s stored in the <code>files_struct</code>)?. <br>\nOr is it more of an analogy (i.e. <code>&amp;File</code> derived from an <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> is analogous to a C light reference)? <br>\nOr does it mean that only <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> may have light references to it from the C side pending?</p>\n</blockquote>\n<p>Light refcounts are created by <code>fdget</code>. The argument for <code>fdget</code> is a file descriptor, not a pointer to a file. Therefore, light refcounts can only created from file descriptors, and not arbitrary file pointers.</p>",
+        "id": 416570548,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705584250
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/416089864\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>Note that if the struct files_struct becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>\n</blockquote>\n<p>I thought we cannot share the files_struct during a light refcount, because we <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust-next/fs/file.c#L1111\">must not clone the task</a>, is there anything I'm missing here? Maybe the comments are out-of-date?</p>\n</blockquote>\n<p>In some sense, what I described was less restrictive than what <code>file.c</code> explains. I'm taking out this paragraph entirely to remove the discrepancy.</p>\n<p>(But we <em>do</em> need to be less restrictive than what <code>file.c</code> with regards to calling <code>filp_close</code>.)</p>",
+        "id": 416571204,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705584456
+    },
+    {
+        "content": "<p>Sent</p>",
+        "id": 416588707,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705589941
+    },
+    {
+        "content": "<p><a href=\"https://lore.kernel.org/all/20240118-alice-file-v3-0-9694b6f9580c@google.com/\">https://lore.kernel.org/all/20240118-alice-file-v3-0-9694b6f9580c@google.com/</a></p>",
+        "id": 416588908,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705590000
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/File.20refcounting/near/416571204\">said</a>:</p>\n<blockquote>\n<p>(But we <em>do</em> need to be less restrictive than what <code>file.c</code> with regards to calling <code>filp_close</code>.)</p>\n</blockquote>\n<p>Ah, good point, maybe we better update the comments in <code>__fget_light()</code> in C side as well.</p>",
+        "id": 416620534,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1705599896
+    },
+    {
+        "content": "<p>I included a change on the C side.</p>",
+        "id": 416620834,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1705599985
+    }
+]

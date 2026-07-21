@@ -1,0 +1,1134 @@
+<html>
+<head><meta charset="utf-8"><title>Generic I/O backends · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html">Generic I/O backends</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="571198078"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571198078" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571198078">(Jan 31 2026 at 13:52)</a>:</h4>
+<p>The goal for the I/O infrastructure is to generalize its API to be able to represent arbitrary backends. The first step in this direction has been done with [1].</p>
+<p>This has the advantage that:</p>
+<ol>
+<li>
+<p>We can build a common register abstraction (with the <code>register!()</code> macro [2]) on top of this generic interface, making it accessible for all busses and memory backed backends.</p>
+</li>
+<li>
+<p>We can share infrastructure that otherwise would be duplicated over and over again. For instance, <code>dma_read!()</code> and <code>dma_write!()</code> can be generalized over I/O backends with trait methods for <code>read_field()</code> and <code>write_field()</code>. </p>
+</li>
+</ol>
+<p>The duplication we would have without (2) came up for <code>iosys_map</code> for instance [3]. With generic I/O backends we have a generalization that is much more powerful than things like <code>iosys_map</code> though.</p>
+<p>As we have more people working on contributions towards those goals, let's use this thread for coordination.</p>
+<p>[1] <a href="https://lore.kernel.org/all/20260121202212.4438-1-zhiw@nvidia.com/">https://lore.kernel.org/all/20260121202212.4438-1-zhiw@nvidia.com/</a><br>
+[2] <a href="https://lore.kernel.org/all/20260129-register-v5-5-c4587c902514@nvidia.com/">https://lore.kernel.org/all/20260129-register-v5-5-c4587c902514@nvidia.com/</a><br>
+[3] <a href="https://lore.kernel.org/all/DFOP5BY09539.AFY5L5FV1HNV@kernel.org/">https://lore.kernel.org/all/DFOP5BY09539.AFY5L5FV1HNV@kernel.org/</a></p>
+
+
+
+<a name="571218502"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571218502" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571218502">(Jan 31 2026 at 17:56)</a>:</h4>
+<p>Hmm, I'm not sure if DMA should really share the infra with I/O and registers. To me ultimately the <code>dma_read!()</code> <code>dma_write!()</code> is to be replaced with field projection.</p>
+
+
+
+<a name="571219651"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571219651" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571219651">(Jan 31 2026 at 18:11)</a>:</h4>
+<p>It's the exact same concept, I/O memory and DMA memory is in the end just an abstract backing storage that is shared between a device and the CPU. Same goes for any other device memory, regardless of through which bus it is connected to the CPU.</p>
+<p>I.e. for all of those the concept of registers, field accesses and "unsafe slices" is applicable.</p>
+<p>Look at C infrastructure like <code>iosys_map</code> [1] which builds exactly this abstraction (of course without all the nice advantages we can get from Rust's type system for building such an abstraction).</p>
+<p>[1] <a href="https://elixir.bootlin.com/linux/latest/source/include/linux/iosys-map.h">https://elixir.bootlin.com/linux/latest/source/include/linux/iosys-map.h</a></p>
+
+
+
+<a name="571220760"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571220760" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571220760">(Jan 31 2026 at 18:28)</a>:</h4>
+<p>For I/O memory you can't really create a slice unsafely, this will be some capability unique to DMA memory</p>
+
+
+
+<a name="571220820"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571220820" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571220820">(Jan 31 2026 at 18:29)</a>:</h4>
+<p>You could still provide the abstract ability to memcpy from/to IO or DMA, though.</p>
+
+
+
+<a name="571220853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571220853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571220853">(Jan 31 2026 at 18:30)</a>:</h4>
+<p>You can have some <code>UnsafeSlice</code> or <code>IoSlice</code> type that internally holds a pointer and provides you with the corresponding implementation for accessors such as <code>memcpy_to</code>, <code>memcpy_from</code>, etc.</p>
+
+
+
+<a name="571220940"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571220940" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571220940">(Jan 31 2026 at 18:31)</a>:</h4>
+<p>This works for any backing storage, including DMA.</p>
+
+
+
+<a name="571221021"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571221021" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571221021">(Jan 31 2026 at 18:33)</a>:</h4>
+<p>Sure, that's what I purposed in <a href="https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/">https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/</a>. However I imagine for DMA memory you would want the ability to touch these memory directly without having to copy.</p>
+
+
+
+<a name="571221105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571221105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571221105">(Jan 31 2026 at 18:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571218502">said</a>:</p>
+<blockquote>
+<p>Hmm, I'm not sure if DMA should really share the infra with I/O and registers. To me ultimately the <code>dma_read!()</code> <code>dma_write!()</code> is to be replaced with field projection.</p>
+</blockquote>
+<p>I guess we could share the same infra by supporting MMIO with projections, too.</p>
+
+
+
+<a name="571221160"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571221160" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571221160">(Jan 31 2026 at 18:35)</a>:</h4>
+<p>It'll be of a bit different paradigm to the current <code>register!()</code> design, as you'll have a view of IO that is strongly typed (i.e. the I/O struct is typed itself, rather than having each register being typed)</p>
+
+
+
+<a name="571222531"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571222531" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571222531">(Jan 31 2026 at 18:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571221021">said</a>:</p>
+<blockquote>
+<p>Sure, that's what I purposed in <a href="https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/">https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/</a>. However I imagine for DMA memory you would want the ability to touch these memory directly without having to copy.</p>
+</blockquote>
+<p>Not sure that's exactly the same idea as what I proposed here (actually it probably is <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span>): <a href="https://lore.kernel.org/all/DFSKLTVPNQ11.26N3WVT559F22@kernel.org/">https://lore.kernel.org/all/DFSKLTVPNQ11.26N3WVT559F22@kernel.org/</a></p>
+<p>But either way, you don't have to copy it, you can touch it directly, through register accesses (through the <code>register!()</code> macro, raw reads/writes (e.g. <code>read32()</code>), field accesses (equivalent to the current <code>dma_read!()</code> / dma_write!()) and through the <code>IoSlice</code>, which provides you accessors, such as <code>memcpy_to_*</code>. The latter can be compatible with anything, e.g. another <code>IoSlice</code> of a different type or <code>UserSliceWriter</code> / <code>UserSliceReader</code>.</p>
+
+
+
+<a name="571222788"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571222788" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571222788">(Jan 31 2026 at 18:58)</a>:</h4>
+<p>This covers anything that you'd want to do with DMA memory. or any other (I/O) memory that is shared with a device.</p>
+
+
+
+<a name="571225954"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571225954" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571225954">(Jan 31 2026 at 19:51)</a>:</h4>
+<p>Using <code>read32()</code> on DMA memory seems wrong to me.</p>
+
+
+
+<a name="571226475"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571226475" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571226475">(Jan 31 2026 at 19:57)</a>:</h4>
+<p>Also what's the use case of making <code>register!()</code> work with DMA memory?</p>
+
+
+
+<a name="571226613"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571226613" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571226613">(Jan 31 2026 at 20:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571225954">said</a>:</p>
+<blockquote>
+<p>Using <code>read32()</code> on DMA memory seems wrong to me.</p>
+</blockquote>
+<p>Or maybe the proposal is using a different function other then <code>readl()</code> to implement <code>read32()</code> for DMA?</p>
+
+
+
+<a name="571226914"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571226914" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571226914">(Jan 31 2026 at 20:04)</a>:</h4>
+<p>I was mostly worried about using C's <code>readl()</code> on DMA memory.</p>
+
+
+
+<a name="571227068"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571227068" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571227068">(Jan 31 2026 at 20:07)</a>:</h4>
+<p>but seems that's not the case given how <code>iosys_map</code> handles DMA vs MMIO?</p>
+
+
+
+<a name="571227071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571227071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571227071">(Jan 31 2026 at 20:07)</a>:</h4>
+<blockquote>
+<p>Or maybe the proposal is using a different function other then <code>readl()</code> to implement <code>read32()</code> for DMA?</p>
+</blockquote>
+<p>The backend implementation has to be specific for the backend. So, no this would not use <code>readl()</code>.</p>
+
+
+
+<a name="571228593"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571228593" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571228593">(Jan 31 2026 at 20:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571221160">said</a>:</p>
+<blockquote>
+<p>It'll be of a bit different paradigm to the current <code>register!()</code> design, as you'll have a view of IO that is strongly typed (i.e. the I/O struct is typed itself, rather than having each register being typed)</p>
+</blockquote>
+<p>I did some experiment to see if the untyped <code>Io</code> design we have today can be made compatible with the strongly typed <code>dma::CoherentAllocation</code> design. This is indeed possible. Some snippets:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Trait to represent compile-time known size information.</span>
+<span class="k">trait</span><span class="w"> </span><span class="n">KnownSize</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Minimum size of object of this type.</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">MIN_SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">;</span>
+
+<span class="w">    </span><span class="sd">/// Maximum size of object of this type.</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">maxsize</span><span class="p">(</span><span class="n">p</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="bp">Self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">usize</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// For sized types, everything is known.</span>
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">KnownSize</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">MIN_SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">maxsize</span><span class="p">(</span><span class="n">_</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="bp">Self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span><span class="p">::</span><span class="n">MIN_SIZE</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">KnownSize</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="p">[</span><span class="n">T</span><span class="p">]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">MIN_SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">maxsize</span><span class="p">(</span><span class="n">p</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="bp">Self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">p</span><span class="p">.</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="cp">#[repr(transparent)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SliceLargerThan</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">([</span><span class="n">T</span><span class="p">]);</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">KnownSize</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SliceLargerThan</span><span class="o">&lt;</span><span class="n">SIZE</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">MIN_SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SIZE</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">maxsize</span><span class="p">(</span><span class="n">p</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="bp">Self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="p">[</span><span class="n">T</span><span class="p">]).</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">TypedMmio</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="p">);</span><span class="w"> </span><span class="c1">// aka __iomem T*</span>
+
+<span class="k">type</span><span class="w"> </span><span class="nc">Mmio</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TypedMmio</span><span class="o">&lt;</span><span class="n">SliceLargerThan</span><span class="o">&lt;</span><span class="n">SIZE</span><span class="p">,</span><span class="w"> </span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+</code></pre></div>
+
+
+
+<a name="571577241"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571577241" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eliot Courtney <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571577241">(Feb 03 2026 at 05:57)</a>:</h4>
+<p>I have a question about the design of generalising I/O backends. I noticed that in the CoherentAllocation code, it has safety requirements such as the caller must ensure that there are no races with concurrent reads+writes. For generalising over all I/O backends, is the plan to take the union of all safety pre-conditions for all backends and have that in the interface?</p>
+
+
+
+<a name="571639597"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571639597" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571639597">(Feb 03 2026 at 11:49)</a>:</h4>
+<p>The safety precondition is for getting a slice, not dma_read/dma_write</p>
+
+
+
+<a name="571751802"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571751802" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Matthew Maurer <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571751802">(Feb 03 2026 at 20:03)</a>:</h4>
+<p>Hey, I got paged into this thread from <a href="https://lore.kernel.org/all/20260203-qcom-socinfo-v2-2-d6719db85637@google.com/">https://lore.kernel.org/all/20260203-qcom-socinfo-v2-2-d6719db85637@google.com/</a> , where I was trying to add methods to copy slices or arrays in/out of IO via <code>memcpy_toio</code> and <code>memcpy_fromio</code>.</p>
+<p>Questions:</p>
+<ol>
+<li>Are there patches in progress that aren't linked here already?</li>
+<li>When it comes to typed IO, are we considering the possibility of types which may be larger than the underlying region (the socinfo region from the series I'm working on) or which are DSTs (the versions regions in the series I'm working on)</li>
+<li>What differentiates an <code>IoSlice</code> from an object implementing the <code>Io</code> trait + an offset/length? Anything?</li>
+<li>If we want <code>IoSlice</code> to be a concrete type rather than a trait (implied above, but not explicitly stated?), then getting access to the underlying <code>Io</code> is either going to mean we have <code>IoSlice&lt;T&gt; where T: Io</code>, which complicates interfaces, or we're going to end up with <code>dyn Io</code> everywhere.</li>
+<li>Is <code>IoSlice</code> intended to be an owning type or a borrow?</li>
+</ol>
+
+
+
+<a name="571781349"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571781349" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571781349">(Feb 03 2026 at 22:51)</a>:</h4>
+<p>I think there is no work in progress yet, but I think <span class="user-mention" data-user-id="1022631">@Eliot Courtney</span> and <span class="user-mention" data-user-id="413824">@Gary Guo</span> are looking into this as well.</p>
+<p>The main idea of <code>IoSlice</code> would be to have something that deals with the fact that we can't take a "real" slice of I/O memory, DMA memory, etc. You could also say <code>UnsafeSlice</code>. I think it should be a borrow of the I/O backend and provide methods that forward to the I/O backend implementation depending on what source or destination we are copying from / to.</p>
+<p>So, let's say you have a <code>dma::CoherentAllocation&lt;T&gt;</code>, then we could have a method <code>as_slice()</code> (or <code>as_io_slice()</code>) that returns a <code>IoSlice&lt;'io, T&gt;</code>. <code>IoSlice&lt;T&gt;</code> could have a method <code>copy_from_slice()</code>that takes a "normal" Rust slice.</p>
+<p>Similarly, you could also have methods that copy from a <code>UserSlice</code> or interact with <code>UserSliceReader</code> and <code>UserSliceWriter</code> directly. We could also have methods that allow us to copy back and forth between two <code>IoSlice&lt;T&gt;</code> with different I/O backends.</p>
+<p>This way users never have to think about what exact lower level accessors we need to copy from or to certain memory, as everything is abstracted in I/O backends and <code>IoSlice</code>.</p>
+
+
+
+<a name="571783645"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571783645" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571783645">(Feb 03 2026 at 23:04)</a>:</h4>
+<p>Given the apparent need to have a non-array <code>CoherentAllocation</code> (actually, looks like DmaGspMem is already using slice with fixed size of 1), I think the final result would be more like a <code>IoView</code> rathan <code>IoSlice</code>. So take Nova code for example:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(C)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Msgq</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tx</span><span class="p">:</span><span class="w"> </span><span class="nc">MsgqTxHeader</span><span class="p">,</span>
+<span class="w">    </span><span class="n">rx</span><span class="p">:</span><span class="w"> </span><span class="nc">MsgqRxHeader</span><span class="p">,</span>
+<span class="w">    </span><span class="n">msgq</span><span class="p">:</span><span class="w"> </span><span class="nc">MsgqData</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="cp">#[repr(C)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">GspMem</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ptes</span><span class="p">:</span><span class="w"> </span><span class="nc">PteArray</span><span class="o">&lt;</span><span class="p">{</span><span class="w"> </span><span class="n">GSP_PAGE_SIZE</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">size_of</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">u64</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">}</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">cpuq</span><span class="p">:</span><span class="w"> </span><span class="nc">Msgq</span><span class="p">,</span>
+<span class="w">    </span><span class="n">gspq</span><span class="p">:</span><span class="w"> </span><span class="nc">Msgq</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>we should have ability to project <code>&amp;'a dma::CoherentAllocation&lt;GspMem&gt;</code> into something like <code>io::View&lt;'a, dma::CoherentAllocation&lt;GspMem&gt;, Msgq&gt;</code> and nestly project into <code>io::View&lt;'a, dma::CoherentAllocation&lt;GspMem&gt;, MsgqTxHeader&gt;</code> (and so on).</p>
+<p>Slice use case would really just be a small part of this, so you can a sub-slice projection from <code>dma::CoherentAllocation&lt;[Foo]&gt;</code> into <code>io::View&lt;'a, dma::CoherentAllocation&lt;[Foo]&gt;, [Foo]&gt;</code>. And going from slice to element is just an index projection.</p>
+<p>The <code>dma_read!</code>/<code>dma_write!</code> macro today is already doing projection, just always a index projection plus a field projection, where I see no reason that this cannot be generalized.</p>
+<p>The exact API and surface syntax is something to be figured out, but I think it'll be something on this line.</p>
+
+
+
+<a name="571785264"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785264" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785264">(Feb 03 2026 at 23:16)</a>:</h4>
+<p>Interesting, if I understand your proposal correctly all the stuff I described would still work, plus it would cover the projection use cases.</p>
+
+
+
+<a name="571785334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785334">(Feb 03 2026 at 23:16)</a>:</h4>
+<p>Yes, this is more generic, <code>type IoSlice&lt;'io, T&gt; = IoView&lt;'io, [T]&gt;</code></p>
+
+
+
+<a name="571785398"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785398" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785398">(Feb 03 2026 at 23:17)</a>:</h4>
+<p>Seems like a good idea, but it also looks pretty complicated.</p>
+
+
+
+<a name="571785529"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785529" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785529">(Feb 03 2026 at 23:18)</a>:</h4>
+<p>Not really, it only looks complicated because I throw in <code>CoherentAllocation&lt;T&gt;</code> into the view type which I think is needed anyway as you need to way to specify the backend.</p>
+
+
+
+<a name="571785709"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785709" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785709">(Feb 03 2026 at 23:19)</a>:</h4>
+<p>Given Eliot's series <a href="https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/">https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/</a> about adding <code>CoherentArray</code>/<code>CoherentObject</code> this is probably an simplification, even.</p>
+
+
+
+<a name="571785916"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571785916" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571785916">(Feb 03 2026 at 23:21)</a>:</h4>
+<p>Yeah, I think we can also build it up incrementally, e.g. we could start with only implementing the methods for copying to/from "normal" slices for <code>IoView&lt;'io, [T]&gt;</code> to satisfy Matt's use-case.</p>
+
+
+
+<a name="571786051"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/571786051" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#571786051">(Feb 03 2026 at 23:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571785709">said</a>:</p>
+<blockquote>
+<p>Given Eliot's series <a href="https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/">https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/</a> about adding <code>CoherentArray</code>/<code>CoherentObject</code> this is probably an simplification, even.</p>
+</blockquote>
+<p>Agreed.</p>
+
+
+
+<a name="572220281"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572220281" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572220281">(Feb 05 2026 at 18:20)</a>:</h4>
+<p>I've started the work and will be pushing WIP to here: <a href="https://github.com/nbdd0121/linux/commits/io_projection/">https://github.com/nbdd0121/linux/commits/io_projection/</a>. So far I've done some improvement of <code>CoherentAllocation</code> and nothing generic yet.</p>
+
+
+
+<a name="572295571"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572295571" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eliot Courtney <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572295571">(Feb 06 2026 at 05:05)</a>:</h4>
+<p>Looks like those changes cover a bunch of what we discussed AFAICT. Gary, is there anything left for me to do w.r.t. my original patch series or have you got this covered?</p>
+
+
+
+<a name="572377073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572377073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572377073">(Feb 06 2026 at 13:33)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> would you be ok if I added a backend backed by system memory? We communicate with the firmware by reading and writing from a large region of shared memory, it would be cool if we could use something like the register!() macro to describe the layout and then use the generic I/O layers for reads and writes. I suspect that we might introduce some repetition otherwise (probably using core::mem::[read|write]_volatile(), which is undesirable</p>
+
+
+
+<a name="572377137"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572377137" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572377137">(Feb 06 2026 at 13:33)</a>:</h4>
+<p>cc <span class="user-mention" data-user-id="929978">@Boris Brezillon</span> fyi</p>
+
+
+
+<a name="572377872"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572377872" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572377872">(Feb 06 2026 at 13:37)</a>:</h4>
+<p>is this normal shared memory, not dma coherent allocation?</p>
+
+
+
+<a name="572382873"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572382873" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572382873">(Feb 06 2026 at 13:57)</a>:</h4>
+<p>This is normal shared memory, yes</p>
+
+
+
+<a name="572383238"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572383238" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572383238">(Feb 06 2026 at 13:58)</a>:</h4>
+<p>actually, it depends what you mean by dma coherent. The allocation itself goes through shmem, but mapping might be uncached</p>
+
+
+
+<a name="572383496"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572383496" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572383496">(Feb 06 2026 at 13:59)</a>:</h4>
+<p>but we don't have dedicated accessors to access those memory regions, it's just regular loads/stores to pointers</p>
+
+
+
+<a name="572383835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572383835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572383835">(Feb 06 2026 at 14:00)</a>:</h4>
+<p>Do you not even require volatility or atomicity?</p>
+
+
+
+<a name="572386390"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572386390" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572386390">(Feb 06 2026 at 14:10)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1022631">Eliot Courtney</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572295571">said</a>:</p>
+<blockquote>
+<p>Looks like those changes cover a bunch of what we discussed AFAICT. Gary, is there anything left for me to do w.r.t. my original patch series or have you got this covered?</p>
+</blockquote>
+<p>I think everything would be covered. Thank you for doing the work, it is very valuable in providing use cases to shape the design of new API.</p>
+
+
+
+<a name="572391236"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572391236" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572391236">(Feb 06 2026 at 14:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572377073">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> would you be ok if I added a backend backed by system memory?</p>
+</blockquote>
+<p>I think that's perfectly fine as long as it is specific for the requirements of the shared memory, i.e. as Gary mentions volatility and atomicity requirements.</p>
+
+
+
+<a name="572391742"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572391742" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572391742">(Feb 06 2026 at 14:32)</a>:</h4>
+<blockquote>
+<p>Do you not even require volatility or atomicity?</p>
+</blockquote>
+<p>Locking and mem barriers are going to be handled at a higher level, because it only has to happen on specific registers</p>
+
+
+
+<a name="572391973"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572391973" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572391973">(Feb 06 2026 at 14:33)</a>:</h4>
+<p>The flow is:</p>
+<ul>
+<li>update reg X, Y, Z</li>
+<li>make sure mem accesses are flushed</li>
+<li>ring a doorbell which is an actual IoReg</li>
+</ul>
+
+
+
+<a name="572392203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572392203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572392203">(Feb 06 2026 at 14:34)</a>:</h4>
+<p>as for the locking, ideally we'll lock entire portions of memory to guarantee atomicity of the update, and that will be done with a lock at a higher level</p>
+
+
+
+<a name="572392287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572392287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572392287">(Feb 06 2026 at 14:35)</a>:</h4>
+<p>I don't think the IoBackend needs to be involved, at least not in our case</p>
+
+
+
+<a name="572392347"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572392347" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572392347">(Feb 06 2026 at 14:35)</a>:</h4>
+<p>When you mention locking, I assume that you think about tearing. None of the I/O backends prevents tearing for concurrent accesses. So, here the expectation is always that drviers take care of this.</p>
+
+
+
+<a name="572392376"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572392376" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572392376">(Feb 06 2026 at 14:35)</a>:</h4>
+<p>Maybe that implies having a custom backend, dunno</p>
+
+
+
+<a name="572393896"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572393896" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572393896">(Feb 06 2026 at 14:42)</a>:</h4>
+<p>Looking at the flow it is not too different from some Nova GSP code is doing. I think you can still use dma coherent memory?</p>
+
+
+
+<a name="572399434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572399434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572399434">(Feb 06 2026 at 15:04)</a>:</h4>
+<p>you mean the backend for coherent memory?</p>
+
+
+
+<a name="572399718"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572399718" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572399718">(Feb 06 2026 at 15:05)</a>:</h4>
+<p>Yes, the <code>dma::CoherentAllocation</code> that we have today. Does this memory region need to be obtained via other means?</p>
+
+
+
+<a name="572399749"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572399749" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572399749">(Feb 06 2026 at 15:05)</a>:</h4>
+<p>it does</p>
+
+
+
+<a name="572399836"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572399836" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572399836">(Feb 06 2026 at 15:06)</a>:</h4>
+<p>As I said, it's memory allocated through shmem</p>
+
+
+
+<a name="572400115"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572400115" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572400115">(Feb 06 2026 at 15:07)</a>:</h4>
+<p>the allocation itself can't be done through dma_alloc_coherent()</p>
+
+
+
+<a name="572400811"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572400811" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572400811">(Feb 06 2026 at 15:09)</a>:</h4>
+<p>Ah, missed that part. So I think you probably need something that is allocated differently, but access-wise is equal to <code>dma::CoherentAllocation</code>.</p>
+
+
+
+<a name="572400839"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572400839" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572400839">(Feb 06 2026 at 15:09)</a>:</h4>
+<p>How bad would it be to implement a custom IoBackend?</p>
+
+
+
+<a name="572400842"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572400842" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572400842">(Feb 06 2026 at 15:10)</a>:</h4>
+<p>I'll consider this when desigining the generic I/O API</p>
+
+
+
+<a name="572401008"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401008" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401008">(Feb 06 2026 at 15:10)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> Boris is likely referring to [1].</p>
+<p>[1] <a href="https://elixir.bootlin.com/linux/v6.18.6/source/drivers/gpu/drm/drm_gem_shmem_helper.c#L52">https://elixir.bootlin.com/linux/v6.18.6/source/drivers/gpu/drm/drm_gem_shmem_helper.c#L52</a></p>
+
+
+
+<a name="572401015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401015">(Feb 06 2026 at 15:10)</a>:</h4>
+<p>Okay, thanks.</p>
+
+
+
+<a name="572401184"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401184" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401184">(Feb 06 2026 at 15:11)</a>:</h4>
+<p>(<span class="user-mention" data-user-id="929978">@Boris Brezillon</span> Please correct me if that's wrong.)</p>
+
+
+
+<a name="572401435"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401435" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401435">(Feb 06 2026 at 15:12)</a>:</h4>
+<blockquote>
+<p>Boris is likely referring to [1].</p>
+</blockquote>
+<p>That's the gem frontend for shmem-based backing, yep, but the actual page allocation happens in mm/shmem.c</p>
+
+
+
+<a name="572401570"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401570" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401570">(Feb 06 2026 at 15:12)</a>:</h4>
+<p>what's important is that it's regular system memory</p>
+
+
+
+<a name="572401694"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401694" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401694">(Feb 06 2026 at 15:13)</a>:</h4>
+<p>the CPU mapping we access can be cached or uncached, but it's all done with regular load/store instructions anyway</p>
+
+
+
+<a name="572401709"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401709" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401709">(Feb 06 2026 at 15:13)</a>:</h4>
+<p>So this is something that's userspace created via memfd and shared with the driver, like dmabuf?</p>
+
+
+
+<a name="572401735"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401735" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401735">(Feb 06 2026 at 15:13)</a>:</h4>
+<p>I assume it's the same for dma_coherent memory</p>
+
+
+
+<a name="572401885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572401885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572401885">(Feb 06 2026 at 15:14)</a>:</h4>
+<blockquote>
+<p>So this is something that's userspace created via memfd and shared with the driver, like dmabuf?</p>
+</blockquote>
+<p>Nope, we have our own shmem_fs mount point behind drm_device objects</p>
+
+
+
+<a name="572402045"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572402045" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572402045">(Feb 06 2026 at 15:14)</a>:</h4>
+<p>I think the same impl would work for both dma coherent and this, the worst case we just duplicate the impl. But to your original question, yes this is doable.</p>
+
+
+
+<a name="572402444"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572402444" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572402444">(Feb 06 2026 at 15:16)</a>:</h4>
+<p>Perfect!</p>
+
+
+
+<a name="572403528"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572403528" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572403528">(Feb 06 2026 at 15:20)</a>:</h4>
+<blockquote>
+<p>Nope, we have our own shmem_fs mount point behind drm_device objects</p>
+</blockquote>
+<p>That, or we use the default shmem_fs mountpoint, when the driver doesn't instantiate a custom one, but it's all happening internally, no need for the user to pass a memfd or a dmabuf</p>
+
+
+
+<a name="572454120"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572454120" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572454120">(Feb 06 2026 at 19:55)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> </p>
+<blockquote>
+<p>Do you not even require volatility or atomicity?</p>
+</blockquote>
+<p>Not sure if this was your question, but we need volatile reads and writes, yes, since the memory accesses will have side effects</p>
+
+
+
+<a name="572729869"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572729869" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572729869">(Feb 09 2026 at 10:08)</a>:</h4>
+<blockquote>
+<p>Not sure if this was your question, but we need volatile reads and writes, yes, since the memory accesses will have side effects</p>
+</blockquote>
+<p>We can do with regular accesses, I think (actually, we do it in C), because the synchronization is done explicitly (when we ring the doorbell). For instance, any writes to the config regs will be flushed by the memory barrier that exists when we write to the register. For reads, it's not a problem is those are elided when the result of the read is not read, because, again, it's not IO, the other end (the FW) doesn't see whether the value has been read or not, and ordering, we can enforce it with acual memory barriers (the the ringbell barrier is not enough).</p>
+<p>That's not to say volatile accesses won't work (and I actually think we should go for volative accesses if the backend exists), but they're not strictly needed most of the time.</p>
+
+
+
+<a name="572730510"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572730510" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572730510">(Feb 09 2026 at 10:11)</a>:</h4>
+<p>IO trait uses &amp;self for access, so if volatile is to be omitted, it needs to be !Sync</p>
+
+
+
+<a name="572730615"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572730615" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572730615">(Feb 09 2026 at 10:11)</a>:</h4>
+<p>Or atomic</p>
+
+
+
+<a name="572864750"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/572864750" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#572864750">(Feb 09 2026 at 19:08)</a>:</h4>
+<p>I see</p>
+
+
+
+<a name="573224619"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573224619" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573224619">(Feb 11 2026 at 08:32)</a>:</h4>
+<p>Hey Gary, I checked your code for digging the IoView ideas. It seems there has been KnwoSize for comile-time known size. What's the next step for IoView ideas? I am mostly wondering how to cope my PCI capability patches with your ideas. :)</p>
+
+
+
+<a name="573226015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573226015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573226015">(Feb 11 2026 at 08:38)</a>:</h4>
+<p>I plan to add <code>io::View&lt;'a, Base, T&gt;</code> where <code>Base</code> is a type that implements <code>Io</code> and <code>T</code> is a type with <code>KnownSize</code> bound</p>
+
+
+
+<a name="573232687"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573232687" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573232687">(Feb 11 2026 at 09:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572730615">said</a>:</p>
+<blockquote>
+<p>Or atomic</p>
+</blockquote>
+<p>Because kernel atomics are volatile?</p>
+
+
+
+<a name="573232906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573232906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573232906">(Feb 11 2026 at 09:10)</a>:</h4>
+<p>Because having multiple concurrent reads/writes is safe if they are atomic.</p>
+
+
+
+<a name="573234158"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573234158" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573234158">(Feb 11 2026 at 09:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/573232906">said</a>:</p>
+<blockquote>
+<p>Because having multiple concurrent reads/writes is safe if they are atomic.</p>
+</blockquote>
+<p>How is &amp;self: Sync with volatile operations OK?</p>
+
+
+
+<a name="573234390"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573234390" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573234390">(Feb 11 2026 at 09:17)</a>:</h4>
+<p>For MMIO they're okay.</p>
+
+
+
+<a name="573236423"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573236423" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573236423">(Feb 11 2026 at 09:27)</a>:</h4>
+<p>Even per-reg atomicity wouldn't be enough for our use case anyway, so we'll have locks to protect updates on top. Not to say we don't want that guarantee at the IoBackend, but Tyr won't need it for its FW &lt;-&gt; CPU interfaces.</p>
+
+
+
+<a name="573238350"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573238350" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573238350">(Feb 11 2026 at 09:37)</a>:</h4>
+<p>I see. For capabilities, Io::View would store the offset. And fixed-size caps would be fine. How about the variable-length caps e.g. Vendor-specific VNDR?</p>
+<p>Also curious how io::View will handle field projection, since I/O<br>
+accesses can't use pointer derefs like DMA does, will it be something else?</p>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/573226015">said</a>:</p>
+<blockquote>
+<p>I plan to add <code>io::View&lt;'a, Base, T&gt;</code> where <code>Base</code> is a type that implements <code>Io</code> and <code>T</code> is a type with <code>KnownSize</code> bound</p>
+</blockquote>
+
+
+
+<a name="573247435"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573247435" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573247435">(Feb 11 2026 at 10:18)</a>:</h4>
+<p>projection can start with arbitrary pointer without provenance and then only use the offset.</p>
+
+
+
+<a name="573384869"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573384869" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573384869">(Feb 11 2026 at 20:53)</a>:</h4>
+<p>Would like to rebase my patches on your brach asap when it is ready. :)</p>
+
+
+
+<a name="573408304"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/573408304" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#573408304">(Feb 11 2026 at 23:41)</a>:</h4>
+<p>It might take a while as I'm currently on holiday</p>
+
+
+
+<a name="575321480"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/575321480" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#575321480">(Feb 23 2026 at 15:14)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572220281">said</a>:</p>
+<blockquote>
+<p>I've started the work and will be pushing WIP to here: <a href="https://github.com/nbdd0121/linux/commits/io_projection/">https://github.com/nbdd0121/linux/commits/io_projection/</a>. So far I've done some improvement of <code>CoherentAllocation</code> and nothing generic yet.</p>
+</blockquote>
+<p>Just pushed my latest WIP progress. Mostly there, a lot of tidy up and comment writing still needs to follow. <a href="https://github.com/nbdd0121/linux/commit/491a1cfb4102341adc7623b0abab6718d1876959">https://github.com/nbdd0121/linux/commit/491a1cfb4102341adc7623b0abab6718d1876959</a> is the nova-core driver being converted to the new API</p>
+
+
+
+<a name="575696434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/575696434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#575696434">(Feb 25 2026 at 05:53)</a>:</h4>
+<p>Nice to see these horrible <code>transmute</code> methods in <code>fwres.rs</code> going away!</p>
+
+
+
+<a name="575839737"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/575839737" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#575839737">(Feb 25 2026 at 18:09)</a>:</h4>
+<p>Hi folks. I re-worked my previous implementation of PCI capability support on top of this infrastructure. It was posted as RFC here. </p>
+<p><a href="https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/T/#t">https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/T/#t</a></p>
+
+
+
+<a name="581169944"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/581169944" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#581169944">(Mar 23 2026 at 16:50)</a>:</h4>
+<p>I/O projection on the list: <a href="https://lore.kernel.org/rust-for-linux/20260323153807.1360705-1-gary@kernel.org/">https://lore.kernel.org/rust-for-linux/20260323153807.1360705-1-gary@kernel.org/</a></p>
+
+
+
+<a name="581171704"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/581171704" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zhi Wang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#581171704">(Mar 23 2026 at 16:57)</a>:</h4>
+<p>Cool!! Let me rebase my vGPU staging tree and PCI capability patches on top of it.</p>
+
+
+
+<a name="585460447"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585460447" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585460447">(Apr 14 2026 at 15:36)</a>:</h4>
+<p>I noted that rustfmt will format</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">project</span><span class="o">!</span><span class="p">(</span><span class="n">foo</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="n">variant</span><span class="w"> </span><span class="o">..</span><span class="n">end</span><span class="p">])</span>
+</code></pre></div>
+<p>to</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">project</span><span class="o">!</span><span class="p">(</span><span class="n">foo</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="n">variant</span><span class="o">..</span><span class="n">end</span><span class="p">])</span>
+</code></pre></div>
+<p>Would this change our conclusion on putting variant name inside <code>[]</code> for index projection? <span class="user-mention" data-user-id="546447">@Benno Lossin</span>  <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span>  <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span></p>
+
+
+
+<a name="585462215"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585462215" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585462215">(Apr 14 2026 at 15:42)</a>:</h4>
+<p>ah because we allow subslicing...</p>
+
+
+
+<a name="585462487"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585462487" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585462487">(Apr 14 2026 at 15:43)</a>:</h4>
+<p>Some ideas:</p>
+<ul>
+<li>there is <a href="https://rust-lang.github.io/rustfmt/?version=v1.9.0&amp;search=macro#skip_macro_invocations">an unstable option</a> to disable this behavior (sadly unstable....)</li>
+<li>we could make people use <code>project! { ... }</code> since that doesn't format (also not really nice, since people might just use normal parens)</li>
+<li>we could change the <code>,</code> to a <code>=&gt;</code> and then it probably won't format it like that anymore, right? (this is probably my current favorite)</li>
+</ul>
+
+
+
+<a name="585462825"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585462825" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585462825">(Apr 14 2026 at 15:45)</a>:</h4>
+<p>Or we just say this is fine :)</p>
+
+
+
+<a name="585467146"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585467146" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585467146">(Apr 14 2026 at 16:01)</a>:</h4>
+<blockquote>
+<p><code>project!(foo, [variant..end])</code></p>
+</blockquote>
+<p>Ick! I think we should look for an alternative syntax, something along the lines of Benno's 3rd point above. But I'm not sure about the arrow.</p>
+
+
+
+<a name="585467339"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585467339" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585467339">(Apr 14 2026 at 16:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585462825">said</a>:</p>
+<blockquote>
+<p>Or we just say this is fine :)</p>
+</blockquote>
+<p>I don't want that :)</p>
+
+
+
+<a name="585467733"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585467733" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585467733">(Apr 14 2026 at 16:04)</a>:</h4>
+<p>Can we just add a colon after the variant?</p>
+
+
+
+<a name="585467804"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585467804" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585467804">(Apr 14 2026 at 16:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585467146">said</a>:</p>
+<blockquote>
+<p>But I'm not sure about the arrow.</p>
+</blockquote>
+<p>The only other alternatives that are allowed to be after an expression is the <code>;</code></p>
+<p>another option would be to add a sigil after the keyword, so:</p>
+<ul>
+<li><code>project!(foo, [variant! ..end])</code></li>
+<li><code>project!(foo, [variant: ..end])</code></li>
+</ul>
+
+
+
+<a name="585467931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585467931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585467931">(Apr 14 2026 at 16:04)</a>:</h4>
+<p><code>project!(foo, [variant; ..end])</code> perhaps?</p>
+
+
+
+<a name="585468016"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585468016" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585468016">(Apr 14 2026 at 16:05)</a>:</h4>
+<p>I like semicolon</p>
+
+
+
+<a name="585468042"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585468042" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585468042">(Apr 14 2026 at 16:05)</a>:</h4>
+<p>If we can't have the colon, I prefer semicolon over the arrow.</p>
+
+
+
+<a name="585468275"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585468275" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585468275">(Apr 14 2026 at 16:06)</a>:</h4>
+<p>Good thing about semicolon over colon is that <code>rustfmt</code> is able to format the index expression</p>
+
+
+
+<a name="585468601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585468601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585468601">(Apr 14 2026 at 16:07)</a>:</h4>
+<p>comma is okay, too</p>
+
+
+
+<a name="585468795"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585468795" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585468795">(Apr 14 2026 at 16:08)</a>:</h4>
+<p>Does rustfmt work with <code>!</code>?</p>
+
+
+
+<a name="585469106"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585469106" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585469106">(Apr 14 2026 at 16:09)</a>:</h4>
+<p>Nope</p>
+
+
+
+<a name="585469410"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585469410" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585469410">(Apr 14 2026 at 16:10)</a>:</h4>
+<p>Actually with the <code>try</code> variant <code>rustfmt</code> cannot format any of the proposals, because <code>try</code> is a lang keyword</p>
+
+
+
+<a name="585470062"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470062" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470062">(Apr 14 2026 at 16:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585467931">said</a>:</p>
+<blockquote>
+<p><code>project!(foo, [variant; ..end])</code> perhaps?</p>
+</blockquote>
+<p>oh I actually meant:<br>
+<code>project!(foo; [variant ..end])</code></p>
+
+
+
+<a name="585470105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470105">(Apr 14 2026 at 16:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585468042">said</a>:</p>
+<blockquote>
+<p>If we can't have the colon, I prefer semicolon over the arrow.</p>
+</blockquote>
+<p>the colon inside of the <code>[]</code> should work</p>
+
+
+
+<a name="585470141"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470141" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470141">(Apr 14 2026 at 16:13)</a>:</h4>
+<p>I think I also like that one best</p>
+
+
+
+<a name="585470260"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470260" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470260">(Apr 14 2026 at 16:14)</a>:</h4>
+<ul>
+<li><code>project!(foo =&gt; [variant ..end])</code></li>
+<li><code>project!(foo, [variant: ..end])</code></li>
+</ul>
+
+
+
+<a name="585470373"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470373" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470373">(Apr 14 2026 at 16:14)</a>:</h4>
+<p>I want something generally formatable</p>
+
+
+
+<a name="585470653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470653">(Apr 14 2026 at 16:15)</a>:</h4>
+<p>My general preference would  be <code>project!(foo, [variant: ..end])</code>, but if we can have something that can be processed by rustfmt making a compromise seems reasonable.</p>
+
+
+
+<a name="585470828"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585470828" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585470828">(Apr 14 2026 at 16:16)</a>:</h4>
+<p>I'm adding this as a discussion topic tomorrow</p>
+
+
+
+<a name="585477403"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585477403" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585477403">(Apr 14 2026 at 16:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585470373">said</a>:</p>
+<blockquote>
+<p>I want something generally formatable</p>
+</blockquote>
+<p>oh yeah that'd be good</p>
+<p>I mean the original <code>[variant idx]</code> version also wasn't formattable...</p>
+<p>I know we tried to avoid nesting with another layer, but we could have <code>project!(foo, [variant!(..end)])</code></p>
+
+
+
+<a name="585477826"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585477826" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585477826">(Apr 14 2026 at 16:49)</a>:</h4>
+<p>Actually the field projection syntax with leading dot is also not formatable. So colon is fine</p>
+
+
+
+<a name="585477925"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585477925" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585477925">(Apr 14 2026 at 16:50)</a>:</h4>
+<p>but we could also not have a leading dot?</p>
+
+
+
+<a name="585478512"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585478512" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585478512">(Apr 14 2026 at 16:53)</a>:</h4>
+<p>I put it there for extensibility, so we could add other projection types, e.g. custom projection that is just an expression. I mostly have the register macro in mind when designing the syntax</p>
+
+
+
+<a name="585479253"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585479253" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585479253">(Apr 14 2026 at 16:57)</a>:</h4>
+<p>I can tell you from experience that formattability is pretty important for a macro, I think it's one of the "mistakes" we made when designing <code>init!</code>. It's of course a tradeoff, since <code>&lt;-</code> makes it clear when an initializer is used</p>
+
+
+
+<a name="585479391"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585479391" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585479391">(Apr 14 2026 at 16:58)</a>:</h4>
+<p>maybe it's not as bad for the <code>project</code> macro, since there won't be "big expressions" put in there, but who knows...</p>
+
+
+
+<a name="585479612"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585479612" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585479612">(Apr 14 2026 at 16:59)</a>:</h4>
+<p>for <code>project</code> macro the mut keyword also blocks formatting.</p>
+
+
+
+<a name="585479807"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585479807" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585479807">(Apr 14 2026 at 17:00)</a>:</h4>
+<p>Perhaps the long term solution is to have custom formatting plugin for rustfmt so macros can be customize formatted (just thinking out loud)</p>
+
+
+
+<a name="585480231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/585480231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#585480231">(Apr 14 2026 at 17:01)</a>:</h4>
+<p>Yeah, I think for <code>project!</code> it is probably fine, as the expressions won't get crazy, for <code>init!</code> is a much bigger concern.</p>
+
+
+
+<a name="601394780"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601394780" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601394780">(Jun 09 2026 at 11:05)</a>:</h4>
+<p>Sashiko pointed out issues with alignment of untyped regions in <a href="https://sashiko.dev/#/patchset/20260608-io_projection-v3-0-c5cde13a5ec4%40garyguo.net">https://sashiko.dev/#/patchset/20260608-io_projection-v3-0-c5cde13a5ec4%40garyguo.net</a>, which after some thinking, I think is a more general problem.</p>
+
+
+
+<a name="601395029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601395029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601395029">(Jun 09 2026 at 11:06)</a>:</h4>
+<p>I did a quick grep on device trees, there are GPIO drivers which use 1-byte-aligned (or sized) I/O regions too, and I would expect them to want to use the same API that requests <code>IoMem</code></p>
+
+
+
+<a name="601395219"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601395219" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601395219">(Jun 09 2026 at 11:07)</a>:</h4>
+<p>Perhaps it's inevitable that we add custom alignment support for I/O regions? <span class="user-mention" data-user-id="890884">@Alexandre Courbot</span></p>
+
+
+
+<a name="601400434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601400434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601400434">(Jun 09 2026 at 11:30)</a>:</h4>
+<p>Does this mean the content might also be accessed unaligned? I.e. what if you have an I/O region of <code>[u32]</code> with an alignment of <code>1</code>?</p>
+
+
+
+<a name="601400797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601400797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601400797">(Jun 09 2026 at 11:32)</a>:</h4>
+<p>Misaligned access is still broken at least for MMIO, so this should be forbidden by <code>io_addr_assert</code></p>
+
+
+
+<a name="601400969"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601400969" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601400969">(Jun 09 2026 at 11:33)</a>:</h4>
+<p>So if you requested a region with alignment of 1, then you can only use read u8 with non-fallible methods, <code>try_</code> would do a runtime alignment check.</p>
+
+
+
+<a name="601401070"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401070" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401070">(Jun 09 2026 at 11:33)</a>:</h4>
+<p>But is that a possible access pattern based on what you have seen? Or are all the 1-aligned I/O regions accessing <code>[u8]</code>s?</p>
+
+
+
+<a name="601401140"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401140" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401140">(Jun 09 2026 at 11:33)</a>:</h4>
+<p>well if it's C I guess they are all <code>[u8]</code> by definition, but you probably see what I mean. :)</p>
+
+
+
+<a name="601401144"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401144" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401144">(Jun 09 2026 at 11:33)</a>:</h4>
+<p>They're just doing byte access</p>
+
+
+
+<a name="601401391"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401391" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401391">(Jun 09 2026 at 11:34)</a>:</h4>
+<p>There's no atomicity for non-aligned access anyway, so if a driver needs to do misaligned access they'd better just read multiple times :)</p>
+
+
+
+<a name="601401530"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401530" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401530">(Jun 09 2026 at 11:35)</a>:</h4>
+<p>My point here is that we cannot just say "untyped region has a fixed alignment" and satisfy all drivers</p>
+
+
+
+<a name="601401728"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401728" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401728">(Jun 09 2026 at 11:36)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> given this is kinda existing issue, how should I handle this for I/O projection series? I'm inclined to say "Region" has 4-byte alignment (and add checks to constructor) so Tyr and Nova are happy, and we can extend it with customizable alignment later on?</p>
+
+
+
+<a name="601401788"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401788" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401788">(Jun 09 2026 at 11:36)</a>:</h4>
+<p>Would the alignment become a generic parameter then? I see you are using <code>#[repr(align(x))]</code>so I'm not sure what we can do concretely (sorry, still need to go in depth through the series)</p>
+
+
+
+<a name="601401903"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601401903" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601401903">(Jun 09 2026 at 11:37)</a>:</h4>
+<p>You can do this: <a href="https://lore.kernel.org/rust-for-linux/DILXW5AK9O8E.3TESJB45UPTZM@garyguo.net/">https://lore.kernel.org/rust-for-linux/DILXW5AK9O8E.3TESJB45UPTZM@garyguo.net/</a></p>
+
+
+
+<a name="601402429"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601402429" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601402429">(Jun 09 2026 at 11:39)</a>:</h4>
+<p>I already have a working version of <code>Region</code> type that just adds another parameter</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(C)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Region</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ALIGN</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="o">&gt;</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">Align</span><span class="o">&lt;</span><span class="n">ALIGN</span><span class="o">&gt;</span><span class="p">:</span><span class="w"> </span><span class="nc">ValidAlign</span><span class="p">,</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">align</span><span class="p">:</span><span class="w"> </span><span class="nc">Align</span><span class="o">&lt;</span><span class="n">ALIGN</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="kt">u8</span><span class="p">],</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>but this also needs to be propagated to <code>Bar</code> and <code>IoMem</code> to which point I think it's becoming big enough change that it might deserve its own series and not just fixed inside the projection series :)</p>
+
+
+
+<a name="601402554"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601402554" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601402554">(Jun 09 2026 at 11:40)</a>:</h4>
+<p>(Well, probably not <code>Bar</code>, as I think bars are sufficiently aligned always)</p>
+
+
+
+<a name="601402642"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601402642" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601402642">(Jun 09 2026 at 11:40)</a>:</h4>
+<p>if this can be done as a follow-up then I think I would be grateful. The current series already packs quite a few punches. :)</p>
+
+
+
+<a name="601402813"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601402813" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601402813">(Jun 09 2026 at 11:41)</a>:</h4>
+<p>but yeah if alignment can be an optional generic parameter then it would only become visible when actually needed, so I think I like that.</p>
+
+
+
+<a name="601403234"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601403234" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601403234">(Jun 09 2026 at 11:42)</a>:</h4>
+<p>Most pointer types imply alignment by having a target type</p>
+
+
+
+<a name="601403751"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601403751" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601403751">(Jun 09 2026 at 11:44)</a>:</h4>
+<p>Which is why I'm trying to have <code>Region</code> to have the correct alignment, it's the "Target" type for untyped regions.</p>
+
+
+
+<a name="601409407"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601409407" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601409407">(Jun 09 2026 at 12:07)</a>:</h4>
+<p>Yes, the current code assumes that the base address is aligned according to the access primitives that are used, which should be sufficient.</p>
+<p>You correctly identified the the gap with qword accesses, which should be fixed by considering the base address, which your patches already do.</p>
+
+
+
+<a name="601409854"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601409854" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601409854">(Jun 09 2026 at 12:09)</a>:</h4>
+<p>Well, the issue is that the base <code>Region</code> type, if made 4-byte aligned, is too restrictive</p>
+
+
+
+<a name="601410164"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601410164" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601410164">(Jun 09 2026 at 12:10)</a>:</h4>
+<p>An example is arch/arm/boot/dts/cirrus/ep7209.dtsi with GPIO address of 0x80000001 and size 1. drivers/gpio/gpio-clps711x.c uses <code>devm_platform_ioremap_resource</code> to map it. If we make <code>Region</code> 4-byte aligned, then our Rust map API needs to reject it</p>
+
+
+
+<a name="601410371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601410371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601410371">(Jun 09 2026 at 12:11)</a>:</h4>
+<p>So for this case, it needs to be able to switch to a 1-byte aligned region (or have API available to just do map and get <code>IoMem&lt;u8&gt;</code> perhaps?)</p>
+
+
+
+<a name="601410596"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601410596" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601410596">(Jun 09 2026 at 12:12)</a>:</h4>
+<p>Yes, I'm well aware, I wasn't done writing (currently on the run). :)</p>
+
+
+
+<a name="601411026"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601411026" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601411026">(Jun 09 2026 at 12:14)</a>:</h4>
+<p>Everything else, i.e. Region being generic over the base alignment can be done subsequently, or rather when it is needed.</p>
+
+
+
+<a name="601411393"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601411393" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601411393">(Jun 09 2026 at 12:15)</a>:</h4>
+<p>I think it is a very uncommon use case and the example you found is already a bit odd, as it creates a driver instance per GPIO bank. If it wouldn't and just handle all banks of the controller in a single driver instance, it would be 4 bytes aligned.</p>
+
+
+
+<a name="601411822"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Generic%20I/O%20backends/near/601411822" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Generic.20I.2FO.20backends.html#601411822">(Jun 09 2026 at 12:17)</a>:</h4>
+<p>(I found the same example after reading your post.)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

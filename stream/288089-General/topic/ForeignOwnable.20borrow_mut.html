@@ -1,0 +1,255 @@
+<html>
+<head><meta charset="utf-8"><title>ForeignOwnable borrow_mut · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html">ForeignOwnable borrow_mut</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="372211547"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372211547" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372211547">(Jul 04 2023 at 07:48)</a>:</h4>
+<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>
+<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>
+<p>Also, using the scope guard like this seems like a leaky abstraction.</p>
+
+
+
+<a name="372218115"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372218115" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372218115">(Jul 04 2023 at 08:15)</a>:</h4>
+<p>Also, why does the trait always provide <code>borrow_mut</code>? Most similar traits in std have separate traits for immutable and mutable access, meaning that a type may choose to only implement the immutable one.</p>
+
+
+
+<a name="372256789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372256789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372256789">(Jul 04 2023 at 10:31)</a>:</h4>
+<p>Related, I have a todo to add a lifetime parameter to the scope guard returned by <code>borrow_mut()</code></p>
+
+
+
+<a name="372315900"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372315900" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372315900">(Jul 04 2023 at 13:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547">said</a>:</p>
+<blockquote>
+<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>
+<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>
+<p>Also, using the scope guard like this seems like a leaky abstraction.</p>
+</blockquote>
+<p>It looks to me like this might have some issues in light of <code>core::mem::replace()/swap()/take()</code>.<br>
+If you replace the <code>Arc&lt;T&gt;</code> that is behind the <code>&amp;mut</code> you can obtain through <code>borrow_mut()</code>, the Arc that was there will be dropped. Refcount might go to zero and leave a dangling pointer in C land.</p>
+<p>Further, when <code>ScopeGuard</code> guarding the <code>&amp;mut</code> is dropped, it will <code>into_foreign()</code> the new <code>Arc&lt;T&gt;</code> and it will leak.</p>
+<p>This is not the intention as far as I know. I don't think we considered this.</p>
+
+
+
+<a name="372322930"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372322930" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372322930">(Jul 04 2023 at 14:08)</a>:</h4>
+<p>Perhaps we could check if the address of the pointee changed when the <code>borrow_mut()</code> is over and then update the pointer</p>
+
+
+
+<a name="372323333"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372323333" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372323333">(Jul 04 2023 at 14:09)</a>:</h4>
+<p>Anyhow, it should be possible to bound the lifetime of the <code>ScopeGuard</code> returned by <code>borrow_mut()</code></p>
+
+
+
+<a name="372323506"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372323506" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372323506">(Jul 04 2023 at 14:10)</a>:</h4>
+<p>IMO it should not be a scope guard.</p>
+
+
+
+<a name="372328719"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372328719" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372328719">(Jul 04 2023 at 14:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372323506">said</a>:</p>
+<blockquote>
+<p>IMO it should not be a scope guard.</p>
+</blockquote>
+<p>What instead?</p>
+
+
+
+<a name="372329931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372329931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372329931">(Jul 04 2023 at 14:29)</a>:</h4>
+<p>I would do the same as the immutable guard.</p>
+
+
+
+<a name="372339588"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372339588" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372339588">(Jul 04 2023 at 14:57)</a>:</h4>
+<p>Not following. The immutable borrow is not using a guard?</p>
+
+
+
+<a name="372342176"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372342176" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372342176">(Jul 04 2023 at 15:05)</a>:</h4>
+<p>By "immutable guard" I am referring to the <code>Borrowed</code> associated type in the <code>ForeignOwnable</code> trait.</p>
+
+
+
+<a name="372342429"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372342429" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372342429">(Jul 04 2023 at 15:06)</a>:</h4>
+<p>My suggestion is to add a <code>BorrowedMut</code> associated type and return that.</p>
+
+
+
+<a name="372343963"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372343963" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372343963">(Jul 04 2023 at 15:11)</a>:</h4>
+<p>Are there even any users of <code>borrow_mut</code>?</p>
+
+
+
+<a name="372378435"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372378435" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372378435">(Jul 04 2023 at 17:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372343963">said</a>:</p>
+<blockquote>
+<p>Are there even any users of <code>borrow_mut</code>?</p>
+</blockquote>
+<p>I had a use in the radix tree, but since that is deprecated that is not going anywhere</p>
+
+
+
+<a name="372378516"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372378516" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372378516">(Jul 04 2023 at 17:29)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="sd">/// Search for `key` in the map. Return a mutable reference to the</span>
+<span class="w">    </span><span class="sd">/// associated value if found.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">get_mut</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">key</span>: <span class="nc">Key</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Option</span><span class="o">&lt;</span><span class="n">MutBorrow</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">V</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">item</span><span class="w"> </span><span class="o">=</span>
+<span class="w">            </span><span class="n">core</span>::<span class="n">ptr</span>::<span class="n">NonNull</span>::<span class="n">new</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">radix_tree_lookup</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">tree</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">key</span><span class="p">)</span><span class="w"> </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: `item` was created by a call to</span>
+<span class="w">        </span><span class="c1">// `ForeignOwnable::into_foreign()`. As `get()` takes a `&amp;self` and</span>
+<span class="w">        </span><span class="c1">// `remove()` takes a `&amp;mut self`, no borrows for `item` can exist and</span>
+<span class="w">        </span><span class="c1">// `ForeignOwnable::from_foreign()` cannot be called until this borrow</span>
+<span class="w">        </span><span class="c1">// is dropped.</span>
+<span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="n">MutBorrow</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">guard</span>: <span class="nc">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">V</span>::<span class="n">borrow_mut</span><span class="p">(</span><span class="n">item</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">())</span><span class="w"> </span><span class="p">},</span>
+<span class="w">            </span><span class="n">_marker</span>: <span class="nc">core</span>::<span class="n">marker</span>::<span class="n">PhantomData</span><span class="p">,</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="372380502"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372380502" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372380502">(Jul 04 2023 at 17:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372342429">said</a>:</p>
+<blockquote>
+<p>My suggestion is to add a <code>BorrowedMut</code> associated type and return that.</p>
+</blockquote>
+<p>That is fine but does not really solve anything. We would have to put a bound on the lifetime and update the safety comment to specify that caller must call <code>into_foreign()</code> when done with the reference. I guess that if it is the responsibility of the caller of <code>borrow_mut()</code> to make sure that <code>into_foreign()</code> is called, we can make it the responsibility of that caller to update the C pointer if the target of the smart pointer has changed.</p>
+
+
+
+<a name="372381163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372381163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372381163">(Jul 04 2023 at 17:43)</a>:</h4>
+<p>I'm not convinced that an Arc should have a <code>borrow_mut</code> in the first place.</p>
+
+
+
+<a name="372381216"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372381216" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372381216">(Jul 04 2023 at 17:43)</a>:</h4>
+<p>For a box, it could deref to <code>&amp;mut T</code> so that you can't swap the box.</p>
+
+
+
+<a name="372383033"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372383033" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372383033">(Jul 04 2023 at 17:52)</a>:</h4>
+<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>
+
+
+
+<a name="372383956"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372383956" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372383956">(Jul 04 2023 at 17:56)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372381163">said</a>:</p>
+<blockquote>
+<p>I'm not convinced that an Arc should have a <code>borrow_mut</code> in the first place.</p>
+</blockquote>
+<p>You are right, it makes sense to split the trait.</p>
+
+
+
+<a name="372419094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372419094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372419094">(Jul 04 2023 at 21:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547">said</a>:</p>
+<blockquote>
+<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>
+<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>
+<p>Also, using the scope guard like this seems like a leaky abstraction.</p>
+</blockquote>
+<p>I agree, this seems wrong. Also agree with the approach to have a mut trait with this functionality that we implement just for box.</p>
+
+
+
+<a name="372419285"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372419285" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372419285">(Jul 04 2023 at 21:44)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372383033">said</a>:</p>
+<blockquote>
+<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>
+</blockquote>
+<p>how do you know the location in C land? what if there are multiple refs? I dont think this is possible</p>
+
+
+
+<a name="372472478"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372472478" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372472478">(Jul 05 2023 at 05:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372419285">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372383033">said</a>:</p>
+<blockquote>
+<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>
+</blockquote>
+<p>how do you know the location in C land? what if there are multiple refs? I dont think this is possible</p>
+</blockquote>
+<p>Yes, you are right. One would have to always pass in a <code>**</code> and we would not know if it is the only one.</p>
+
+
+
+<a name="372472635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372472635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372472635">(Jul 05 2023 at 06:00)</a>:</h4>
+<p>If <code>borrow_mut()</code> returns a <code>&amp;mut</code> to the target of the smart pointer, we should be fine. The object might be swapped out, but at least the allocation will contain a valid object, right?</p>
+
+
+
+<a name="372474796"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372474796" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372474796">(Jul 05 2023 at 06:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372419094">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547">said</a>:</p>
+<blockquote>
+<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>
+<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>
+<p>Also, using the scope guard like this seems like a leaky abstraction.</p>
+</blockquote>
+<p>I agree, this seems wrong. Also agree with the approach to have a mut trait with this functionality that we implement just for box.</p>
+</blockquote>
+<p>Maybe "borrow" is the wrong part of the name.</p>
+<p>If I remember correctly, the usage is during a series of callbacks, the foreign owned data needs to be accessed multiple times (so manually <code>from_foreign</code> and <code>into_foreign</code> is a bit annoying), and some of the callback implementation may modify the underlying data, so a deref to <code>&amp;mut ForeignOwnable</code> is returned, of course that only works if <code>Box&lt;..&gt;</code> is used, but the different implementations may use either <code>Arc</code> or <code>Box</code>, and having a <code>borrow_mut</code> makes <code>Box</code> case and <code>Arc</code> case share the generic callback handling code.</p>
+<p>For example: <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/fs.rs#L139">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/fs.rs#L139</a></p>
+
+
+
+<a name="372810688"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/372810688" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#372810688">(Jul 06 2023 at 08:33)</a>:</h4>
+<p>A had some interesting thoughts regarding <code>borrow_mut</code> and xarray. See:</p>
+<blockquote>
+<p>This probably depends on changes to <code>borrow_mut</code>. I think ideally we want the trait to have a <code>BorrowedMut</code> type that represents the kind of access you can get to the inner value given mutable access to the <code>T</code>, then return <code>Option&lt;T::BorrowedMut&lt;'a&gt;&gt;</code>.</p>
+<p>For an <code>Arc</code>, the <code>BorrowedMut</code> type would still be <code>ArcBorrow</code>, but that actually still gives this extra powers over the two other methods. It lets you access the <code>Arc</code>s contents without modifying the refcount, and without a closure.</p>
+<p>And of course, with a <code>Box</code>, the <code>BorrowedMut</code> type would be <code>&amp;mut T</code>, so this type would return <code>Option&lt;&amp;mut T&gt;</code> when the pointer type is <code>Box</code>.</p>
+<p>&lt;<a href="https://github.com/Rust-for-Linux/linux/pull/1019#discussion_r1254112511">https://github.com/Rust-for-Linux/linux/pull/1019#discussion_r1254112511</a>&gt;</p>
+</blockquote>
+
+
+
+<a name="386785014"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/ForeignOwnable%20borrow_mut/near/386785014" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/ForeignOwnable.20borrow_mut.html#386785014">(Aug 23 2023 at 07:54)</a>:</h4>
+<p>I'll resend this patch with the updated comment here: <a href="https://lore.kernel.org/all/20230822093148.3478340-1-aliceryhl@google.com/">https://lore.kernel.org/all/20230822093148.3478340-1-aliceryhl@google.com/</a></p>
+<p>Any objections?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

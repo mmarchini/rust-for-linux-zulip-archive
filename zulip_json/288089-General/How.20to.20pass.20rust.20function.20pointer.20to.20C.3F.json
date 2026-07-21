@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Hi folks,<br>\nso I'd like to create an API function (usable by more or less generic Rust code) that passes a Rust function to the C world, where the C world wants a function pointer in the form of  <code>void (*func)(void *);</code></p>\n<p>How'd I do that? How would I have to write the function prototype in Rust?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">foo</span><span class=\"p\">(</span><span class=\"n\">param</span>: <span class=\"kt\">i32</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">callback_function</span>: <span class=\"o\">???</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">bindings</span>::<span class=\"n\">bar</span><span class=\"p\">(</span><span class=\"n\">param</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">callback_function</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I need to enforce somehow that the passed function in Rust is declared as <code>extern C</code> don't I...</p>",
+        "id": 432667794,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712829208
+    },
+    {
+        "content": "<p>Please tell me more about this callback. I'm guessing that you have some sort of data stored with it?</p>",
+        "id": 432668573,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1712829412
+    },
+    {
+        "content": "<p>How many times might it get called?</p>",
+        "id": 432668614,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1712829424
+    },
+    {
+        "content": "<p>You might do something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">ffi</span>::<span class=\"n\">c_void</span><span class=\"p\">;</span>\n\n<span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">run_callback</span><span class=\"o\">&lt;</span><span class=\"n\">F</span>: <span class=\"nb\">FnOnce</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">data</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">F</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">from_raw</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">)();</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">register_callback</span><span class=\"o\">&lt;</span><span class=\"n\">F</span>: <span class=\"nb\">FnOnce</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">func</span>: <span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">boxed_func</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">func</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">into_raw</span><span class=\"p\">(</span><span class=\"n\">boxed_func</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">bindings</span>::<span class=\"n\">register_callback</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">run_callback</span>::<span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 432673529,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1712831130
+    },
+    {
+        "content": "<p>Yup, it shall pass a data object such as a rust-struct that will be handed back to the callback by C.</p>\n<p>What do<br>\n<code>(data)();</code>  and <code>FnOnce()</code><br>\ndo?</p>",
+        "id": 432674775,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712831614
+    },
+    {
+        "content": "<p>Well, <code>F: FnOnce()</code> means that the type <code>F</code> implements the <code>FnOnce</code> trait, which means that it's a function you can call once. The <code>(data)()</code> expression calls it.</p>",
+        "id": 432675033,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1712831713
+    },
+    {
+        "content": "<p>Why's it necessary to feed the function into a Box?</p>",
+        "id": 432675650,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712831980
+    },
+    {
+        "content": "<p>Another option is to cast the function pointer to a void pointer and pass that as <code>data</code>. But this only works when <code>func</code> is _just_ a function pointer. Rust closures can require more storage than just a function pointer if they capture variables from their environment, and the box lets you store that.</p>",
+        "id": 432676190,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1712832170
+    },
+    {
+        "content": "<p>Oh man.. ^^<br>\nk, thx, let me see how far I get with that <span aria-label=\"explosive\" class=\"emoji emoji-1f9e8\" role=\"img\" title=\"explosive\">:explosive:</span></p>",
+        "id": 432676337,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712832231
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> you might want to read <a href=\"https://doc.rust-lang.org/book/ch19-05-advanced-functions-and-closures.html?highlight=fnonce#function-pointers\">here</a> and <a href=\"https://doc.rust-lang.org/book/ch13-01-closures.html?highlight=fnonce#closures-anonymous-functions-that-capture-their-environment\">here</a></p>",
+        "id": 432701101,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1712840536
+    },
+    {
+        "content": "<p>The example that Alice provided is one where your function is really a closure that carries data with it. Rust also allows you to pass function pointer like C, if that's what you want. In such cases, there is no memory allocation involved. Here's an example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// Some C function that you want to call that takes a function pointer as argument.</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">external_function_call</span><span class=\"p\">(</span><span class=\"n\">func</span>: <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">ffi</span>::<span class=\"n\">c_void</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">u32</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// The callback implemented in Rust that C will call.</span>\n<span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">my_rust_callback</span><span class=\"p\">(</span><span class=\"n\">_context</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">ffi</span>::<span class=\"n\">c_void</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">u32</span> <span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"mi\">0</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// Your call to the external function C function with a Rust callback.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">external_function_call</span><span class=\"p\">(</span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">my_rust_callback</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 432723570,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1712846926
+    },
+    {
+        "content": "<p>Interesting!<br>\nAny particular reason why you wrapped that into an Option?</p>",
+        "id": 432850812,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712908302
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/stream/288089-General/topic/How.20to.20pass.20rust.20function.20pointer.20to.20C.3F/near/432850812\">said</a>:</p>\n<blockquote>\n<p>Interesting!<br>\nAny particular reason why you wrapped that into an Option?</p>\n</blockquote>\n<p>Because in C, the function pointer may be null.</p>",
+        "id": 432850983,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1712908369
+    },
+    {
+        "content": "<p>And <code>None</code> is guaranteed to be translated to C's <code>NULL</code> ?</p>",
+        "id": 432851056,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1712908404
+    },
+    {
+        "content": "<p>For functions, yes. Search for niche optimization to read more about this</p>",
+        "id": 432851349,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1712908502
+    }
+]

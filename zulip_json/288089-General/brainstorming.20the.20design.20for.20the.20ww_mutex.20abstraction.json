@@ -1,0 +1,392 @@
+[
+    {
+        "content": "<p>I come up with some design options for ww_mutex and decided to share them here in a dedicated thread to ensure we are on the same page before I send the next patch as it will require a massive refactoring of the latest patch on the ML.</p>\n<p>Currently, we have the <a href=\"https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex.rs\">ww_mutex.rs</a> module, which is a bare (maybe a little bit more than that) wrapper with some type-level safeties and a higher-level <a href=\"https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex/exec.rs\">exec.rs</a> module. The <code>exec</code> module provides an automatic EDEADLK handling mechanism that cleans up the acquired locks and rolls back to try locking them again, all automatically.</p>\n<p>However, both modules are <code>pub</code>(this is the first problem) and users of <code>ww_mutex</code> will be responsible for most of the safety concerns. For example, dropping <code>WwAcquireCtx</code> without releasing all the locks acquired by that context is incorrect (see <a href=\"https://github.com/torvalds/linux/blob/552c50713f27/include/linux/ww_mutex.h#L195-L196\">this</a>).</p>\n<p>Therefore, we should release all the locks before calling <code>ww_acquire_fini</code> in <code>PinnedDrop</code>, but we are not doing this explicitly yet. While the lifetime bounds help, I am not sure if this is good/future-proof enough for safety. Furthermore, users have to handle EDEADLK manually if they use the low-level <code>ww_mutex</code> module and I believe they shouldn't be responsible for this, at least for the Rust side, and I think there could be more (potential) issues we have not realized yet.</p>\n<p>The <code>exec</code> module on the other hand, provides a much safer API for the user. It might not be sufficient for all scenarios (yet), but it can definitely be improved to cover them.</p>\n<p>There are two paths we can follow and I wouldd appreciate any feedback on them.</p>\n<h2>Option 1: Consolidate Logic into <code>WwAcquireCtx</code></h2>\n<p>Dropping the <code>exec</code> module entirely and folding its logic into the <code>ww_mutex</code> types (e.g., by improving <code>WwAcquireCtx</code>). Doing this means we will need to add a mutable field to the pinned <code>WwAcquireCtx</code>, such as:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data(PinnedDrop)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">WwAcquireCtx</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">ww_acquire_ctx</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">class</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"nc\">Class</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">taken</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">KVec</span><span class=\"o\">&lt;</span><span class=\"n\">MutexGuard</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This then means we would have to use unsafe <code>get_unchecked_mut</code> to modify <code>taken</code> in various functions (like in <code>drop</code> and <code>lock</code> functions), like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// SAFETY: `self` is not moved and `taken` is unpinned.</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">get_unchecked_mut</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"n\">this</span><span class=\"p\">.</span><span class=\"n\">taken</span><span class=\"p\">.</span><span class=\"n\">push</span><span class=\"o\">/</span><span class=\"n\">clear</span><span class=\"p\">()</span><span class=\"o\">..</span><span class=\"p\">.</span>\n</code></pre></div>\n<p>Another thing is that we have a <code>from_raw</code> function (in the latest unpublished version) that takes a raw pointer and creates <code>WwAcquireCtx</code>. This makes me very uncomfortable because it <code>taken</code> field is becoming to not work in every case. If a user creates <code>WwAcquireCtx</code> from a C pointer, the <code>taken</code> field will obviously have no knowledge of the locks acquired from the C code. This makes me to believe that <code>WwAcquireCtx</code> is not the right type to contain the <code>taken</code> field and it makes the implementation less stable and convenient.</p>\n<hr>\n<h2>Option 2: Enforcing for higher-level API</h2>\n<p>Keeping <code>ww_mutex</code> as abstract and low-level as it is, but making it private (sealed) for internal use only (i.e., for the <code>exec</code> module). This would enforce users to use the safe, high-level API and allow us to improve that API for cases where it's currently insufficient for user needs. With this approach, no user can accidentally encounter invalid or unsafe cases (including ones we haven't yet recognized). Also from a maintenance perspective, I think this is much easier, it creates two levels of abstraction: one is a simple wrapper of the C side and the other wraps the Rust wrapper for actual use cases.</p>\n<p>I am happy to hear alternative options, but for now I feel that option 2 is far better than option 1.</p>",
+        "id": 546719326,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761235552
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> <span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> (since you both have a use-case for this API)</p>",
+        "id": 546719424,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761235579
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546719326\">said</a>:</p>\n<blockquote>\n<p>Therefore, we should release all the locks before calling <code>ww_acquire_fini</code> in <code>PinnedDrop</code>, but we are not doing this explicitly yet. While the lifetime bounds help, I am not sure if this is good/future-proof enough for safety. Furthermore, users have to handle EDEADLK manually if they use the low-level <code>ww_mutex</code> module and I believe they shouldn't be responsible for this, at least for the Rust side, and I think there could be more (potential) issues we have not realized yet.</p>\n</blockquote>\n<p>Agreed btw, with KMS we find that it's not unusual someone makes the mistake of not handling <code>EDEADLK</code> when writing code grabbing ww_mutex.</p>",
+        "id": 546732911,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761239854
+    },
+    {
+        "content": "<p>I wonder if we really need to hear some input from non-KMS usecases. I'm thinking about option 2 and it is sort of making me realize that at least for KMS's case, I think it's very likely that we're going to have to make wrappers around <code>drm_modeset_lock</code> (KMS's <code>ww_mutex</code> API, which has some book keeping on top of the <code>ww_mutex</code> API and works slightly differently) anyway. This being said though - I'd still have the concern of whether we have any portions of the various DMA APIs using ww_mutex that can pass their own acquisition context to callbacks, which we would have to use</p>",
+        "id": 546733933,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761240213
+    },
+    {
+        "content": "<p>btw <span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>",
+        "id": 546736287,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761240922
+    },
+    {
+        "content": "<p>so I was going to suggest making a raw version of the acquire context and a high-level version of it and just keeping them separate like you're doing, but I think there's an option 3 here.</p>\n<p>So - I don't think we need to actually track the guards at all on the rust side of things! If we drop the KVec, the duplicate class ref, and the lifetime:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data(PinnedDrop)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">WwAcquireCtx</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">ww_acquire_ctx</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Then all we need to do is have <code>MutexGuard&lt;'a, T&gt;</code> be created by <code>&amp;'a WwAcquireCtx</code>. We might need to make sure the lifetime encompasses both the lifetime of <code>WwAcquireCtx</code> and the lifetime of the mutex itself, but that should be easy ('a + 'b I think?).  If we do that though, lifetimes will actually ensure that the drop order is correct and that any guards will always be dropped before the context. This also would still remain true even in situations where we received the <code>WwAcquireCtx</code> from a reference derived from a C pointer, as long as the reference lifetime is bound to something that outlives the guard.</p>\n<p>Regarding handling <code>EDEADLK</code>, I think the easiest way of handling this might be to make it so that we only can create a lock context in two ways. The first being through a closure interface, that keeps trying the closure until it doesn't return a deadlock (or returns another error), the second being deriving the context from a C pointer. I think we do need both of these, because occasionally deadlock recovery is handled by a C function that's invoking a callback rather than something that happens within the callback itself - which means that we don't want special handling on EDEADLK In that case and want to return it like a normal error.</p>",
+        "id": 546746653,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761244661
+    },
+    {
+        "content": "<p>we could also add other closure interfaces if there ends up being other behavior required for this sort of thing. But I think a lot of those cases will end up just getting handled by passing the context around and having functions that can take a <code>WwAcquireCtx</code></p>",
+        "id": 546749649,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761245828
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546733933\">said</a>:</p>\n<blockquote>\n<p>This being said though - I'd still have the concern of whether we have any portions of the various DMA APIs using ww_mutex that can pass their own acquisition context to callbacks, which we would have to use</p>\n</blockquote>\n<p>We can always pass already initialized context into the high-level API, that's doable and still safe I think.</p>",
+        "id": 546750054,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761245976
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287\">said</a>:</p>\n<blockquote>\n<p>btw <span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>\n</blockquote>\n<p>There is no such field on the Rust ww_mutex</p>",
+        "id": 546750200,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761246017
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546750200\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287\">said</a>:</p>\n<blockquote>\n<p>btw <span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>\n</blockquote>\n<p>There is no such field on the Rust ww_mutex</p>\n</blockquote>\n<p>I'm not sure there needs to be, it has a pointer to the context that it's acquired under but we wouldn't really need that for this to work since the ww mutex API is going to return <code>-EALREADY</code> if we have the lock already, and lifetime guarantees mean we're still going to have guards dropped in the right order</p>",
+        "id": 546750544,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761246134
+    },
+    {
+        "content": "<p>How would you re-init the context on EDEADLK without knowing the class?</p>",
+        "id": 546750697,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761246193
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span> because <code>ww_acquire_ctx</code> does have a pointer to the class, <code>ww_class</code>. And if the re-initialization code is handled by whatever closure interface we provide, it's always going to have access to that</p>",
+        "id": 546750862,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761246262
+    },
+    {
+        "content": "<p>Oh, yeah, from the higher-level side it could be easier</p>",
+        "id": 546751213,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761246337
+    },
+    {
+        "content": "<p>We just assume (and this should be safe) for the case of getting a ctx from somewhere else, that \"somewhere else\" is the one handling the reinitialization.<br>\nTBH too, I'm pretty sure this is the way that we want to be doing things because generally you don't want to have a self-referential structure through lifetimes. The <code>'a</code> in the acquire context would just be an unbound lifetime if you didn't create it from something else, which means that it outlives everything and probably isn't what you want.</p>",
+        "id": 546751360,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761246384
+    },
+    {
+        "content": "<p>Dropping the lifetime though and having the guards be created from <code>&amp;'a WwAcquireCtx</code> makes sure that <code>'a</code> is properly bound to the lifetime of the ctx though</p>",
+        "id": 546751483,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761246419
+    },
+    {
+        "content": "<p>So, we both agree that option 1 isn't a good approach, right? If that's the case I can start refactoring the low-level part (except high-level part until we agree on the final design of it).</p>",
+        "id": 546751979,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761246603
+    },
+    {
+        "content": "<p>honestly - option 1 might actually be the better idea, as long as we rely on lifetimes for doing the tracking and drop <code>taken</code> and <code>class</code> it should be really easy to add the high level functions on. Something like (using the <code>struct WwAcquireCtx</code> that I posted earlier):</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">WwAcquireCtx</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">WwAcquireCtx</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">ww_ctx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cm\">/* … initialize context */</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">loop</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">      </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">ww_ctx</span><span class=\"p\">);</span>\n<span class=\"w\">      </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">EDEADLK</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"cm\">/* re-initialize ctx */</span>\n<span class=\"w\">      </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"p\">;</span>\n<span class=\"w\">      </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 546753634,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761247228
+    },
+    {
+        "content": "<p>I think too that we could expand this for the use things like slow locking if we provided a deadlock error type that could include something like the lock that we deadlocked on. And I -think- that would be fine for us to return a guard for the mutex from such a closure</p>",
+        "id": 546754289,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761247500
+    },
+    {
+        "content": "<p>Maybe something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">enum</span><span class=\"w\"> </span><span class=\"nc\">WwAcquireError</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">Deadlock</span><span class=\"p\">(</span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">),</span>\n<span class=\"w\">  </span><span class=\"n\">Other</span><span class=\"p\">(</span><span class=\"n\">E</span><span class=\"p\">),</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 546755715,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761247997
+    },
+    {
+        "content": "<p>I think if you add the appropriate <code>From&lt;…&gt;</code> implementation using plain <code>?</code> will work for converting to this type anyhow</p>",
+        "id": 546755812,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761248040
+    },
+    {
+        "content": "<p>The one issue that just occurred to me: we will need to make sure that we have defined behavior for what happens if someone calls <code>mem::forget()</code> on a guard. I think that this actually would be fine though, I'm pretty sure we would get a kernel warning and then we'd just eventually deadlock - which isn't UB (and is what happens with normal mutex guards anyway).</p>",
+        "id": 546759962,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761249582
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546753634\">said</a>:</p>\n<blockquote>\n<p>honestly - option 1 might actually be the better idea, as long as we rely on lifetimes for doing the tracking and drop <code>taken</code> and <code>class</code> it should be really easy to add the high level functions on. Something like (using the <code>struct WwAcquireCtx</code> that I posted earlier):</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">WwAcquireCtx</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">WwAcquireCtx</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">U</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">ww_ctx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cm\">/* … initialize context */</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">loop</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">      </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">ww_ctx</span><span class=\"p\">);</span>\n<span class=\"w\">      </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">EDEADLK</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"cm\">/* re-initialize ctx */</span>\n<span class=\"w\">      </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"p\">;</span>\n<span class=\"w\">      </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Hmm, I couldn't get how this would work to handle tracking. On EDEADLK, how are we going to release all the currently taken locks?</p>",
+        "id": 546811601,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761282914
+    },
+    {
+        "content": "<p>Because all of the guards only exist in the scope of <code>cb()</code>, so they'll get <code>Drop</code>ed automatically</p>",
+        "id": 546811705,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761283010
+    },
+    {
+        "content": "<p>For example, <a href=\"https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex/exec.rs#L86-L100\">this</a> is how I solved it with 2 closures, 1 takes mutexes and tries to lock, and the second only gets executed when all the locks are taken successfully and user can access to the data</p>",
+        "id": 546811767,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761283059
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546811705\">said</a>:</p>\n<blockquote>\n<p>Because all of the guards only exist in the scope of <code>cb()</code>, so they'll get <code>Drop</code>ed automatically</p>\n</blockquote>\n<p>Can you share a simple code from the user side where it uses this approach?</p>",
+        "id": 546811813,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761283089
+    },
+    {
+        "content": "<p>I can try! I'll take a stab at it when I start work in the morning</p>",
+        "id": 546811877,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761283146
+    },
+    {
+        "content": "<p>working on coming up with a general rough-draft of what this would look like btw. it is a bit complicated to implement, but so far I <em>think</em> it's possible</p>",
+        "id": 546953156,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761328937
+    },
+    {
+        "content": "<p>actually - maybe wait a little bit before we assume my idea actually works. I just realized that for the case of dropping locks when dropping the acquisition context this works fine, but I'm not so sure about handling the situation of handing back a contended lock yet</p>",
+        "id": 546957037,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761330504
+    },
+    {
+        "content": "<p>The exec module I shared earlier does that in a quite simple way tbh</p>",
+        "id": 546958688,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761331203
+    },
+    {
+        "content": "<p>Yeah - disappointly, I think that the main interface for all of this does need some additional state tracking. I think I got myself too caught up in thinking about how KMS uses ww_mutex, since it's a much more limited subset of what's going on here (we generally don't handle contention scenarios ourself, DRM's helpers do that for us).<br>\nThough - there -are- still some improvements I think we can do with the exec interface you suggested that I discovered from this. I think we can actually get away with tracking only the contended lock and simply relying on <code>Drop</code> for releasing the other locks, so that we don't actually need a separate callback for the initial lock acquisition. Since if I understand correctly from the ww_mutex documentation, the deadlock handling scenario is always:</p>\n<ul>\n<li>Try to acquire locks.</li>\n<li>Deadlock?</li>\n<li>Drop all locks we hold</li>\n<li>lock_slow() the contended lock</li>\n<li>Goto first step</li>\n</ul>\n<p>We <em>maybe</em> should still allow usage of ww mutexes outside of whatever we turn <code>exec</code> into, but I think I'd be perfectly fine with all of those unmanaged interfaces being <code>unsafe pub(crate)</code> since I would assume the main use case for them would be people building more specific ww abstractions for things that already exist on the C side of things (e.g. like some of the weirder dma_resv locking scenarios where we can get handed back a context from elsewhere). However, I could be convinced out of this pretty easily if there's no actual uses for this in the rest of the kernel atm (<span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> do you have any idea?)</p>",
+        "id": 546961789,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761332554
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span> btw I've been completely absent in this conversation because I'm 100% taken on our downstream prototype that we're trying to get ready. I see that Lyude has picked this up at the moment.</p>",
+        "id": 546961991,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761332638
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span>  nitpicks aside, I know at least on the KMS side we'd be perfectly fine with the second option you mentioned at the start of the thread now that I've thought about this more. Since I definitely think the interface I'm going to want to expose for this w/r/t KMS will likely be a separate set of bindings around <code>drm_modeset_lock</code> and <code>drm_modeset_acquire_ctx</code> instead of using <code>ww_mutex</code> directly.</p>",
+        "id": 546962359,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761332780
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546962359\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span>  nitpicks aside, I know at least on the KMS side we'd be perfectly fine with the second option you mentioned at the start of the thread now that I've thought about this more. Since I definitely think the interface I'm going to want to expose for this w/r/t KMS will likely be a separate set of bindings around <code>drm_modeset_lock</code> and <code>drm_modeset_acquire_ctx</code> instead of using <code>ww_mutex</code> directly.</p>\n</blockquote>\n<p>Nice! I will consider applying some of the notes you suggested (early in the thread) though. The class part can indeed be improved. I will see what I can do during the week and I will use this thread to share the critical updates.</p>",
+        "id": 547027895,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761367939
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546961991\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> btw I've been completely absent in this conversation because I'm 100% taken on our downstream prototype that we're trying to get ready. I see that Lyude has picked this up at the moment.</p>\n</blockquote>\n<p>No worries at all! The thread been useful enough already for me (thanks to Lyude)</p>",
+        "id": 547027952,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761367995
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287\">said</a>:</p>\n<blockquote>\n<p>btw <span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>\n</blockquote>\n<p>While working on this, I just remembered another benefit of having class inside the context. By keeping a the reference, rustc will ensure that the class outlives the context which it's used in. This could also be achieved with a marker but storing the class reference also helps to avoid using unsafe functions to derive the class pointer from the context when we need to use it.</p>",
+        "id": 547449795,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761645268
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546750862\">said</a>:</p>\n<blockquote>\n<p>ww_acquire_ctx</p>\n</blockquote>\n<p><a href=\"/user_uploads/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png\">image.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png\" title=\"image.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"406x228\" src=\"/user_uploads/thumbnail/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png/840x560.webp\"></a></div><p>I am not sure if the maintainers of ww_mutex would be open to the idea of moving ww_class out of the DEBUG_WW_MUTEXES scope. <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 547521455,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761664618
+    },
+    {
+        "content": "<p>Yeah - I realized I missed that on the first look, so keeping track of class is fine</p>",
+        "id": 547521758,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761664681
+    },
+    {
+        "content": "<p><a href=\"https://github.com/torvalds/linux/compare/master...onur-ozkan:linux:ww_mutex?expand=1\">v7</a> is almost ready. I will do a self-review next, then prepare it (rebase the commits, write the changelog, etc.) for submission.</p>",
+        "id": 547763716,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761755591
+    },
+    {
+        "content": "<p>Do I have to make every commit buildable or can I just split things up without worrying about whether it compiles?</p>",
+        "id": 547765098,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761755973
+    },
+    {
+        "content": "<p>In general, every commit should build in order to help things like bisecting.</p>",
+        "id": 547767989,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1761756850
+    },
+    {
+        "content": "<p>Similarly, they should be <code>rustfmt</code> clean, Clippy clean, <code>rustdoc</code> clean, and KUnit tests should pass and so on.</p>",
+        "id": 547768192,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1761756910
+    },
+    {
+        "content": "<p>Thanks. It's gonna be tough one for v7 <span aria-label=\"smiling face with tear\" class=\"emoji emoji-1f972\" role=\"img\" title=\"smiling face with tear\">:smiling_face_with_tear:</span></p>",
+        "id": 547768617,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761757050
+    },
+    {
+        "content": "<p>For further information I can also recommend the drm-rust submit checklist (summary), which also links to the official Linux kernel submit checklist and the Rust for Linux checklist.</p>\n<p><a href=\"https://drm.pages.freedesktop.org/maintainer-tools/committer/committer-drm-rust.html#submit-checklist\">https://drm.pages.freedesktop.org/maintainer-tools/committer/committer-drm-rust.html#submit-checklist</a></p>",
+        "id": 547768663,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761757066
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/547768617\">said</a>:</p>\n<blockquote>\n<p>Thanks. It's gonna be tough one for v7 <span aria-label=\"smiling face with tear\" class=\"emoji emoji-1f972\" role=\"img\" title=\"smiling face with tear\">:smiling_face_with_tear:</span></p>\n</blockquote>\n<p>Fwiw: I usually use <code>git rebase --exec</code> for doing this, it usually doesn't take much time (minus the building)</p>",
+        "id": 547769071,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761757184
+    },
+    {
+        "content": "<p>The Rust for Linux one: <a href=\"https://rust-for-linux.com/contributing#submit-checklist-addendum\">https://rust-for-linux.com/contributing#submit-checklist-addendum</a></p>",
+        "id": 547771352,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1761757873
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/547763716\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://github.com/torvalds/linux/compare/master...onur-ozkan:linux:ww_mutex?expand=1\">v7</a> is almost ready. I will do a self-review next, then prepare it (rebase the commits, write the changelog, etc.) for submission.</p>\n</blockquote>\n<p>I will be writing the changelog (since v6, basically the last commit) today and I will probably do the rebasing tomorrow or over the weekend. Feel free to take a pre-look at the github link and share any suggestions before I send it to the mailing list :)</p>",
+        "id": 547854930,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1761801940
+    },
+    {
+        "content": "<p>fyi <a href=\"https://lore.kernel.org/all/20251101161056.22408-1-work@onurozkan.dev/\">https://lore.kernel.org/all/20251101161056.22408-1-work@onurozkan.dev/</a> is awaiting reviews. Any feedback would be appreciated</p>",
+        "id": 557869096,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1763455489
+    },
+    {
+        "content": "<p>Will take a look tomorrow or the day after</p>",
+        "id": 558091717,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763511452
+    },
+    {
+        "content": "<p>(I'm still planning on looking at this, got distracted by some other stuff but I'll look first thing tomorrow)</p>",
+        "id": 558539633,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763676785
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> if you have a moment:<br>\nI'm going through th epatch series that Onur sent, and there's one patch hunk I just spotted that I think could use someone else's eyes on it as well:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">     </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">ww_mutex</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">     </span><span class=\"n\">_p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">Class</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">     </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">UnsafeCell</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// SAFETY: `Mutex` can be sent to another thread if the protected</span>\n<span class=\"c1\">// data `T` can be.</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Mutex</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n\n<span class=\"c1\">// SAFETY: `Mutex` can be shared across threads if the protected</span>\n<span class=\"c1\">// data `T` can be.</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"nb\">Sized</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Sync</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"nb\">Sync</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Mutex</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>\n<p>I -think- this makes sense but I just wanted to double check, the compiler would be smart enough to understand that the Mutex couldn't be passed to another thread which would allow it to outlive the lifetime of it's class, _p, right?<br>\n(also ignore the weird ordering - I'm going to poin tthat out in the review as well)</p>",
+        "id": 558747188,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757347
+    },
+    {
+        "content": "<p>The lifetime does enforce that the mutex cannot be used outside of <code>'a</code> regardless of threads, yes.</p>",
+        "id": 558747427,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757474
+    },
+    {
+        "content": "<p>ah cool</p>",
+        "id": 558747467,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757485
+    },
+    {
+        "content": "<p>thanks!</p>",
+        "id": 558747471,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757487
+    },
+    {
+        "content": "<p>Well there's one annoying detail since it's in <code>PhantomData</code>, which is that the compiler sometimes allows the <code>Mutex</code> to get dropped after the end of <code>'a</code></p>",
+        "id": 558747527,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757516
+    },
+    {
+        "content": "<p>Unless there is an explicit destructor for <code>Mutex</code>.</p>",
+        "id": 558747551,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757534
+    },
+    {
+        "content": "<p>oh, hm. is it possible to fix that with reordering where _p is?</p>",
+        "id": 558747646,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757571
+    },
+    {
+        "content": "<p>I'm not sure it's observable in this case.</p>",
+        "id": 558747726,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757606
+    },
+    {
+        "content": "<p>None of the fields have a destructor, after all.</p>",
+        "id": 558747758,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757617
+    },
+    {
+        "content": "<p>Field ordering is irrelevant.</p>",
+        "id": 558747777,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757627
+    },
+    {
+        "content": "<p>Gotcha, so if we did add an empty destructor though that would fix it?</p>",
+        "id": 558747895,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757683
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 558747910,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763757693
+    },
+    {
+        "content": "<p>gotcha</p>",
+        "id": 558747919,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763757697
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span> so the exec thing is no more? :/</p>\n<p>How do we automate rollbacks now?</p>",
+        "id": 560155119,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1764077523
+    },
+    {
+        "content": "<p>We still have it, I renamed it as LockSet in the latest version</p>",
+        "id": 560155642,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1764077651
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/558747895\">said</a>:</p>\n<blockquote>\n<p>Gotcha, so if we did add an empty destructor though that would fix it?</p>\n</blockquote>\n<p>shouldn't we handle releasing the <code>inner</code>field in drop?</p>",
+        "id": 560547517,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1764234986
+    }
+]

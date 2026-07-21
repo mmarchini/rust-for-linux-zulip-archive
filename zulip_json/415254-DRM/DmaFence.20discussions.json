@@ -1,0 +1,746 @@
+[
+    {
+        "content": "<p>I open this thread to capsule more or less all DmaFence discussions so they are easy to find.</p>\n<p>Note that I recently opened a <a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/merge_requests/1\">new draft</a> for DmaFence that took much previous design goals and feedback into account.</p>\n<p>You must not allocate in a fence signalling section, which is often the case when trying to register a callback, for instance in JobQueue.</p>\n<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> has rightfully pointed out that my callback registration is still broken. An idea I had which might solve this seems largely identical <a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/61/diffs#a5a71f917ff65cfe4c1a341fa7e55ae149d22863_0_172\">with one that</a> <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> had, too.</p>\n<p>I suppose what Daniel presents looks like I good solution, but if folks like <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> or <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> could take a look, too, I think that would be good.</p>\n<p>An ideal and ellegant solution in my mind would probably look ca. like that:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">FenceCallback</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">);</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">mem</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">pin_init</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"err\">…</span>\n<span class=\"n\">fence</span><span class=\"p\">.</span><span class=\"n\">register_callback</span><span class=\"p\">(</span><span class=\"n\">mem</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 590188544,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776859596
+    },
+    {
+        "content": "<p>I think I have an idea.</p>\n<p>The thing with the code presented by and Daniel is that we would basically store the same information that the C backend already has another time, in another allocation, in Rust.</p>\n<p>But this information is already stored deep down in the C dma_fence: </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">dma_fence</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">union</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">spinlock_t</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">extern_lock</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"n\">spinlock_t</span><span class=\"w\"> </span><span class=\"n\">inline_lock</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">dma_fence_ops</span><span class=\"w\"> </span><span class=\"n\">__rcu</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">ops</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">union</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">list_head</span><span class=\"w\"> </span><span class=\"n\">cb_list</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>There's a list of all callbacks that are waiting for this fence to be signalled. The fence  knows which callbacks are registered and which are signalled already.</p>\n<p>Now, if we were able to port the C backend so that the backend uses an XArray instead of a list, we might benefit twice. Once because the backend gets a bit faster since the xarray is more cache-friendly when iterating the callbacks.</p>\n<p>Twice because it might be possible to replace Daniel's <code>FenceCallbackRegistration</code> with some sort of ID wrapper</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">FenceRegistration</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">fence</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Fence</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"c1\">// no new memory, does not need allocation</span>\n<span class=\"w\">  </span><span class=\"n\">id</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>whose <code>id</code> would be used to obtain the correct callback through the XArray in the C fence. And then we could do <code>container_of</code>, if we can derive what generic data a callback data contains</p>\n<p>So we might end up with:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb_object</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">FenceCallback</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// allocates</span>\n\n<span class=\"o\">..</span><span class=\"p\">.</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">registration</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">fence</span><span class=\"p\">.</span><span class=\"n\">register_callback</span><span class=\"p\">(</span><span class=\"n\">cb_object</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// does not need allocation</span>\n</code></pre></div>\n<p>If you'd drop your registration, you'd look into the C backend whether it's still there, if yes, you get it back and can drop it – if not, it's signaled already (ownership over data being transferred back to the driver). </p>\n<p>Just had the idea a few mins ago. Not sure if I'm missing something, but it could be very clean because we'd rely on the C backend, who already has all the relevant information, doing the work? <span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span></p>",
+        "id": 590214314,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776865517
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> fyi the reason why I am taking a bit to reply is because I am rebasing all that code on 7.0 and it’s taking a while</p>",
+        "id": 590215124,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776865690
+    },
+    {
+        "content": "<p>xarray for the cb list comes with the extra annoyance that the xarray might allocate, and C users are potentially in a path where certain kind of allocations might not be possible</p>",
+        "id": 590224338,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776867665
+    },
+    {
+        "content": "<p>by \"the same information\", you mean the fact we encode whether it's been called or not through an Option&lt;T&gt;, which we also know that from the drm_fence_callback object (list_empty vs !list_empty)?</p>",
+        "id": 590227774,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776868440
+    },
+    {
+        "content": "<p>I believe the Option&lt;T&gt; was here so your FenceCallbackRegistration can give up its inner T (with a ::take()), and pass it to the ::signaled() method.</p>",
+        "id": 590228279,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776868542
+    },
+    {
+        "content": "<p>Please no</p>",
+        "id": 590228431,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776868567
+    },
+    {
+        "content": "<p>Consume the registration instead</p>",
+        "id": 590228480,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776868579
+    },
+    {
+        "content": "<p>It’s way simpler than producing a &amp;mut to call “take()”</p>",
+        "id": 590228610,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776868603
+    },
+    {
+        "content": "<p>I had the take approach at first, and it was hard to make lockdep happy</p>",
+        "id": 590228878,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776868667
+    },
+    {
+        "content": "<p>WDYM?</p>",
+        "id": 590228884,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776868669
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> The registration object, created through that closure, basically exists for the sole purpose of you being able to re-obtain your dma_fence_cb, to ask the dma_fence backend about the state.</p>\n<p>So the problem we are trying to solve is: How can we access our callback again, without allocating something when registering it?</p>\n<p>And my argument is that we already have the fence, so we could re-obtain it from the fence.</p>",
+        "id": 590229436,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776868797
+    },
+    {
+        "content": "<p>dma_fence_cb has to come from somewhere, so where would that be?</p>",
+        "id": 590229687,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776868862
+    },
+    {
+        "content": "<p>You mean where it is initially created?</p>",
+        "id": 590230019,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776868932
+    },
+    {
+        "content": "<p>where is dma_fence_cb living, yes</p>",
+        "id": 590230160,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776868963
+    },
+    {
+        "content": "<p>The Rust driver allocates it.<br>\nWhen registering it, memory ownership is given to the C backend, who keeps it in its cb_list</p>\n<p>If Rust needs it again, you access it via the Fence -&gt; dma_fence -&gt; cb_list -&gt; container_of</p>",
+        "id": 590230351,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776869009
+    },
+    {
+        "content": "<p>has to be embedded in some object, and you need to get back to some user-specific T</p>",
+        "id": 590230383,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776869015
+    },
+    {
+        "content": "<p>can you describe what this object containing dma_fence_cb looks like?</p>",
+        "id": 590230553,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776869051
+    },
+    {
+        "content": "<p>I mean, that's pretty much how <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> does it, isn't it? The FenceCallbackRegistration has a dma_fence_cb, plus an Option&lt;T&gt;</p>",
+        "id": 590231088,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776869168
+    },
+    {
+        "content": "<p>It would be the same as currently</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">FenceCb</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">FenceCbFunc</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// C struct needed for the backend.</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">dma_fence_cb</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"sd\">/// Driver data.</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">T</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The part I'm unsure about is whether we could make container_of work, IOW where to obtain the generic info from, considering that <code>Fence</code> cannot be generic</p>",
+        "id": 590231131,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776869177
+    },
+    {
+        "content": "<p>Well, not quite, Daniel's version keeps all the data stored in Rust and needs to allocate for <code>T</code></p>",
+        "id": 590231715,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776869320
+    },
+    {
+        "content": "<p>this \"get back to FenceCb from dma_fence_cb\" works (it's basically what we do for DriverFenceData), it's not really the problem. I think this gets tricky if T is pinned, because then you can't take the value, and pass ownership to the ::signaled() method</p>",
+        "id": 590232643,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776869573
+    },
+    {
+        "content": "<p>as for Daniel's version allocating memory separately, I don't think that's true, is it?</p>",
+        "id": 590232995,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776869658
+    },
+    {
+        "content": "<p>It's the entire point, no?<br>\nYou want some sort of handle returned by <code>let handle = fence.register_callback(cb)</code>, so that you can deregister that cb again.<br>\nAnd that handle needs to be allocated, which is why an <code>impl PinInit</code> is returned</p>",
+        "id": 590234456,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776869950
+    },
+    {
+        "content": "<p>that's the FenceCallbackRegistration you're talking about?</p>",
+        "id": 590235105,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776870073
+    },
+    {
+        "content": "<p><a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/blob/2ea570482a0439532e8fbcc846fedc819c62d4b3/rust/kernel/dma_fence.rs#L172\">Yes</a></p>",
+        "id": 590235190,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776870089
+    },
+    {
+        "content": "<p>okay, let's take it one field at a time:</p>\n<ul>\n<li>dma_fence_cb, you can't really get rid of, it's what gets registered to the C object</li>\n<li>Option&lt;T&gt; is just the size of T wrapped into an enum that encodes the state. So it's likely something like sizeof(T) + align(1bit, align_of(T)), since there's only two variants to encode (None and Some)</li>\n<li>ARef&lt;Fence&gt;, this one we \"could\" get rid of, but it would become a mess in term of lifetime control and who owns who (like, how do you deregister, if the fence you registered to is gone, and callback has been consumed)</li>\n</ul>",
+        "id": 590237003,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776870446
+    },
+    {
+        "content": "<p>is the problem the overhead of Option?</p>",
+        "id": 590238710,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776870801
+    },
+    {
+        "content": "<p>just to be clear, what I mean is that the allocation of a <code>FenceCallbackRegistration</code> object is still one block that contains everything for the callback to run <strong>and</strong> for the registration object to be dropped before this callback has run</p>",
+        "id": 590239885,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776871032
+    },
+    {
+        "content": "<p>if you were to dissociate the \"run\" from the \"unsubscribe\" aspects, you'd need <a class=\"message-link\" href=\"/#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/590231131\">#DRM &gt; DmaFence discussions @ 💬</a> for the callback execution side of things, plus another Registration object containing an opaque u32 ID plus the ARef&lt;Fence&gt;, so I'm not too sure we'd be saving memory. Am I missing something?</p>",
+        "id": 590241003,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776871295
+    },
+    {
+        "content": "<p>We're misunderstanding each other a bit. Let's agree on a few things first:</p>\n<ul>\n<li>Our problem is that we must be able to deregister callbacks</li>\n<li>If we didn't need that, we could design <code>fence.register_callback()</code> so that it does not allocate and would be 'done'</li>\n<li>The pin_init_from_closure is his way to give the driver the ability to allocate when it deems it appropriate / without violating the fence contract</li>\n</ul>\n<p>Right?</p>",
+        "id": 590423885,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776941419
+    },
+    {
+        "content": "<blockquote>\n<p>we must be able to deregister callbacks</p>\n</blockquote>\n<p>Yes</p>\n<blockquote>\n<p>If we didn't need that, we could design <code>fence.register_callback()</code> so that it does not allocate and would be 'done'</p>\n</blockquote>\n<p>Not really, you need the dma_fence_cb+T to live somewhere, so this memory has to be allocated. Where/when it's allocated is an implementation decision, and that's, I think, what we were discussing yesterday.</p>\n<blockquote>\n<p>The pin_init_from_closure is his way to give the driver the ability to allocate when it deems it appropriate / without violating the fence contract</p>\n</blockquote>\n<p>You can allocate uninitialized memory and initialize the FenceCallbackRegistration late thanks to PinInit approach, though it's still something you'd have to do explicitly (<code>KBox::new_uninit()</code> at alloc time + <code>KBox::??</code> to initialize in-place from the PinInit implementation? =&gt; that's a question for <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> or <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> )</p>",
+        "id": 590449835,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776946001
+    },
+    {
+        "content": "<blockquote>\n<p>Not really, you need the dma_fence_cb+T to live somewhere, so this memory has to be allocated. </p>\n</blockquote>\n<p>Yes, of course. I never disputed that.</p>",
+        "id": 590450474,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776946172
+    },
+    {
+        "content": "<p>okay, you meant  <code>fence.register_callback()</code> takes ownership of your FenceCallback object and the fence has to signal for this FenceCallback to be dropped</p>",
+        "id": 590451453,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776946416
+    },
+    {
+        "content": "<p>Yes.</p>\n<p>The <strong>only thing</strong> I am arguing about is that a <code>fence.deregister_callback(id)</code> could be <strong>possible</strong>, where that function re-obtains the memory, for example by searching C's <code>cb_list</code> for the associated callback</p>\n<p>Doesn't mean we have to aim for that, I'm just saying that I am considering that option</p>",
+        "id": 590451769,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776946509
+    },
+    {
+        "content": "<p>if producing the opaque ID doesn't involve allocating memory (so no xarray, I guess), yes. But my question then is, what do we save by not having the <code>register_callback()</code> return a Registration object that has this dma_fence_cb embedded (no search needed, and we don't have to change the C API).</p>",
+        "id": 590452717,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776946755
+    },
+    {
+        "content": "<p>We need to add some extra machinery to pin-init to reinitialize the Box in this case, but I already talked to Benno about it and he cleared it</p>",
+        "id": 590453086,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776946843
+    },
+    {
+        "content": "<p>We specifically need this, for the record:</p>\n<p><code>fn drop_contents_pinned(this: Pin&lt;Box&lt;T&gt;&gt;) -&gt; Box&lt;MaybeUninit&lt;T&gt;&gt;</code></p>",
+        "id": 590453442,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776946924
+    },
+    {
+        "content": "<p>From that we would reinitialize the box with </p>\n<p><code>&lt;Box&lt;MaybeUninit&lt;_&gt;&gt; as InPlaceWrite&gt;::write_pin_init(self, init: impl PinInit&lt;T, E&gt;) -&gt; Result&lt;Pin&lt;Box&lt;T&gt;&gt;, E&gt;</code></p>",
+        "id": 590453792,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776947002
+    },
+    {
+        "content": "<p>I think this might result in a more readable and a bit more logical API:</p>\n<p>With the pin solution it is:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">waker</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">DependencyWaker</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">jobq</span><span class=\"p\">.</span><span class=\"n\">clone</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">job_ptr</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">FenceCbRegistration</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">dep</span><span class=\"p\">.</span><span class=\"n\">fence</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">waker</span><span class=\"p\">);</span>\n\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">reg</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">pin_init</span><span class=\"p\">(</span><span class=\"n\">callback</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// does the actual registering + allocation</span>\n</code></pre></div>\n<p>Whereas with my idea it would be:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">waker</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">DependencyWaker</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">jobq</span><span class=\"p\">.</span><span class=\"n\">clone</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">job_ptr</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">FenceCbRegistration</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">waker</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// does the allocation</span>\n\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">reg</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">fence</span><span class=\"p\">.</span><span class=\"n\">register_callback</span><span class=\"p\">(</span><span class=\"n\">callback</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// no alloc</span>\n</code></pre></div>\n<p>I don't have super hard feelings about it, I think Daniel's solution does work.</p>\n<p>But I believe that a callback registration is an operation <strong>on</strong> the fence.</p>\n<p>Just like I would not expect a fence to get signalled like that:  <code>KBox::pin_init(f);</code>, but like so: <code>fence.signal()</code></p>",
+        "id": 590454061,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776947071
+    },
+    {
+        "content": "<p>The <code>Box::write_pin_init()</code> is something internal to <code>FenceCbRegistration::new()</code> BTW</p>",
+        "id": 590454600,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947190
+    },
+    {
+        "content": "<p>I mean, it can even be a method of Fence</p>",
+        "id": 590454758,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947221
+    },
+    {
+        "content": "<p>(though I'm not too sure we can get back to ARef&lt;Fence&gt; from &amp;Fence, so that wouldn't really be a method taking &amp;self...)</p>",
+        "id": 590455274,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947289
+    },
+    {
+        "content": "<p>if it's just about ergonomics, we can probably find something</p>",
+        "id": 590455767,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947397
+    },
+    {
+        "content": "<p>You can do ArcBorrow to get the ref I think</p>",
+        "id": 590456405,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776947531
+    },
+    {
+        "content": "<p>ArcBorrow if for Arc not ARef. But I see a bunch of From implementations for ARef&lt;xxx&gt; taking a ref and turning it into an ARef, so that's doable</p>",
+        "id": 590456686,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947607
+    },
+    {
+        "content": "<p>yep, it's there =&gt; <a href=\"https://rust.docs.kernel.org/src/kernel/sync/aref.rs.html#158-164\">https://rust.docs.kernel.org/src/kernel/sync/aref.rs.html#158-164</a></p>",
+        "id": 590457113,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776947729
+    },
+    {
+        "content": "<p>OK.</p>\n<p>I guess this solution is fine. Maybe we can pretty up the API a bit like that, but since it solves the problem, I'm OK with going with it</p>",
+        "id": 590461141,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776948573
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"929978\">Boris Brezillon</span> <a href=\"#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/590449835\">said</a>:</p>\n<blockquote>\n<p><code>KBox::new_uninit()</code> at alloc time + <code>KBox::??</code> to initialize in-place from the PinInit implementation?</p>\n</blockquote>\n<p><code>KBox::new_uninit()</code> gives you a <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code>, since we have an <code>InPlaceWrite&lt;T&gt;</code> impl for <code>Box&lt;MaybeUninit&lt;T&gt;, A&gt;</code>, you can call <code>write_pin_init()</code> on a <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code>. This call will consume the <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code> and return a new <code>Pin&lt;KBox&lt;T&gt;&gt;</code> object.</p>",
+        "id": 590463424,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776949117
+    },
+    {
+        "content": "<p>^ needs drop_contents_pinned() as I said</p>",
+        "id": 590463636,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776949171
+    },
+    {
+        "content": "<p>It's not really that this is needed for the above to work, but you need this if you want to recycle a pinned box, yes.</p>",
+        "id": 590464263,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776949294
+    },
+    {
+        "content": "<p>I have updated my <a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/merge_requests/1\">discussion merge request</a></p>\n<p><span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> <span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> </p>\n<p>Important news:</p>\n<ul>\n<li>Allow for pre-allocating fence callbacks (stolen from Daniel)</li>\n<li>Allow for pre-allocating fences</li>\n<li>Have fences refcount the fctx</li>\n</ul>\n<p>I gave it a quick test run with my unit test.</p>\n<p>The JobQueue in this branch is currently not operational; I want to fully port it next to the pre-allocated fences.</p>\n<p>Please take a look and tell me whether you deem it ready enough for a wider discussion</p>",
+        "id": 591786286,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1777467086
+    },
+    {
+        "content": "<p>I come to think that we will <strong>always</strong> need to wait a grace period before dropping a <code>DriverFence</code></p>\n<p><a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-dma-fence-v1/rust/kernel/dma_buf/dma_fence.rs?ref_type=heads#L663\">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-dma-fence-v1/rust/kernel/dma_buf/dma_fence.rs?ref_type=heads#L663</a></p>\n<p>What we achieved so far is that data is freed through <code>call_rcu()</code> so that no <code>drop()</code> needs to be called from atomic context, which is what <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> was keen on.</p>\n<p>We agreed that in case of <code>core::memory::needs_drop()</code>, we want to drop with <code>call_rcu()</code>, otherwise can drop immediately.</p>\n<p>However, something that does not need drop could still be accessing <code>data</code> right now, even if data is just <code>i32</code>.</p>\n<p>The memory the <code>i32</code> resides in could not be freed thanks to refcounting. However, data could be accessed that Rust believes is dropped.</p>\n<p>I'm not entirely sure whether that is illegal?</p>",
+        "id": 597832911,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779799066
+    },
+    {
+        "content": "<p>What we sort of have here is basically our own <code>Revocable</code>, where the fence's signalled-flag is the <code>revoked</code> boolean</p>",
+        "id": 597833094,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779799103
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span>  <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>  ^</p>",
+        "id": 597836791,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779800120
+    },
+    {
+        "content": "<blockquote>\n<p>However, something that does not need drop could still be accessing <code>data</code> right now, even if data is just <code>i32</code>.</p>\n</blockquote>\n<p>You mean one of the dma_fence_ops::xxx implementation accessing data?</p>",
+        "id": 597842925,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779801560
+    },
+    {
+        "content": "<p>Aren't those calls protected with the rcu read lock?</p>",
+        "id": 597843069,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779801597
+    },
+    {
+        "content": "<p>Yes, that's what I mean.</p>\n<p>They are protected by the RCU read lock, but our plan so far was to only defer dropping with RCU <em>if</em> <code>data</code> needs drop.</p>\n<p>The question boils down to:<br>\nIs it illegal to access something that was dropped, no matter whether dropping it deallocates the backing memory?</p>\n<p>If it is illegal, we would have to do </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">needs_drop</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">call_rcu</span><span class=\"p\">(</span><span class=\"nb\">drop</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">))</span>\n<span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"n\">synchronize_rcu</span><span class=\"p\">()</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 597843958,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779801804
+    },
+    {
+        "content": "<p>If <code>needs_drop</code> returns false, you do not need to drop it at all.</p>",
+        "id": 597845606,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779802179
+    },
+    {
+        "content": "<p>But what if someone does. Is that undefined behavior?</p>",
+        "id": 597846524,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779802391
+    },
+    {
+        "content": "<p>does what? I think needs_drop() tells you if there's anything to be executed on drop()</p>",
+        "id": 597847363,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779802576
+    },
+    {
+        "content": "<p>so if it returns false, the drop() implementation for this object is considered to be a NOP</p>",
+        "id": 597847463,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779802596
+    },
+    {
+        "content": "<p>Invoking drop on a type for which <code>needs_drop()</code> returns false is always a no-op.</p>",
+        "id": 597847635,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779802631
+    },
+    {
+        "content": "<p>Cool. Then we should be good I suppose</p>",
+        "id": 597847756,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779802664
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597832911\">said</a>:</p>\n<blockquote>\n<p>What we achieved so far is that data is freed through <code>call_rcu()</code> so that no <code>drop()</code> needs to be called from atomic context, which is what @Danilo Krummrich was keen on.</p>\n</blockquote>\n<p>I remember being told that <code>call_rcu()</code> closures may also be invoked in atomic context, so unless I misremember or have been told incorrectly, this doesn't help with the atomic context part.</p>",
+        "id": 597847955,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779802703
+    },
+    {
+        "content": "<p>Who said that? Paul?</p>\n<p>If there were restrictions for what you can execute for <code>rcu_callback_t</code>, I'd expect that to be documented very explicitly, but can't see any such warning</p>",
+        "id": 597850205,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779803173
+    },
+    {
+        "content": "<p>By default <code>call_rcu()</code> callbacks run in softirq context (i.e. non-sleepable), but may be offloaded to a kthread. Obviously, for PREEMPT_RT it is always a kthread. For the \"don't exectute in atomic context\" part queue_rcu_work() is the correct tool.</p>",
+        "id": 597850292,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779803193
+    },
+    {
+        "content": "<p>I don't remember who said it, but I recall the part about softirq context as well, which is the reason for it being non-sleepable.</p>",
+        "id": 597850648,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779803269
+    },
+    {
+        "content": "<p>Then we need to rethink <code>rcu::RcuBox</code>, whose purpose would then probably be a pure <code>defer free()</code></p>",
+        "id": 597850803,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779803304
+    },
+    {
+        "content": "<p>Or anything else that is non-sleepable.</p>",
+        "id": 597851718,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779803507
+    },
+    {
+        "content": "<p>Am I the only one who is afraid that our \"don't trust the driver\" approach comes at a higher and higher burden?</p>\n<p>We would now delegate all drop operations for fence data to a workqueue, because we don't trust the driver to do non-sleepable things in <strong>Fence data</strong>.</p>\n<p>We  would, however, provide <code>RcuBox</code> in which we <em>just as well</em> would have to document \"Driver, the data inside this box must not sleep when dropping. If it needs to sleep, use this other drop container that we wrote for DmaFence (originallry\"</p>\n<p>So in part, we just move the burden / documentation around</p>",
+        "id": 597852583,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779803714
+    },
+    {
+        "content": "<p>What about do a <code>call_srcu</code>?</p>",
+        "id": 597852923,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779803794
+    },
+    {
+        "content": "<p>SRCU callbacks are always invoked from workqueue</p>",
+        "id": 597852995,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779803810
+    },
+    {
+        "content": "<p>We could define a new trait <code>AtomicDrop</code> with a derive macro that lets drivers say that their type is safe to drop in atomic context.</p>",
+        "id": 597853008,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779803815
+    },
+    {
+        "content": "<p>Then require it for <code>RcuBox</code> and <code>Fence</code></p>",
+        "id": 597853058,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779803824
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597853008\">said</a>:</p>\n<blockquote>\n<p>We could define a new trait <code>AtomicDrop</code> with a derive macro that lets drivers say that their type is safe to drop in atomic context.</p>\n</blockquote>\n<p>It'll be huge pain to do this if this isn't auto trait.</p>",
+        "id": 597853185,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779803854
+    },
+    {
+        "content": "<p>Eh, I don't think it's too bad. We can have a derive macro.</p>",
+        "id": 597853397,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779803902
+    },
+    {
+        "content": "<p>I guess whether A or B is good for Fence depends on the question whether we actually <em>want</em> to allow Fence::data::drop() to sleep</p>",
+        "id": 597855148,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779804263
+    },
+    {
+        "content": "<p>Well, I think the cost/benefit ratio is a not worth it for this case, given that you can still easily take a spinlock and drop something that is not <code>AtomicDrop</code> and there's no language mechanism to prevent that. Doing such trait require you to implement it for a lot of types in <code>core</code> and <code>kernel</code>, and just be able to use it for <code>RcuBox</code> feels an overkill.</p>\n<p><code>DmaFence</code> can be solved with SRCU, which I think isn't really an issue as DRM is already using SRCU in a few places.</p>\n<p>I'd rather implement a auto-trait-like stuff in klint and use that instead, at least then I can still use it to do some best effort analysis for spinlock case. Klint already has some mechanisms in analyzing sleep behaviours; if we're not aiming for no-false-negative then it shouldn't be that tricky to implement something specifically for RcuBox.</p>",
+        "id": 597855205,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779804275
+    },
+    {
+        "content": "<p>If we can't prevent the driver from taking locks etc, then we could just as well use normal RCU</p>\n<p>Reason being that you would then still rely on documentation: \"Don't implement fence::data::drop() like this or like that\"</p>",
+        "id": 597855791,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779804395
+    },
+    {
+        "content": "<p>Quick question, would an ARef&lt;Something&gt; in T, with Something::drop() being detected as sleepable be caught by this mechanism?</p>",
+        "id": 597856072,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779804449
+    },
+    {
+        "content": "<p>That logic has to depend on what <code>Something</code> is.</p>",
+        "id": 597856351,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779804498
+    },
+    {
+        "content": "<p>A trait could let each inner type declare whether its drop is sleepable or not.</p>",
+        "id": 597856427,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1779804514
+    },
+    {
+        "content": "<p>You mean <code>Arc</code>? Both the trait approach or klint can detect that.</p>",
+        "id": 597856455,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779804521
+    },
+    {
+        "content": "<p>I'm of course worried about explicit ::drop() implementations doing something that's not allowed, but I'm even more worried about implicit drop()s on contained types, because those are the ones the user doesn't necessarily pay attention to</p>",
+        "id": 597856488,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779804531
+    },
+    {
+        "content": "<p>If the read-side critical section does not require to be sleepable, then SRCU is not the way to go. If we don't want the trait Alice proposed, we should either document it, or if sleepable Drop is a reasonable use-case, use queue_rcu_work(). Also, can't we catch violations with <code>klint</code>?</p>",
+        "id": 597856492,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779804532
+    },
+    {
+        "content": "<p><code>queue_rcu_work</code> does not work, as it is really just <code>call_rcu</code> + <code>queue_work</code>. Only the RCU part orders with RCU barriers, and now you have the issue that you cannot guarantee the work to be complete when barrier completes in FenceCtx drop.</p>",
+        "id": 597857466,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779804722
+    },
+    {
+        "content": "<p>Oh well, if additionally the code relies on an <code>rcu_barrier()</code> then <code>queue_rcu_work()</code> does indeed not work; I thought it was exclusively about deferring <code>drop()</code> until all callbacks did complete.</p>",
+        "id": 597858886,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805018
+    },
+    {
+        "content": "<p>That <strong>and</strong> doing something about the possiblilty that a DriverFence can drop in atomic context</p>",
+        "id": 597859082,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779805065
+    },
+    {
+        "content": "<p>Instead of the <code>rcu_barrier()</code>the code could wait for the RCU work though.</p>",
+        "id": 597859101,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805068
+    },
+    {
+        "content": "<p>Not sure how would you implement that in <code>FenceCtx</code>; could be done but the complexity is growing even more now :)</p>",
+        "id": 597859264,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779805102
+    },
+    {
+        "content": "<p>In any case, we don't want an SRCU read-side critical section in a hot path where it is not required for the read-side.</p>",
+        "id": 597859343,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805130
+    },
+    {
+        "content": "<p>How would the <code>klint</code> idea work, what would need to be done for that?</p>",
+        "id": 597859474,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779805164
+    },
+    {
+        "content": "<p>Well, I need to actually implement it :)</p>",
+        "id": 597859592,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779805197
+    },
+    {
+        "content": "<p>I mean, the rest of the kernel so far solves this through documentation + <code>might_sleep()</code> et al, warning on runtime.</p>\n<p>If we need to get it water tight on compile time.. seems there is then a bit of work to be done</p>",
+        "id": 597860125,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779805348
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597859343\">said</a>:</p>\n<blockquote>\n<p>In any case, we don't want an SRCU read-side critical section in a hot path where it is not required for the read-side.</p>\n</blockquote>\n<p>Which path is hot enough that you think the SRCU overhead (basically 1 per-cpu counter increment + 1 memory barrier) is too much?</p>",
+        "id": 597860906,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779805526
+    },
+    {
+        "content": "<p>Currently, we seem to have two users in-tree that have sleepable code in release(), so there are cases.</p>",
+        "id": 597861002,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805551
+    },
+    {
+        "content": "<p>If we're stuck with normal RCU, then I think documenting that drop must not sleep is the first reasonable step.</p>",
+        "id": 597861009,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779805554
+    },
+    {
+        "content": "<p>But they do not seem unavoidable.</p>",
+        "id": 597861381,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805645
+    },
+    {
+        "content": "<p>Submitting jobs to the GPU / accelerator is rather performance critical, srcu_read_lock() / srcu_read_unlock() add two smp_mb() which are avoidable.</p>",
+        "id": 597861915,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779805788
+    },
+    {
+        "content": "<p>When submitting jobs you have a <code>DriverFence</code> which doesn't need this, though? Only callbacks that cannot ascertain that <code>DriverFence</code> is not yet destroyed need to use SRCU to protect.</p>",
+        "id": 597862390,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779805899
+    },
+    {
+        "content": "<p>Could we maybe start with a compile-time FenceData::needs_drop() == false check?</p>",
+        "id": 597862715,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779805986
+    },
+    {
+        "content": "<p>With the FenceCtx design, I'd assume that most resources would be attached to the FenceCtx anyway</p>",
+        "id": 597862886,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779806033
+    },
+    {
+        "content": "<p>Need to check what <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> put in his FenceData</p>",
+        "id": 597864779,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779806502
+    },
+    {
+        "content": "<p>IIRC nothing, since we can derive the current syncobj value from the GPU itself, but apparently that is not the case for all drivers?</p>",
+        "id": 597865029,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1779806566
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597862390\">said</a>:</p>\n<blockquote>\n<p>When submitting jobs you have a <code>DriverFence</code> which doesn't need this, though? Only callbacks that cannot ascertain that <code>DriverFence</code> is not yet destroyed need to use SRCU to protect.</p>\n</blockquote>\n<p>Fair enough, not a concern for me if it is not in a hot path.</p>",
+        "id": 597865231,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1779806624
+    },
+    {
+        "content": "<blockquote>\n<p>IIRC nothing, since we can derive the current syncobj value from the GPU itself, but apparently that is not the case for all drivers?</p>\n</blockquote>\n<p>Yep, I just checked those structs are empty indeed</p>",
+        "id": 597867389,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807158
+    },
+    {
+        "content": "<p>OK. So we shall do SRCU and then the \"only\" thing we need to tell the driver is to be careful with taking locks in fence::data::drop()?</p>",
+        "id": 597867577,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779807197
+    },
+    {
+        "content": "<p>I mean, that's basically the same issue</p>",
+        "id": 597867813,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807254
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span>  I asked a llm to do a research on the other drivers back then, to see if we could remove this FenceData thing completely, and it said no and pointed to amdgpu</p>",
+        "id": 597867891,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1779807269
+    },
+    {
+        "content": "<p>All sorts of C drivers do container_of on their fence. That is their equivalent of Rust's <code>data: T</code></p>",
+        "id": 597868059,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779807307
+    },
+    {
+        "content": "<p>yeah, but notion of context was lacking there</p>",
+        "id": 597868250,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807348
+    },
+    {
+        "content": "<p>in your design, all callbacks basically go back to the context</p>",
+        "id": 597868341,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807368
+    },
+    {
+        "content": "<p>in which you can store additional stuff</p>",
+        "id": 597868475,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807394
+    },
+    {
+        "content": "<p>Anyways.</p>\n<p>So then we enforce <code>must_not_need_drop() == true</code> and can remove the RCU code from <code>DriverFence::drop()</code>, aye?</p>\n<p>I need to keep the rcu_barrier, though, since the fence context name parameters need to be guarded.</p>",
+        "id": 597868872,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779807495
+    },
+    {
+        "content": "<p>just to be clear, the real trouble come as soon as FenceData holds on external shared resources which might be dropped as part of the DriverFence::drop() if and only if the FenceData instance is the last owner</p>",
+        "id": 597868959,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807519
+    },
+    {
+        "content": "<blockquote>\n<p>I need to keep the rcu_barrier, though, since the fence context name parameters need to be guarded.</p>\n</blockquote>\n<p>Yep, you need it to make sure the context is not dropped before all callbacks have returned</p>",
+        "id": 597869579,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807657
+    },
+    {
+        "content": "<p>or something along those lines (sorry, I just paged everything DmaFence related out)</p>",
+        "id": 597869923,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1779807733
+    },
+    {
+        "content": "<p>Mhm, thinking about it, if we really prohibit anything that needs Drop(), then the driver couldn't even store anything allocated, like even a string for debugging, in their fences anymore</p>\n<p>I feel that this might provoke people into using raw pointers as data. They don't need drop.</p>",
+        "id": 598014271,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779866440
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> </p>\n<p>It would seem that the \"drop in atomic context\" problem goes even a few centimeters deeper than expected</p>\n<p>If we now indeed drop <code>DriverFenceData</code> with <code>call_rcu()</code>, then the last reference to <code>FenceCtx</code> can also drop in atomic context.</p>\n<p>It is illegal to do both <code>rcu_barrier()</code> and <code>synchronize_rcu()</code> in atomic context. So I think we can do neither in <code>FenceCtx::drop()</code>.</p>\n<p>For dma_fence itself, this is fine, since the <code>call_rcu()</code> already guarantees that there can be no UAF. However, you still need some synchronization to guard against module unload.</p>\n<p>Do Rust kernel modules execute a <code>rcu_barrier()</code> before unloading?</p>",
+        "id": 603641460,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781597060
+    },
+    {
+        "content": "<p>So, first off, I wonder why the DriverFenceData::fctx needs to be an Arc&lt;FenceCtx&gt;. Can't we define that FenceCtx outlives any of the DriverFenceData is instantiated with lifetimes, and have <code>fctx: &amp;FenceCtx</code>? If we go for this, this means that there's no 'DriverFenceData can release the last Arc&lt;FenceCtx&gt;\" and thus we can't end up with FenceCtx being destroyed from the DriverFenceData::drop() path</p>",
+        "id": 603647602,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1781598237
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> self-refential pin-init wip: <a href=\"https://github.com/nbdd0121/linux/tree/dev/selfref\">https://github.com/nbdd0121/linux/tree/dev/selfref</a></p>",
+        "id": 611102229,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1784216019
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> ok, assuming this solves the self-referential issue, how about the T: 'static bound in XArray?</p>",
+        "id": 611345302,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1784311213
+    },
+    {
+        "content": "<p>What bound?</p>",
+        "id": 611345440,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1784311255
+    }
+]

@@ -1,0 +1,127 @@
+<html>
+<head><meta charset="utf-8"><title>core::ops::Receiver · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html">core::ops::Receiver</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="326629766"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326629766" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326629766">(Feb 08 2023 at 16:22)</a>:</h4>
+<p>Is there precedent for using <code>core::ops::Receiver</code> to create ergonomic subclassable kernel types?</p>
+<p>A pattern I keep running into over and over again while writing abstractions is that I have some kernel object <code>O</code> which needs to be subclassable by the user (from the C side, via struct composition). So I end up with <code>O&lt;T&gt;</code> containing the raw kernel object and a <code>T</code>. Then I add a <code>Deref&lt;O&lt;T&gt;&gt; -&gt; T</code> impl, so given an <code>O&lt;T&gt;</code> you can call things on <code>T</code>. But if those methods take just the <code>&amp;self</code> as the receiver, they can only interact with the user-implemented <code>T</code> type, not the actual <code>O&lt;T&gt;</code> kernel object. So I wind up with stuff like <code>fn foo(this: &amp;O&lt;T&gt;)</code> when I need to give the methods access to the outer object, which is quite ugly (especially to call). What I really want is <code>fn foo(self: &amp;O&lt;T&gt;)</code>, which works if the type implements <code>core::ops::Receiver</code>.</p>
+<p>Here's an example of not using <code>Receiver</code>: <a href="https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L164">https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L164</a><br>
+And here's one using it (a trivial one, which I just implemented): <a href="https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L128">https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L128</a></p>
+<p>Is there some other pattern to solve this issue I don't know about? Should I just start switching things to use <code>Receiver</code> impls this way?</p>
+
+
+
+<a name="326633962"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326633962" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326633962">(Feb 08 2023 at 16:39)</a>:</h4>
+<p>I think that <code>Deref</code> could only be used for smart pointers: <a href="https://doc.rust-lang.org/std/ops/trait.Deref.html">https://doc.rust-lang.org/std/ops/trait.Deref.html</a>, in other words, using it for subclass (or inheritance) is not idiomatic, at least that's what I've heard.</p>
+
+
+
+<a name="326634360"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326634360" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326634360">(Feb 08 2023 at 16:40)</a>:</h4>
+<blockquote>
+<p>Implementing Deref for smart pointers makes accessing the data behind them convenient, which is why they implement Deref. On the other hand, the rules regarding Deref and DerefMut were designed specifically to accommodate smart pointers. Because of this, Deref should only be implemented for smart pointers to avoid confusion.</p>
+</blockquote>
+
+
+
+<a name="326636563"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326636563" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326636563">(Feb 08 2023 at 16:50)</a>:</h4>
+<p>Just FYI: <a href="https://github.com/rust-unofficial/patterns/blob/main/anti_patterns/deref.md">https://github.com/rust-unofficial/patterns/blob/main/anti_patterns/deref.md</a></p>
+
+
+
+<a name="326637909"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326637909" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326637909">(Feb 08 2023 at 16:56)</a>:</h4>
+<p>And even for <code>impl Deref</code>, using regular parameter for <code>&amp;Self</code> is recommended: <a href="https://marabos.nl/atomics/building-arc.html#mutation">https://marabos.nl/atomics/building-arc.html#mutation</a></p>
+<blockquote>
+<p>This function does not take a self argument, but takes a regular argument (named arc) instead. This means it can only be called as <code>Arc::get_mut(&amp;mut a)</code>, and not as <code>a.get_mut()</code>. This is advisable for types that implement Deref, to avoid ambiguity with a similarly named method on the underlying T.</p>
+</blockquote>
+
+
+
+<a name="326640719"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326640719" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326640719">(Feb 08 2023 at 17:09)</a>:</h4>
+<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>
+<p>I'd love to hear of a better solution if there is one ^^</p>
+
+
+
+<a name="326641938"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326641938" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326641938">(Feb 08 2023 at 17:14)</a>:</h4>
+<p>Could you make a function &amp;O&lt;T&gt; -&gt; &amp;T ?</p>
+
+
+
+<a name="326642503"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326642503" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326642503">(Feb 08 2023 at 17:17)</a>:</h4>
+<p>but it’s not deref</p>
+
+
+
+<a name="326642561"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326642561" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326642561">(Feb 08 2023 at 17:17)</a>:</h4>
+<p>Yes, I've used that pattern too (thought it's a bit ugly with all the <code>foo.inner().bar()</code>, but that doesn't solve the problem of methods on <code>T</code> wanting to access the outer <code>O&lt;T&gt;</code>.</p>
+
+
+
+<a name="326643386"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326643386" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326643386">(Feb 08 2023 at 17:21)</a>:</h4>
+<p>Consider <a href="https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L119">this</a>. Note that <code>pending</code> is a member of <code>JobFence</code> and <code>signal()</code> is a method on <code>FenceObject&lt;T&gt;</code>. Doing it like this lets me just have a <code>FenceObject&lt;Driver&gt;</code> object around and the code can call <code>fence.command_complete()</code> and that ends up calling through to the outer <code>FenceObject&lt;T&gt;</code>. Without the <code>Receiver</code> trick, that would have to be <code>JobFence::command_complete(fence)</code>, and without the <code>Deref</code> additionally that would have to use <code>this.inner().pending.(...)</code>.</p>
+
+
+
+<a name="326644375"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326644375" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326644375">(Feb 08 2023 at 17:25)</a>:</h4>
+<p>Don’t take me wrong, I’ve used these patterns and want to use them, so I understand you. But as the doc said, sometimes balancing ergonomic with other things is important …</p>
+
+
+
+<a name="326644856"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326644856" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326644856">(Feb 08 2023 at 17:27)</a>:</h4>
+<p>Without ergonomic, you will have to repeat yourself sometimes, but if the price is “it’s clear for others to understand the code”, it’s worth.</p>
+
+
+
+<a name="326658739"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326658739" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326658739">(Feb 08 2023 at 18:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326640719">said</a>:</p>
+<blockquote>
+<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>
+<p>I'd love to hear of a better solution if there is one ^^</p>
+</blockquote>
+<p>Not sure whether it can solve your issue, but in workqueue wrapper, this is a <code>WorkAdapter</code> which kinda achieves that <code>T contains O</code></p>
+
+
+
+<a name="326665340"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326665340" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326665340">(Feb 08 2023 at 19:10)</a>:</h4>
+<p>You may be able to do <code>impl O&lt;T&gt; { fn foo(&amp;self) {} }</code> to have <code>fn foo(self: O&lt;T&gt;)</code>.</p>
+
+
+
+<a name="326972742"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/core%3A%3Aops%3A%3AReceiver/near/326972742" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver.html#326972742">(Feb 10 2023 at 06:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326658739">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326640719">said</a>:</p>
+<blockquote>
+<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>
+<p>I'd love to hear of a better solution if there is one ^^</p>
+</blockquote>
+<p>Not sure whether it can solve your issue, but in workqueue wrapper, this is a <code>WorkAdapter</code> which kinda achieves that <code>T contains O</code></p>
+</blockquote>
+<p>FWIW,   <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=d1977ade9ff0fc03bf5595e34a3a5d57">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=d1977ade9ff0fc03bf5595e34a3a5d57</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

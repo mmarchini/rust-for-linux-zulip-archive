@@ -1,0 +1,266 @@
+[
+    {
+        "content": "<p>I need to put something inside a lock that needs to be initialized pinned. The current lock initializer constructors take the protected type by value. I want to pass <code>impl PinInit&lt;_&gt;</code> instead. <a href=\"https://github.com/metaspace/linux/commit/9beeaad1da228f3e8ffdadb79a95dfa185da7863\">This patch</a> works for my use case. Is this the right direction? <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span></p>",
+        "id": 423596805,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709037446
+    },
+    {
+        "content": "<p>Spinlock implements DerefMut, so you can get a <code>&amp;mut T</code> to the contents. That's not allowed for pinned values.</p>",
+        "id": 423597379,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709037650
+    },
+    {
+        "content": "<p>Most likely, you'll need a separate lock type.</p>",
+        "id": 423597398,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709037658
+    },
+    {
+        "content": "<p>Aside from what Alice mentioned, two other things:</p>\n<ul>\n<li>no need to have two functions, since <code>impl PinInit&lt;T&gt; = impl PinInit&lt;T, Infallible&gt;</code> and our error should be convertible from <code>Infallible</code> (<code>crate::error::Error: From&lt;Infallible&gt;</code>), so just the <code>try_...</code> version should be enough</li>\n</ul>\n<blockquote>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">kernel</span>::<span class=\"n\">init</span>::<span class=\"n\">pin_init_from_closure</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">place</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"n\">t</span><span class=\"p\">.</span><span class=\"n\">__pinned_init</span><span class=\"p\">(</span><span class=\"n\">place</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">)</span>\n<span class=\"p\">})}</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>It would probably be better to put this in its own function under <code>kernel::init</code> and then use that function here instead.</p>",
+        "id": 423598226,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709037945
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423597379\">said</a>:</p>\n<blockquote>\n<p>Spinlock implements DerefMut, so you can get a <code>&amp;mut T</code> to the contents. That's not allowed for pinned values.</p>\n</blockquote>\n<p>we could also change the lock to return a pinned guard</p>",
+        "id": 423598637,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709038074
+    },
+    {
+        "content": "<p>I guess we could add <code>where T: Unpin</code> to the <code>DerefMut</code> impl.</p>",
+        "id": 423598817,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709038130
+    },
+    {
+        "content": "<p>And add a method for returning <code>Pin&lt;&amp;mut T&gt;</code>.</p>",
+        "id": 423598860,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709038145
+    },
+    {
+        "content": "<p>what is the problem with returning <code>Pin&lt;Guard&lt;'_, T, B&gt;&gt;</code></p>",
+        "id": 423599307,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709038302
+    },
+    {
+        "content": "<p>Hmm, interesting. It might work.</p>",
+        "id": 423599989,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709038516
+    },
+    {
+        "content": "<p>I guess I could put a <code>Pin&lt;Box&lt;_&gt;</code> in my lock, but I would like to not incur the extra pointer deref</p>",
+        "id": 423600324,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709038609
+    },
+    {
+        "content": "<p>I don't see an issue with assuming that the data inside of a lock will have to be pinned, we already require that for the lock and there are workarounds for when you really have something <code>!Unpin</code> that you still need to move</p>",
+        "id": 423600670,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709038696
+    },
+    {
+        "content": "<p>So just modifying <code>lock()</code> to return <code>Pin&lt;Guard&lt;...&gt;&gt;</code> should be enough</p>",
+        "id": 423600783,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709038735
+    },
+    {
+        "content": "<p>does this mean the get_mut() function will need to return Pin&lt;&amp;mut T&gt; now, since we are moving to structurally pinning data in Lock</p>",
+        "id": 423610080,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709041911
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 423610153,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709041926
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423610080\">said</a>:</p>\n<blockquote>\n<p>does this mean the get_mut() function will need to return Pin&lt;&amp;mut T&gt; now, since we are moving to structurally pinning data in Lock</p>\n</blockquote>\n<p>you mean deref_mut() ?</p>",
+        "id": 423615679,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709043587
+    },
+    {
+        "content": "<p>no, Boqun is probably talking about <a href=\"https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/\">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>",
+        "id": 423615856,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709043625
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423615856\">said</a>:</p>\n<blockquote>\n<p>no, Boqun is probably talking about <a href=\"https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/\">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>\n</blockquote>\n<p>Oh, I have trouble keeping up at the moment</p>",
+        "id": 423616280,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709043726
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423600783\">said</a>:</p>\n<blockquote>\n<p>So just modifying <code>lock()</code> to return <code>Pin&lt;Guard&lt;...&gt;&gt;</code> should be enough</p>\n</blockquote>\n<p>There are some things to sort out with <code>condvar</code>. I gave it a quick shot, but I think maybe I am <a href=\"https://github.com/metaspace/linux/commits/spinlock-init/\">not going in the right direction</a> (last commit)</p>",
+        "id": 423621745,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709044951
+    },
+    {
+        "content": "<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>",
+        "id": 423623614,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709045439
+    },
+    {
+        "content": "<p>at the top of <code>do_unlocked</code> just obtain a <code>&amp;mut Guard</code> via <code>get_mut_unchecked</code>.</p>",
+        "id": 423624028,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709045545
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423615856\">said</a>:</p>\n<blockquote>\n<p>no, Boqun is probably talking about <a href=\"https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/\">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>\n</blockquote>\n<p>Yep, it's more of a design choice: do we want to structurally pin <code>data</code> in a <code>Lock</code>, if so, then all the APIs that return the mutable reference to the <code>data</code> have to be returning <code>Pin&lt;&amp;mut T&gt;</code>. It's a all-or-nothing case.</p>",
+        "id": 423657014,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709053629
+    },
+    {
+        "content": "<p>but you need to keep in mind that data that is <code>Unpin</code> can still easily be accessed, since <code>Pin&lt;P&gt;</code> with <code>P: DerefMut&lt;Target = T&gt;</code>implements <code>DerefMut&lt;Target = T&gt;</code>.</p>",
+        "id": 423657253,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709053696
+    },
+    {
+        "content": "<p>so it is not a problem for people that use eg <code>Mutex&lt;u64&gt;</code> etc</p>",
+        "id": 423657318,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709053721
+    },
+    {
+        "content": "<p>Right, agreed.</p>",
+        "id": 423658080,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709053970
+    },
+    {
+        "content": "<p>It's just that if one safe API returns <code>&amp;mut T</code> and the other safe API returns <code>Pin&lt;&amp;mut T&gt;</code>, it's unsound.</p>",
+        "id": 423658378,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709054046
+    },
+    {
+        "content": "<p>so have to make a choice ;-)</p>",
+        "id": 423658453,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709054068
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 423658465,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709054072
+    },
+    {
+        "content": "<p>As I understand it’s either that or two different lock types?</p>",
+        "id": 423658641,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709054126
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423623614\">said</a>:</p>\n<blockquote>\n<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>\n</blockquote>\n<p>For <code>Guard&lt;'_, T, _&gt;</code> <code>guard.as_mut()</code> gives me a <code>Pin&lt;&amp;mut T&gt;</code>. I need a <code>Pin&lt;&amp;mut Guard&gt;</code> I think. Hence the transmute. I don't see any other way to go from <code>&amp;mut Pin&lt;P&gt;</code> to <code>Pin&lt;&amp;mut P&gt;</code>. Did I miss something?</p>",
+        "id": 423672640,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709059008
+    },
+    {
+        "content": "<p>The <code>Pin::into_.*</code> methods consume the <code>Pin</code>, and I only have a reference available</p>",
+        "id": 423672797,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709059079
+    },
+    {
+        "content": "<p>The <code>Pin</code> type has a method called <code>as_mut</code> that should work on <code>Pin&lt;Guard&lt;...&gt;&gt;</code>.</p>",
+        "id": 423697835,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709068523
+    },
+    {
+        "content": "<p>Assuming the guard implements <code>DerefMut</code></p>",
+        "id": 423697862,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709068533
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423672640\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423623614\">said</a>:</p>\n<blockquote>\n<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>\n</blockquote>\n<p>For <code>Guard&lt;'_, T, _&gt;</code> <code>guard.as_mut()</code> gives me a <code>Pin&lt;&amp;mut T&gt;</code>. I need a <code>Pin&lt;&amp;mut Guard&gt;</code> I think. Hence the transmute. I don't see any other way to go from <code>&amp;mut Pin&lt;P&gt;</code> to <code>Pin&lt;&amp;mut P&gt;</code>. Did I miss something?</p>\n</blockquote>\n<p>ah I see, I guess that you need the transmute...</p>",
+        "id": 423711167,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709073379
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423697835\">said</a>:</p>\n<blockquote>\n<p>The <code>Pin</code> type has a method called <code>as_mut</code> that should work on <code>Pin&lt;Guard&lt;...&gt;&gt;</code>.</p>\n</blockquote>\n<p>no its signature is (<a href=\"https://doc.rust-lang.org/std/pin/struct.Pin.html#method.as_mut\">https://doc.rust-lang.org/std/pin/struct.Pin.html#method.as_mut</a>):</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">as_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">Deref</span><span class=\"o\">&gt;</span>::<span class=\"n\">Target</span><span class=\"o\">&gt;</span>\n</code></pre></div>\n<p>So it will turn it into a <code>Pin&lt;&amp;mut T&gt;</code>.</p>",
+        "id": 423711252,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709073426
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423697862\">said</a>:</p>\n<blockquote>\n<p>Assuming the guard implements <code>DerefMut</code></p>\n</blockquote>\n<p>What Benno said. That method returns a <code>Pin&lt;&amp;mut &lt;Guard as DerefMut&gt;::Target&gt;</code>.</p>",
+        "id": 423755844,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709102643
+    },
+    {
+        "content": "<p>I think we can change <code>Guard::do_unlocked</code> like so:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">do_unlocked</span><span class=\"p\">(</span><span class=\"n\">this</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">cb</span>: <span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: `Pin` is #[repr(transparent)] and we are not moving out of</span>\n<span class=\"w\">        </span><span class=\"c1\">// the `&amp;mut T` pointee that we manage</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\">  </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">mem</span>::<span class=\"n\">transmute</span>::<span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">B</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">(</span><span class=\"n\">this</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: The caller owns the lock, so it is safe to unlock it.</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">B</span>::<span class=\"n\">unlock</span><span class=\"p\">(</span><span class=\"n\">this</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">.</span><span class=\"n\">state</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">this</span><span class=\"p\">.</span><span class=\"n\">state</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: The lock was just unlocked above and is being relocked now.</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_relock</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">            </span><span class=\"n\">ScopeGuard</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">B</span>::<span class=\"n\">relock</span><span class=\"p\">(</span><span class=\"n\">this</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">.</span><span class=\"n\">state</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"p\">.</span><span class=\"n\">state</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">});</span>\n\n<span class=\"w\">        </span><span class=\"n\">cb</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 423761246,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709105658
+    },
+    {
+        "content": "<p>Updated the patch: <a href=\"https://github.com/metaspace/linux/commit/0557fa0acad0d43badbca7083c59c7fbb6bc3e30\">https://github.com/metaspace/linux/commit/0557fa0acad0d43badbca7083c59c7fbb6bc3e30</a></p>",
+        "id": 423766316,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709108128
+    },
+    {
+        "content": "<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>",
+        "id": 423776851,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709112205
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423776851\">said</a>:</p>\n<blockquote>\n<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>\n</blockquote>\n<p>You mean coerce the ref to a pointer, use <code>pointer::cast</code> and then back to reference with <code>&amp;*ptr</code>?</p>",
+        "id": 423778121,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709112672
+    },
+    {
+        "content": "<p>What is the advantages of that route, in your opinion?</p>",
+        "id": 423778341,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709112735
+    },
+    {
+        "content": "<p>It's this topic again: <a href=\"#narrow/stream/348125-Weekly-Meeting-Wed-1900-UTC/topic/.60transmute.60.20on.20DST.20reference\">https://rust-for-linux.zulipchat.com/#narrow/stream/348125-Weekly-Meeting-Wed-1900-UTC/topic/.60transmute.60.20on.20DST.20reference</a></p>",
+        "id": 423778722,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709112865
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423776851\">said</a>:</p>\n<blockquote>\n<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>\n</blockquote>\n<p>yeah I agree</p>",
+        "id": 423792206,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709117339
+    },
+    {
+        "content": "<p>seems  like a <code>map_inner_unchecked_mut</code> is needed?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// # Safety</span>\n<span class=\"w\">    </span><span class=\"sd\">/// `f` must not move the underlying object or return a reference which allow others to move it.</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">map_inner_unchecked_mut</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">F</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">f</span>: <span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">T</span>\n<span class=\"w\">    </span><span class=\"k\">where</span><span class=\"w\"> </span><span class=\"n\">F</span>: <span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">P</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">T</span>\n<span class=\"w\">    </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">f</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">pointer</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 423879294,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709145404
+    },
+    {
+        "content": "<p>or just name it <code>with_inner</code></p>",
+        "id": 423879684,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709145545
+    }
+]

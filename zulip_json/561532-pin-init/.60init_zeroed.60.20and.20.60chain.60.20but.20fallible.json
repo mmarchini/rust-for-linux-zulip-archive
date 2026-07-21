@@ -1,0 +1,110 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> I want to <code>Opaque::init_zeroed().chain(|place| -&gt; Result&lt;_,Error&gt; {...})</code>, but I get a type error because <code>Opaque::init_zeroed() -&gt; Result&lt;_, Infalible&gt;</code>. Do you know if there is a handy solution for this?</p>",
+        "id": 590687400,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777029208
+    },
+    {
+        "content": "<p><code>Opaque::init_zeroed</code> should return <code>impl Init&lt;Opaque&lt;_&gt;&gt;</code>?</p>",
+        "id": 590688707,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029624
+    },
+    {
+        "content": "<p>Ah I see, you need <code>impl Init&lt;Opaque&lt;_&gt;, _&gt;</code></p>",
+        "id": 590688912,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029668
+    },
+    {
+        "content": "<p>Yes, but the default value for <code>E</code> is <code>Infallible</code>.</p>",
+        "id": 590688930,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777029672
+    },
+    {
+        "content": "<p>hmm we could have a <code>map_err</code> function on <code>impl Init</code></p>",
+        "id": 590688998,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029691
+    },
+    {
+        "content": "<p>The chain part needs to be fallible.</p>",
+        "id": 590689012,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777029694
+    },
+    {
+        "content": "<p>yeah or we allow changing the error type in the <code>chain</code> function</p>",
+        "id": 590689040,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029705
+    },
+    {
+        "content": "<p>this is overall probably pretty bad wrt inference</p>",
+        "id": 590689097,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029722
+    },
+    {
+        "content": "<p>The use case is this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">Opaque</span><span class=\"p\">::</span><span class=\"n\">try_ffi_init</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">place</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"c1\">// SAFETY: `ffi_init` promises that place is valid for writes.</span>\n<span class=\"w\">                    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">ptr</span><span class=\"p\">::</span><span class=\"n\">write</span><span class=\"p\">(</span><span class=\"n\">place</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">mempool</span><span class=\"p\">::</span><span class=\"n\">zeroed</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"o\">..</span><span class=\"p\">.</span>\n</code></pre></div>",
+        "id": 590689121,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777029731
+    },
+    {
+        "content": "<p>Instead of the unsafe I want to do <code>Opaque::init_zeroed().chain(|place| {...})</code>.</p>",
+        "id": 590689224,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777029762
+    },
+    {
+        "content": "<p>yeah that makes sense. I don't have too much time to investigate the options here, maybe <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> does?</p>\n<p>You could add a simple <code>fn Opaque::init_zeroed_err&lt;E&gt;() -&gt; impl Init&lt;Self, E&gt;</code> to the kernel as a stop-gap if you really want to get rid of that unsafe.</p>",
+        "id": 590689658,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1777029913
+    },
+    {
+        "content": "<p>I'll add it to my list, then we'll see who gets there first <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 590690025,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777030034
+    },
+    {
+        "content": "<p>How about <code>Opaque::try_ffi_init_zeroed</code>?</p>",
+        "id": 590690455,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1777030178
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/561532-pin-init/topic/.60init_zeroed.60.20and.20.60chain.60.20but.20fallible/near/590690455\">said</a>:</p>\n<blockquote>\n<p>How about <code>Opaque::try_ffi_init_zeroed</code>?</p>\n</blockquote>\n<p>That would work as well <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 590690534,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777030202
+    },
+    {
+        "content": "<p>One could argue that should be the default. <code>place</code> not being zeroed caused all kinds of problems for me. Random kernel crashes on 1/10 boots.</p>",
+        "id": 590690854,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777030297
+    },
+    {
+        "content": "<p>Rookie mistake, but difficult to pin down in a sea of changes.</p>",
+        "id": 590690992,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777030329
+    },
+    {
+        "content": "<p>Not all types require zero-filling before initialized</p>",
+        "id": 590691104,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1777030364
+    },
+    {
+        "content": "<p>Many do though. Perhaps it could be <code>try_ffi_init</code> which zeroes <code>place</code> and <code>try_ffi_init_uninit</code> that leaves place alone?</p>",
+        "id": 590691387,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1777030454
+    }
+]

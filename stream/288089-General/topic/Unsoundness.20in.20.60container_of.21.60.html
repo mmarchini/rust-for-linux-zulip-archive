@@ -1,0 +1,200 @@
+<html>
+<head><meta charset="utf-8"><title>Unsoundness in `container_of!` · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html">Unsoundness in `container_of!`</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="247817543"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817543" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817543">(Jul 31 2021 at 18:16)</a>:</h4>
+<p>While working on <a href="https://github.com/Rust-for-Linux/linux/issues/351">#351</a>, I noticed that <code>container_of!</code> is unsound, i.e. you can trigger UB from safe code. Here's an example:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">Foo</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">a</span>: <span class="p">(),</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">container_of</span><span class="o">!</span><span class="p">(</span><span class="n">core</span>::<span class="n">ptr</span>::<span class="n">null</span><span class="p">(),</span><span class="w"> </span><span class="n">Foo</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</code></pre></div>
+<p>This is already UB because it violates the following condition for <code>pointer::offset</code>:</p>
+<blockquote>
+<p>Both the starting and resulting pointer must be either in bounds or one byte past the end of the same allocated object.</p>
+</blockquote>
+<p>And sure enough Miri wil complain:</p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>error: Undefined Behavior: pointer arithmetic failed: 0x0 is not a valid pointer
+   --&gt; /playground/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/const_ptr.rs:235:18
+    |
+235 |         unsafe { intrinsics::offset(self, count) }
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pointer arithmetic failed: 0x0 is not a valid pointer
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+</code></pre></div>
+<p>So I was wonder if this is a known problem, if so why that is (is it because it is not high priority?), and if not how it should be fixed. If it needs to be fixed I see two options, which is preferred?</p>
+<ul>
+<li>make <code>container_of!</code> unsafe to use, so you need an <code>unsafe</code> block to use it</li>
+<li>make <code>container_of!</code> safe to use by replacing <code>offset</code> with <code>wrapping_offset</code>, which is safe to call but doesn't allow for as aggressive compiler optimizations as <code>offset</code>.</li>
+</ul>
+
+
+
+<a name="247817615"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817615" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817615">(Jul 31 2021 at 18:18)</a>:</h4>
+<p>If <code>container_of!()</code> accepted a reference, instead of a ptr, it wouldn't have this unsoundness, right?</p>
+
+
+
+<a name="247817678"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817678" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817678">(Jul 31 2021 at 18:18)</a>:</h4>
+<p>That wouldn't be sufficient to prove that</p>
+<blockquote>
+<p>Both the starting and resulting pointer must be either in bounds or one byte past the end of the same allocated object.</p>
+</blockquote>
+
+
+
+<a name="247817684"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817684" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817684">(Jul 31 2021 at 18:19)</a>:</h4>
+<p>The reference can come from any object, not necessarily a field of the given type</p>
+
+
+
+<a name="247817766"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817766" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817766">(Jul 31 2021 at 18:20)</a>:</h4>
+<p>Ah, of course... is it even possible for <code>container_of!()</code> to be safe?</p>
+
+
+
+<a name="247817773"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817773" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817773">(Jul 31 2021 at 18:21)</a>:</h4>
+<p>You can use <code>wrapping_offset</code> which is a safe function</p>
+
+
+
+<a name="247817809"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817809" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817809">(Jul 31 2021 at 18:22)</a>:</h4>
+<p>And then <code>unsafe</code> code is responsible for any UB that comes from misusing the resulting pointer</p>
+
+
+
+<a name="247817920"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817920" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817920">(Jul 31 2021 at 18:24)</a>:</h4>
+<p>But if the value you passed isn't really a member of the container you're claiming, the result will be a wild ptr, yeah? I guess it returns a raw ptr, so you'll have to use <code>unsafe</code> to dereference... in which case, yeah I think <code>wrapping_offest</code> would be better.</p>
+
+
+
+<a name="247817943"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817943" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817943">(Jul 31 2021 at 18:25)</a>:</h4>
+<p>Right, but the problem is that I caused UB from safe code</p>
+
+
+
+<a name="247817990"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817990" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817990">(Jul 31 2021 at 18:26)</a>:</h4>
+<p>Yeah.</p>
+<p>And in practice I'm not worried about the optimizations here.</p>
+
+
+
+<a name="247817996"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247817996" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247817996">(Jul 31 2021 at 18:26)</a>:</h4>
+<p>Got it, I'll file a PR</p>
+
+
+
+<a name="247818018"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247818018" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247818018">(Jul 31 2021 at 18:27)</a>:</h4>
+<p><code>container_of</code> is intrinsically unsafe, it even has a "# Safety" section describing its safety requirements; in the example, it is enclosed in an <code>unsafe</code> block. The bug here is that it doesn't actually <em>require</em> an unsafe block at the moment</p>
+
+
+
+<a name="247818085"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247818085" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247818085">(Jul 31 2021 at 18:28)</a>:</h4>
+<p>(BTW, thanks Léo for noticing it!)</p>
+
+
+
+<a name="247818090"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247818090" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247818090">(Jul 31 2021 at 18:28)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="414281">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/Unsoundness.20in.20.60container_of!.60/near/247818085">said</a>:</p>
+<blockquote>
+<p>(BTW, thanks Léo for noticing it!)</p>
+</blockquote>
+<p>That's the point of writing <code>SAFETY</code> comments ;)</p>
+
+
+
+<a name="247818199"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247818199" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247818199">(Jul 31 2021 at 18:31)</a>:</h4>
+<p>So what is preferred? Should we enforce <code>unsafe { container_of!() }</code> or should we use the safe <code>wrapping_offset</code> and make the macro safe to use?</p>
+
+
+
+<a name="247818218"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247818218" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247818218">(Jul 31 2021 at 18:31)</a>:</h4>
+<p>Do you prefer that I open an issue on the repo for discussion, or is this a small enough decision that can be made here?</p>
+
+
+
+<a name="247819171"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247819171" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Léo Lanteri Thauvin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247819171">(Jul 31 2021 at 18:53)</a>:</h4>
+<p>Also, here's a relevant passage from the <code>wrapping_offset</code> docs:</p>
+<blockquote>
+<p>Compared to <code>offset</code>, this method basically delays the requirement of staying within the same allocated object: <code>offset</code> is immediate Undefined Behavior when crossing object boundaries; <code>wrapping_offset</code> produces a pointer but still leads to Undefined Behavior if a pointer is dereferenced when it is out-of-bounds of the object it is attached to. <code>offset</code> can be optimized better and is thus preferable in performance-sensitive code.</p>
+</blockquote>
+
+
+
+<a name="247819630"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247819630" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247819630">(Jul 31 2021 at 19:03)</a>:</h4>
+<p>using <code>wrapping_offset</code> is not sufficient to make <code>container_of</code> safe. Consider the following case:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">Foo</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">a</span>: <span class="kt">u32</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">b</span>: <span class="kt">u32</span><span class="p">,</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="k">u32</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">container_of</span><span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">Foo</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</code></pre></div>
+<p>The violation here is that <code>x</code> is <em>not</em> a field of <code>Foo</code>, and the compiler can't enforce this for us, thus the need for <code>unsafe</code> and the safety requirement in the docs: <code>Callers must ensure that the pointer to the field is in fact a pointer to the specified field, as opposed to a pointer to another object of the same type.</code></p>
+
+
+
+<a name="247819677"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247819677" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247819677">(Jul 31 2021 at 19:04)</a>:</h4>
+<p>(Sorry for the delay, had to step away from the keyboard.)</p>
+
+
+
+<a name="247819830"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247819830" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247819830">(Jul 31 2021 at 19:08)</a>:</h4>
+<p>I think <code>container_of!</code> is still defined behavior there, it's just that derefing teh result is UB?</p>
+
+
+
+<a name="247820144"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247820144" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247820144">(Jul 31 2021 at 19:16)</a>:</h4>
+<p>Good point. I see that you had already mentioned it above, apologies :)</p>
+<p>Reading the documentation, <code>offset</code> requires that the start and ending pointers belong to the same allocation, so it's immediate UB. But <code>wrapping_offset</code> delays this requirement. Which is what Léo has already said, so I came late for everything :)</p>
+
+
+
+<a name="247820161"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247820161" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247820161">(Jul 31 2021 at 19:17)</a>:</h4>
+<p>I actually like the idea of using <code>wrapping_offset</code> and delaying UB</p>
+
+
+
+<a name="247820183"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsoundness%20in%20%60container_of%21%60/near/247820183" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsoundness.20in.20.60container_of.21.60.html#247820183">(Jul 31 2021 at 19:17)</a>:</h4>
+<p>It seems idiomatic in Rust to delay UB until raw pointers are actually used</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

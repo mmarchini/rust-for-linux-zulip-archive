@@ -1,0 +1,568 @@
+<html>
+<head><meta charset="utf-8"><title>Accessing memory mapped registers via struct · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html">Accessing memory mapped registers via struct</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="401195301"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401195301" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401195301">(Nov 09 2023 at 16:37)</a>:</h4>
+<p>I have few memory mapped peripheral devices, and also have c struct definitions for these devices, they look something like this.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">regs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">union</span> <span class="p">{</span>
+<span class="w">        </span><span class="k">struct</span> <span class="p">{</span>
+<span class="w">            </span><span class="n">uint32_t</span><span class="w"> </span><span class="n">field_a</span><span class="w">       </span>: <span class="mi">1</span>
+<span class="w">            </span><span class="n">uint32_t</span><span class="w"> </span><span class="n">field_a</span><span class="w">       </span>: <span class="mi">1</span>
+<span class="w">            </span><span class="n">uint32_t</span><span class="w"> </span><span class="n">field_c</span><span class="w">       </span>: <span class="mi">30</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="n">BF</span><span class="p">;</span>
+<span class="w">        </span><span class="n">uint32_t</span><span class="w"> </span><span class="n">WORD</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="n">reg1</span><span class="p">;</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+<span class="n">typedef</span><span class="w"> </span><span class="n">volatile</span><span class="w"> </span><span class="k">struct</span> <span class="nc">regs</span><span class="w"> </span><span class="n">regs_t</span>
+</code></pre></div>
+<p>Using this I can read/write peripheral configuration via struct fields without doing any pointer arithmetic.  Is there a equivalent way  of doing things using rust in the kernel? right now I'm just using the IoMem wrapper and manually calculating offsets.</p>
+
+
+
+<a name="401200902"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401200902" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401200902">(Nov 09 2023 at 17:08)</a>:</h4>
+<p>Get a raw pointer to the field using the <code>addr_of!</code> or <code>addr_of_mut!</code> macro.</p>
+
+
+
+<a name="401201088"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401201088" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401201088">(Nov 09 2023 at 17:09)</a>:</h4>
+<p>Not sure what this IoMem thing is.</p>
+
+
+
+<a name="401203846"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401203846" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401203846">(Nov 09 2023 at 17:27)</a>:</h4>
+<p><a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/io_mem.rs">This iomem wrapper</a>, it just calls out to the kernel to map a peripheral address range to virtual memory and provides <code>readl/writel/...</code><br>
+What I'm doing right now is this,</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">regs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">IoMem</span>::<span class="o">&lt;</span><span class="mi">100</span><span class="o">&gt;</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">res</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">reg1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">regs</span><span class="p">.</span><span class="n">readl</span><span class="p">(</span><span class="mh">0x20</span><span class="p">)</span>
+<span class="n">regs</span><span class="p">.</span><span class="n">writel</span><span class="p">(</span><span class="n">reg1</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="mh">0xFF</span><span class="p">,</span><span class="w"> </span><span class="mh">0x20</span><span class="p">)</span>
+</code></pre></div>
+<p>What I would like to do is</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">regs</span>: <span class="nc">MyReg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">IoMem</span>::<span class="o">&lt;</span><span class="mi">100</span><span class="o">&gt;</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">res</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="o">?</span><span class="p">;</span>
+<span class="n">regs</span><span class="p">.</span><span class="n">reg_at_0x20</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="mh">0xFF</span><span class="p">;</span>
+</code></pre></div>
+<p>Or even better with bitfields</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">regs</span>: <span class="nc">MyReg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">IoMem</span>::<span class="o">&lt;</span><span class="mi">100</span><span class="o">&gt;</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">res</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="o">?</span><span class="p">;</span>
+<span class="n">regs</span><span class="p">.</span><span class="n">reg_at_0x20</span><span class="p">.</span><span class="n">bits_0_to_7</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</code></pre></div>
+
+
+
+<a name="401204860"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401204860" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401204860">(Nov 09 2023 at 17:34)</a>:</h4>
+<p>We don't have typed register access in the kernel and neither in the old rust branch. There are many examples of how to implement such things in the embedded Rust community though</p>
+
+
+
+<a name="401205132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401205132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401205132">(Nov 09 2023 at 17:36)</a>:</h4>
+<p>You can do some pretty cool things like type checking that when you write  value, say, CLOCK_DIVIDER_5, to a register, it will fail to type check if you write it to the worn field of the register for instance. And you can do automatic bit shifts of fields, etc.</p>
+
+
+
+<a name="401205208"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401205208" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401205208">(Nov 09 2023 at 17:37)</a>:</h4>
+<p>I have it on my todo to look for a solution for the kernel to use in the NVMe driver. It would be super cool if you could come up with something <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="401205359"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401205359" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401205359">(Nov 09 2023 at 17:38)</a>:</h4>
+<p>I think the stm32 rust HAL crates have typed register access <a href="https://github.com/stm32-rs">https://github.com/stm32-rs</a></p>
+
+
+
+<a name="401205681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401205681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401205681">(Nov 09 2023 at 17:40)</a>:</h4>
+<p>I was looking tough some embedded stuff but didn't come across the stm32 crates, I'll take a look at how they handle it. thank you :)</p>
+
+
+
+<a name="401306354"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401306354" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401306354">(Nov 10 2023 at 08:13)</a>:</h4>
+<p>I just asked a friend who work with the stm32 MCUs, he pointed me to this GitHub repo: <a href="https://github.com/embassy-rs/stm32-data">https://github.com/embassy-rs/stm32-data</a> . They generate structs from some register definitions and those structs allow typed access to the registers</p>
+
+
+
+<a name="401306685"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401306685" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401306685">(Nov 10 2023 at 08:15)</a>:</h4>
+<p>You're talking about accessing peripheral registers? The PACs usually come from svd2rust <a href="https://docs.rs/svd2rust/latest/svd2rust/">https://docs.rs/svd2rust/latest/svd2rust/</a></p>
+
+
+
+<a name="401306782"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401306782" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401306782">(Nov 10 2023 at 08:16)</a>:</h4>
+<p>Then the HALs are an abstraction layer on top of those</p>
+
+
+
+<a name="401316596"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401316596" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401316596">(Nov 10 2023 at 09:14)</a>:</h4>
+<p>I had a look at it and I have a few issues, <br>
+1) I don't have the svd files for these peripherals, and looks like creating them is a lot of work. I would much rather write down some rust code than xml .<br>
+2) They also use <a href="https://crates.io/crates/vcell">vcell</a>  for volatile reads/writes to structs, can I use third party creates in my own  kernel module? looks like the answer might be no. <br>
+3) Rust doesn't support bitfields structs, so might need to use a third party crate for that too. for register read writes I can get around this by doing some bit shifting, but for the DMA protocol devices uses, I have to generate bitfield structs. I'm now  stuck here.</p>
+
+
+
+<a name="401324278"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401324278" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401324278">(Nov 10 2023 at 09:35)</a>:</h4>
+<blockquote>
+<p>They also use vcell for volatile reads/writes to structs, can I use third party creates in my own kernel module? looks like the answer might be no. </p>
+</blockquote>
+<p>Please see <a href="https://rust-for-linux.com/third-party-crates">https://rust-for-linux.com/third-party-crates</a>.</p>
+<p><code>vcell</code> is a tiny crate, so it is not a very big issue -- you could even just copy-paste the code (for prototyping purposes).</p>
+
+
+
+<a name="401326150"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401326150" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401326150">(Nov 10 2023 at 09:41)</a>:</h4>
+<p>Thank you, I will just copy paste the code for now. Hopefully there is a small enough bitfield crate too.</p>
+
+
+
+<a name="401370547"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401370547" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401370547">(Nov 10 2023 at 12:45)</a>:</h4>
+<p>I understand that you might not be able to copy/paste code from stm32 or other embedded crates directly, but I think the concepts they use to describe memory mapped registers are really interesting, and we should try to use them in the kernel if possible</p>
+
+
+
+<a name="401370866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401370866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401370866">(Nov 10 2023 at 12:46)</a>:</h4>
+<p>I'm not familiar with SVD and I don't know if it would make sense for us to use. But in general I think it makes sense to describe register formats and allowed values in an intermediate format and generate code from that</p>
+
+
+
+<a name="401372787"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401372787" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401372787">(Nov 10 2023 at 12:54)</a>:</h4>
+<p>It looks like they are generating some json from the SVD files and going to Rust from there: <a href="https://github.com/embassy-rs/stm32-data-generated/blob/main/data/registers/adc_f3.json">https://github.com/embassy-rs/stm32-data-generated/blob/main/data/registers/adc_f3.json</a></p>
+
+
+
+<a name="401372958"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401372958" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401372958">(Nov 10 2023 at 12:54)</a>:</h4>
+<p>In any case, they must have some concepts for the final Rust code that they generate that we might be able to reuse, if using an intermediate representation is not cool</p>
+
+
+
+<a name="401373180"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401373180" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401373180">(Nov 10 2023 at 12:55)</a>:</h4>
+<p>An example of the final output is here: <a href="https://github.com/embassy-rs/stm32-data-generated/blob/main/stm32-metapac/src/registers/adc_f3.rs">https://github.com/embassy-rs/stm32-data-generated/blob/main/stm32-metapac/src/registers/adc_f3.rs</a></p>
+
+
+
+<a name="401373268"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401373268" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401373268">(Nov 10 2023 at 12:56)</a>:</h4>
+<p>We could start by handcoding stuff like that</p>
+
+
+
+<a name="401431731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401431731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401431731">(Nov 10 2023 at 20:03)</a>:</h4>
+<p>SVD are definitely not handwritten, usually you get them from the manufacturer. Usually you can get them for embedded processor (have to chase them down a bit), I'm not sure whether you can get them for desktop processors. Maybe if you ask? It definitely makes register related things easier</p>
+
+
+
+<a name="401431763"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401431763" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401431763">(Nov 10 2023 at 20:03)</a>:</h4>
+<p>For example, I know of this repo that collects embedded SVD: <a href="https://github.com/cmsis-svd/cmsis-svd/tree/main/data">https://github.com/cmsis-svd/cmsis-svd/tree/main/data</a></p>
+
+
+
+<a name="401440305"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401440305" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401440305">(Nov 10 2023 at 21:39)</a>:</h4>
+<p>Notice that <code>writel</code> may not be a simple <code>write_volatile</code>, you may need to open-code <code>VolatileCell</code> anyway.</p>
+
+
+
+<a name="401440313"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401440313" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401440313">(Nov 10 2023 at 21:39)</a>:</h4>
+<p><a href="https://lwn.net/Articles/698014/">https://lwn.net/Articles/698014/</a></p>
+
+
+
+<a name="401445703"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401445703" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401445703">(Nov 10 2023 at 22:49)</a>:</h4>
+<p>In this case I will have to hand write the svd files because I'm trying to write a wifi driver using reverse engineered register definitions. we actually reached out to the manufacturer and they said they will not provide any register level definitions/docs at all. </p>
+<p>About <code>writel</code> I did not have any issues using the writel function provided by IoMem wrapper so far.</p>
+
+
+
+<a name="401446161"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401446161" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401446161">(Nov 10 2023 at 22:56)</a>:</h4>
+<p>I don't know whether it's better to handwrite the SVD file (probably more reusable, but means we have to have svd2rust as part of the tree) or just emulate its output handwritten</p>
+
+
+
+<a name="401446253"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401446253" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401446253">(Nov 10 2023 at 22:56)</a>:</h4>
+<p>You could probably make the second case easier with some macros</p>
+
+
+
+<a name="401446564"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401446564" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401446564">(Nov 10 2023 at 23:00)</a>:</h4>
+<p>I was thinking of something like this,  but I have not written any macros before so I'm not sure if it's possible.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[derive(IoMem)]</span>
+<span class="k">struct</span> <span class="nc">Regs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">reg1</span>: <span class="nc">struct</span><span class="w"> </span><span class="n">Reg1</span><span class="w"> </span><span class="p">{</span>
+<span class="w">         </span><span class="cp">#[bf(bits=0..15)]</span>
+<span class="w">         </span><span class="n">field1</span>: <span class="kt">u32</span>
+         <span class="cp">#[bf(bits=15..20)]</span>
+<span class="w">         </span><span class="n">field2</span>: <span class="kt">u32</span>
+         <span class="cp">#[bf(bits=20..31)]</span>
+<span class="w">         </span><span class="n">field3</span>: <span class="kt">u32</span>
+    <span class="p">}</span>
+<span class="w">    </span><span class="n">reg2</span>: <span class="nc">struct</span><span class="w"> </span><span class="n">Reg2</span><span class="w"> </span><span class="p">{</span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>then the macro can generate actual structs for each registers and define operations on each field. maybe something like <br>
+<code>regs.reg1.field1.write(value)</code>. I would like to do <code>regs.reg1.field1 = value</code> but looks like this may not be possible with rust semantics today.</p>
+
+
+
+<a name="401453772"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401453772" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401453772">(Nov 11 2023 at 00:33)</a>:</h4>
+<p>The PAC crates give you a read function that can access each bit, then a write function that takes a closure so you can set individual bits. I find it pretty elegant but I'm sure the C people would go bleh</p>
+
+
+
+<a name="401454675"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401454675" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401454675">(Nov 11 2023 at 00:41)</a>:</h4>
+<p><a href="https://docs.rust-embedded.org/book/start/registers.html#reading">https://docs.rust-embedded.org/book/start/registers.html#reading</a></p>
+
+
+
+<a name="401454980"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401454980" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401454980">(Nov 11 2023 at 00:44)</a>:</h4>
+<p>You could likely create the same sort of thing with a rules macro I think</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">define_registers</span><span class="o">!</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ctl</span>: <span class="kt">u32</span> <span class="p">{</span>
+<span class="w">        </span><span class="c1">// name: access, bits, repr, bit-offset</span>
+<span class="w">        </span><span class="c1">// I don't think a derive macro could process a `..` range since it sees that as a single token</span>
+<span class="w">        </span><span class="n">field1</span>: <span class="nc">RW</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span>:<span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">        </span><span class="n">field2</span>: <span class="nc">R</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span>:<span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">        </span><span class="n">field3</span>: <span class="nc">W</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span>:<span class="mi">171</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">,;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="401455898"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401455898" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401455898">(Nov 11 2023 at 00:52)</a>:</h4>
+<p>Ugh, then again maybe it is easier to just handwrite a SVD file and see what the tool spits out. Probably just as much work with less Rust to maintain, better code (the output from <code>svd2rust</code> is really pretty bulletproof), and the C side could use it too.</p>
+<p>Or maybe you don't need anything special at all for a small here, I don't know how many mmio registers you are dealing with.</p>
+<p>I guess it could depend on whether using <code>svd2rust</code> in the toolchain or having files produced by <code>svd2rust</code> would be acceptable (<span class="user-mention" data-user-id="411477">@Miguel Ojeda</span>)</p>
+
+
+
+<a name="401455998"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401455998" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401455998">(Nov 11 2023 at 00:53)</a>:</h4>
+<p>After all, using SVD files is common in C embedded toolchains too. They're one way to interface custom FPGA  peripherals your code running on a core</p>
+
+
+
+<a name="401621243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401621243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401621243">(Nov 12 2023 at 15:24)</a>:</h4>
+<p>I highly doubt kernel people would like SVD. If I understand correctly:</p>
+<ul>
+<li>It's format by ARM, largely intended just for ARM embedded systems (although I do see some RISC-V projects adopting it)</li>
+<li>CMSIS is licensed in Apache and is not compatible with GPL-2</li>
+<li>It's XML, so maintainability is questionable</li>
+<li>Adding svd2rust or C equivalent will add another build dependency to the kernel.</li>
+</ul>
+<p>I think we'd be better off with just declarative/procedural macros.</p>
+
+
+
+<a name="401630489"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401630489" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401630489">(Nov 12 2023 at 18:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct/near/401621243">said</a>:</p>
+<blockquote>
+<p>I highly doubt kernel people would like SVD. If I understand correctly:</p>
+<ul>
+<li>It's format by ARM, largely intended just for ARM embedded systems (although I do see some RISC-V projects adopting it)</li>
+<li>CMSIS is licensed in Apache and is not compatible with GPL-2</li>
+<li>It's XML, so maintainability is questionable</li>
+<li>Adding svd2rust or C equivalent will add another build dependency to the kernel.</li>
+</ul>
+<p>I think we'd be better off with just declarative/procedural macros.</p>
+</blockquote>
+<p>I don't know if SVD is usable or not, but the whole concept is one we should investigate for use in the kernel. We should have some kind of intermediate format that describes layout of a block of registers, the fields of those registers, and the allowed values of those fields along with names for these values. It would probably make sense to allow encoding of some kind of documentation as well. </p>
+<p>Regarding build time dependencies, I would imagine we would check in the generated code. You would only need the dependency if you wanted to add new types. </p>
+<p>I think depending in macros for this is a bad idea, because they are not easily maintained. They can especially be difficult to understand when written without access to crates like <code>syn</code>. An external tool would be far simpler to maintain.</p>
+<p>I know that some work is going on to do a similar thing for NVMe, and from what I hear, block layer subsystem is very interested in that work. This work would also rely on third party tools. In fact we should probably sync up with the people who are doing that work, since it is sort of similar.</p>
+
+
+
+<a name="401634779"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401634779" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401634779">(Nov 12 2023 at 19:20)</a>:</h4>
+<p>Ah thanks for the info Gary. It is kind of unfortunate because SVD is kind of a standard format for every bit of information we need (peripheral&lt;-register&lt;-field, addresses, documentation, R/W/RE, reset values, peripheral class) and that’s a <em>lot</em> of information to encode in a nonstandard format like a macro.</p>
+<p>Maybe we could write a macro that takes the same inputs as SVD and produces the same outputs as svd2rust? So we don’t have to reinvent the wheel on both the information and the generated typesafe format.</p>
+
+
+
+<a name="401635268"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401635268" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401635268">(Nov 12 2023 at 19:30)</a>:</h4>
+<p>It seems that the embassy generated PAC comes from yaml data. They do a one time import of the SVD and convert it to yaml. Then they touch up the yaml by hand.</p>
+
+
+
+<a name="401635302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401635302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401635302">(Nov 12 2023 at 19:31)</a>:</h4>
+<p>Like so: <a href="https://github.com/embassy-rs/stm32-data/blob/main/data/registers/adc_f1.yaml">https://github.com/embassy-rs/stm32-data/blob/main/data/registers/adc_f1.yaml</a></p>
+
+
+
+<a name="401643037"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401643037" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401643037">(Nov 12 2023 at 21:58)</a>:</h4>
+<p>That seems equally reasonable. If you did json instead, you could probably do the rust codegen with a python script and sidestep the extra system / cargo dependencies (same for XML but ET is definitely harder to work with. Though maybe not when attributes aren’t in use…?)</p>
+
+
+
+<a name="401643400"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/401643400" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#401643400">(Nov 12 2023 at 22:02)</a>:</h4>
+<p>I guess you could really go about this in a lot of different ways. Keeping input as something along the lines of SVD seems reasonable since it’s well proven, even if you change the file format or just put it directly into a macro. Lots of paths to get from there to useable Rust</p>
+
+
+
+<a name="402128034"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402128034" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402128034">(Nov 15 2023 at 03:27)</a>:</h4>
+<p><span class="user-mention" data-user-id="587349">@Trevor Gross</span> <span class="user-mention" data-user-id="618972">@Madushan Nishantha</span> I hacked together a quick PoC based on the embassy stm32 stuff. See latest commit <a href="https://github.com/metaspace/linux/tree/typed-registers">here</a> for the generated output used in the NVMe Rust driver and see <a href="https://github.com/metaspace/stm32-data/tree/nvme-test">here</a> for the yaml input for generating the code.</p>
+
+
+
+<a name="402145453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402145453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402145453">(Nov 15 2023 at 05:22)</a>:</h4>
+<p>That looks pretty great to me</p>
+
+
+
+<a name="402145671"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402145671" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402145671">(Nov 15 2023 at 05:24)</a>:</h4>
+<p>Well, it looks like <code>chiptool</code> does the generation and it’s just a fork of <code>svd2rust</code> that works on yaml?</p>
+
+
+
+<a name="402145717"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402145717" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402145717">(Nov 15 2023 at 05:24)</a>:</h4>
+<p>Seems like this does the heavy lifting <a href="https://github.com/embassy-rs/chiptool">https://github.com/embassy-rs/chiptool</a></p>
+
+
+
+<a name="402221807"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402221807" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402221807">(Nov 15 2023 at 12:16)</a>:</h4>
+<p>That looks pretty good to me too.</p>
+
+
+
+<a name="402232739"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402232739" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402232739">(Nov 15 2023 at 13:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="587349">Trevor Gross</span> <a href="#narrow/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct/near/402145671">said</a>:</p>
+<blockquote>
+<p>Well, it looks like <code>chiptool</code> does the generation and it’s just a fork of <code>svd2rust</code> that works on yaml?</p>
+</blockquote>
+<p>Yes, I just put the binary in the <code>stm32-data</code> crate because I was lazy and that is what I used as a reference. From the readme it looks like the embassy people forked <code>svd2rust</code> to change a number of thinks that would make it align better with their requirements.</p>
+
+
+
+<a name="402233371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402233371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402233371">(Nov 15 2023 at 13:03)</a>:</h4>
+<p>I think that with a workflow like this, we could check in the generated code and depend on upstream <code>chiptool</code>. We an always fork it if we need to. I am not sure about how licencing would work.</p>
+
+
+
+<a name="402234300"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/402234300" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#402234300">(Nov 15 2023 at 13:07)</a>:</h4>
+<p>I think checking in the generated code is probably okay, if AMD can do it, why can't we.</p>
+
+
+
+<a name="403341436"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403341436" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403341436">(Nov 21 2023 at 09:47)</a>:</h4>
+<p>I came across this crate which provides good abstractions for bitfields <a href="https://crates.io/crates/modular-bitfield">https://crates.io/crates/modular-bitfield</a></p>
+
+
+
+<a name="403341735"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403341735" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403341735">(Nov 21 2023 at 09:48)</a>:</h4>
+<p>and this <a href="https://github.com/hecatia-elegua/bilge">https://github.com/hecatia-elegua/bilge</a></p>
+
+
+
+<a name="403371487"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403371487" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403371487">(Nov 21 2023 at 12:32)</a>:</h4>
+<p>I think what <code>chiptool</code> generates should be enough? It already handles access to bitfields, enums for values, defaults</p>
+
+
+
+<a name="403372492"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403372492" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403372492">(Nov 21 2023 at 12:39)</a>:</h4>
+<p>I was looking at these because the device I'm working with requires generating packed structs for the dma protocol. register fields and packed struct fields look similar enough so maybe it makes sense to use the same strategy to do both?</p>
+
+
+
+<a name="403372884"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403372884" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403372884">(Nov 21 2023 at 12:41)</a>:</h4>
+<p>You mean for writing dma descriptors in memory buffers?</p>
+
+
+
+<a name="403373575"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403373575" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403373575">(Nov 21 2023 at 12:45)</a>:</h4>
+<p>It could be used, as long as you don't have fields that span the architecture word boundary, and as long as the fields of the structure does not change depending om some discriminant somewhere in the structure. For the same reason, the <code>chiptool</code> generated code does not work well with banked or shadowed registers.</p>
+
+
+
+<a name="403373985"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403373985" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403373985">(Nov 21 2023 at 12:48)</a>:</h4>
+<p>At least for NVMe we need something else for writing entries to the IO queues. The entries written to the queues can be shaped differently depending on what kind of request we are issuing or completing.</p>
+
+
+
+<a name="403374434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403374434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403374434">(Nov 21 2023 at 12:50)</a>:</h4>
+<p>hmm the dma headers are definitely not byte aligned for this device. (there is one that's 68 bits long).</p>
+
+
+
+<a name="403374586"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403374586" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403374586">(Nov 21 2023 at 12:51)</a>:</h4>
+<p>I am curious what device are you working with?</p>
+
+
+
+<a name="403374927"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403374927" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403374927">(Nov 21 2023 at 12:53)</a>:</h4>
+<p>bl808, but the device has a bunch of dma controllers and I'm trying to setup the one specific to wifi controller</p>
+
+
+
+<a name="403377159"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403377159" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403377159">(Nov 21 2023 at 13:06)</a>:</h4>
+<p>Ok, cool. Are you using other code as a reference? I just checked out the reference manual, and there is no mention of the wifi block <span aria-label="grimacing" class="emoji emoji-1f62c" role="img" title="grimacing">:grimacing:</span></p>
+
+
+
+<a name="403377543"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403377543" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403377543">(Nov 21 2023 at 13:08)</a>:</h4>
+<p>When you say DMA headers, what do you mean exactly? Is this a register in the DMA peripheral, or do you write DMA commands to a piece of system memory and then instruct the DMA controller to fetch commands from there? Or are you talking about the actual payload that is transferred to/from the WiFi peripheral?</p>
+
+
+
+<a name="403377625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403377625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403377625">(Nov 21 2023 at 13:09)</a>:</h4>
+<p>oh, yeah, no docs on wifi. I'm revere engineering the interface</p>
+
+
+
+<a name="403378733"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403378733" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403378733">(Nov 21 2023 at 13:15)</a>:</h4>
+<p>the way it operates is, I have to setup a circular linked list with a specific header format and tell the dma engine where the head of that list is. then dma engine will either read or write the payload based on the entries in the header linked list. It's operation is similar to the dma engine documented in the bl808 manual.</p>
+
+
+
+<a name="403380991"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403380991" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403380991">(Nov 21 2023 at 13:28)</a>:</h4>
+<p>I see. It looks like the list entries always have the same layout and have only a few fields. You could just hand code the access methods for those fields, it would not be a lot. You could use <code>chiptool</code> to generate the code as well, but as far as I know that tool does not support fields larger than 64 bits. But I could be wrong. Both of the bit field crates you linked could be used as well, if they support this kind of 68 bit wide fields.</p>
+
+
+
+<a name="403381142"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403381142" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403381142">(Nov 21 2023 at 13:29)</a>:</h4>
+<p>The benefit of using <code>chiptool</code> or just handwriting the code, is that you are not going to depend on a 3rd party crate that you have to fight for to get into the kernel</p>
+
+
+
+<a name="403381237"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403381237" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403381237">(Nov 21 2023 at 13:29)</a>:</h4>
+<p>I am curious what field in this DMA engine is going to be 68 bits wide?</p>
+
+
+
+<a name="403381385"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403381385" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403381385">(Nov 21 2023 at 13:30)</a>:</h4>
+<p>Pointers on this platform are probably 32 or 64 bits right?</p>
+
+
+
+<a name="403382654"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403382654" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403382654">(Nov 21 2023 at 13:38)</a>:</h4>
+<p>The header for wifi dma is slightly different from what's in the datasheet,  it has flags related to rf stuff. that fields ends up being 68 bits. I'm not exactly  sure how it works on the peripheral side without being properly aligned either. and yeah pointers are 64 bits in linux. (but the blob I'm revere engineering is 32 bits, runs in a different core)</p>
+
+
+
+<a name="403383474"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403383474" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403383474">(Nov 21 2023 at 13:43)</a>:</h4>
+<p>So there is a bitfield in this 68 bit  thing that crosses a 8 byte boundary? It sounds strange, but you never know what people design <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="403383608"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403383608" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403383608">(Nov 21 2023 at 13:44)</a>:</h4>
+<p>It would make more sense to leave a few reserved bits in one word and move the bitfield to start on an alligned boundary</p>
+
+
+
+<a name="403384053"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403384053" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403384053">(Nov 21 2023 at 13:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="618972">Madushan Nishantha</span> <a href="#narrow/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct/near/403382654">said</a>:</p>
+<blockquote>
+<p>The header for wifi dma is slightly different from what's in the datasheet,  it has flags related to rf stuff. that fields ends up being 68 bits. I'm not exactly  sure how it works on the peripheral side without being properly aligned either. and yeah pointers are 64 bits in linux. (but the blob I'm revere engineering is 32 bits, runs in a different core)</p>
+</blockquote>
+<p>I can't see the layout of the actual list nodes in the reference manual anyway. It leaves a lot of information out, it seems.</p>
+
+
+
+<a name="403384489"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403384489" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403384489">(Nov 21 2023 at 13:49)</a>:</h4>
+<p>yeah most of the operation mode of most peripherals on this device we have to read the c sdk to figure out. manual is not that great.</p>
+
+
+
+<a name="403469898"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403469898" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403469898">(Nov 21 2023 at 22:03)</a>:</h4>
+<p>I figured out there is another way to work with bitfields by just including the c-header and then use the api generated by bindgen. but I don't like it that much <a href="https://rust-lang.github.io/rust-bindgen/using-bitfields.html">https://rust-lang.github.io/rust-bindgen/using-bitfields.html</a></p>
+
+
+
+<a name="403470737"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403470737" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403470737">(Nov 21 2023 at 22:10)</a>:</h4>
+<p>but since it's already there maybe I can write a macro to to generate field accessoros using <code>__BindgenBitfieldUnit</code> type</p>
+
+
+
+<a name="403909641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/403909641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#403909641">(Nov 24 2023 at 06:53)</a>:</h4>
+<p>Yes, you can use the bindgen generated code to set the bitfields. I think we are generating those methods. But you will not get typed access to the fields, they will just be numbers.</p>
+
+
+
+<a name="404020811"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/404020811" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Madushan Nishantha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#404020811">(Nov 24 2023 at 21:19)</a>:</h4>
+<p>for now I just added bilge crate to my code for packed struct support. I will refactor to whatever the kernel people settle on when the time comes</p>
+
+
+
+<a name="405561622"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Accessing%20memory%20mapped%20registers%20via%20struct/near/405561622" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fabien Parent <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Accessing.20memory.20mapped.20registers.20via.20struct.html#405561622">(Dec 02 2023 at 19:49)</a>:</h4>
+<p>I'm currently working on a abstraction for regmap. This is still in early stage and the code will probably change daily, but at least the basics are working: <a href="https://github.com/Fabo/linux/commits/fparent/rust-regmap-dev">https://github.com/Fabo/linux/commits/fparent/rust-regmap-dev</a>.</p>
+<p>You can check some usage example here: <a href="https://github.com/Fabo/linux/commit/68467da584b24457f7b0d7ffe6501995bcaed2ca">https://github.com/Fabo/linux/commit/68467da584b24457f7b0d7ffe6501995bcaed2ca</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

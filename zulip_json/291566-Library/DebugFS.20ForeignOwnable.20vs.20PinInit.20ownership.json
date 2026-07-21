@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>I'm going to do a bit more cleanup before posting either of these to the list (there are some TODOs in safety comments and stuff), but in case it can short circuit some feedback loops, please see the last commit (which has sample updates)</p>\n<p><a href=\"https://github.com/maurer/linux/tree/b4/debugfs-rust\">https://github.com/maurer/linux/tree/b4/debugfs-rust</a><br>\n<a href=\"https://github.com/maurer/linux/tree/b4/debugfs-rust-fo\">https://github.com/maurer/linux/tree/b4/debugfs-rust-fo</a></p>\n<p>The first is what dynamic management of a fake \"device\" which has debugfs info looks like with the PinInit variant that's been discussed on the list, and the second is what it would look like if we continued to use ForeignOwnable. I'm still unconvinced that we almost ever want the debug file to be the primary owner of data, but I've modeled that in the first one.</p>\n<p>(Don't worry too much about the miscdevice, that's just to get an input stream)</p>\n<p>If I've missed something with regards to the backing, let me know so I can get it while I'm doing the polish required before sending to the list.</p>\n<p>cc <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 527565023,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751923107
+    },
+    {
+        "content": "<p>I really think the \"input stream\" thing isn't that interesting. If you implement a sample platform driver, and use debugfs for the private driver data returned from probe(), you can immediately see why the pin-init approach is much better, especially lifetime wise.</p>",
+        "id": 527566262,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751923762
+    },
+    {
+        "content": "<p>That only works if every field in the data is only exported independently (see the \"combined\" example)</p>",
+        "id": 527566885,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924062
+    },
+    {
+        "content": "<p>The input stream was mostly for Greg's sake - he wanted to see mutability in addition to dynamic creation and teardown.</p>",
+        "id": 527567103,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924177
+    },
+    {
+        "content": "<p>Does the PinInit version look like what you were expecting though?</p>",
+        "id": 527567125,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924186
+    },
+    {
+        "content": "<p>(One other awkward thing I'll probably bring up on the list is that with the PinInit version, because even with debugfs turned off we'll be accessing the data through a <code>File</code>, we'll still need to <em>create</em> those files. Creating those files means that we can't necessarily DCE any formatting methods.)</p>",
+        "id": 527567357,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924320
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/channel/291566-Library/topic/DebugFS.20ForeignOwnable.20vs.20PinInit.20ownership/near/527566885\">said</a>:</p>\n<blockquote>\n<p>That only works if every field in the data is only exported independently (see the \"combined\" example)</p>\n</blockquote>\n<p>What do you mean  with that?</p>",
+        "id": 527567401,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751924339
+    },
+    {
+        "content": "<p>If I have</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">bar</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"n\">baz</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and I want to present through debugfs <code>bar</code>, <code>baz</code>, and some summary info <code>bang</code> that's a combo of the three, with the <code>File</code> version, that's either going to be written</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">File</span><span class=\"o\">&lt;</span><span class=\"n\">File</span><span class=\"o\">&lt;</span><span class=\"n\">File</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;&gt;&gt;</span>\n</code></pre></div>\n<p>or</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">bar</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span>\n<span class=\"w\">  </span><span class=\"n\">baz</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">bang</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;</span>\n</code></pre></div>\n<p>Either of those representations is kind of wacky compared to the owned variant, which would look something like</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Boom</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">foo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"cp\">#[cfg(DEBUG_FS)]</span>\n<span class=\"w\">  </span><span class=\"n\">_debug</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">File</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">File</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">File</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 527567570,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924427
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/channel/291566-Library/topic/DebugFS.20ForeignOwnable.20vs.20PinInit.20ownership/near/527567103\">said</a>:</p>\n<blockquote>\n<p>The input stream was mostly for Greg's sake - he wanted to see mutability in addition to dynamic creation and teardown.</p>\n</blockquote>\n<p>Greg asked for multiple dynamic created devices, which refers to having a driver that is probed with an arbitrary number of dynamically created devices. I think there's a misunderstanding. Unless you had some private conversation I'm not aware of.</p>",
+        "id": 527567731,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751924528
+    },
+    {
+        "content": "<p>I didn't see how probing exercised any interesting lifetime patterns with either PinInit or the Arc-based solution, so I kind of assumed he was looking for something more complex. I could do a platform driver that implements probe, but it'd look basically identical to the module intitialization</p>",
+        "id": 527567828,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924596
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/channel/291566-Library/topic/DebugFS.20ForeignOwnable.20vs.20PinInit.20ownership/near/527567828\">said</a>:</p>\n<blockquote>\n<p>I didn't see how probing exercised any interesting lifetime patterns with either PinInit or the Arc-based solution, so I kind of assumed he was looking for something more complex. I could do a platform driver that implements probe, but it'd look basically identical to the module intitialization</p>\n</blockquote>\n<p>It does not, probe() returns a <code>Pin&lt;KBox&lt;T&gt;&gt;</code> which is then dropped in remove(). You don't want your data to out-live remove(), hence forcing an <code>Arc</code> is bad. You will see this in a driver context.</p>",
+        "id": 527568057,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751924742
+    },
+    {
+        "content": "<p>I can try implementing it to be sure, but I think that just works fine - the Arc is only held by File objects that are also being kept alive by your device, so if your device is being dropped, the data you're holding will be cleaned up too.</p>",
+        "id": 527568231,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751924834
+    },
+    {
+        "content": "<blockquote>\n<p>and I want to present through debugfs <code>bar</code>, <code>baz</code>, and some summary info <code>bang</code> that's a combo of the three, with the <code>File</code> version, that's either going to be written</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">bar</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span>\n<span class=\"w\">  </span><span class=\"n\">baz</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">bang</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Seems absolutely reasonable to me.</p>",
+        "id": 527568292,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751924865
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/channel/291566-Library/topic/DebugFS.20ForeignOwnable.20vs.20PinInit.20ownership/near/527568231\">said</a>:</p>\n<blockquote>\n<p>I can try implementing it to be sure, but I think that just works fine - the Arc is only held by File objects that are also being kept alive by your device, so if your device is being dropped, the data you're holding will be cleaned up too.</p>\n</blockquote>\n<p>You use the <code>Arc</code> as mechanism to make the data accessible, so you'd end up with something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">MyDriver</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"n\">foo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">   </span><span class=\"n\">foo_file</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">File</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but <code>foo</code> doesn't need to be an <code>Arc</code>. Instead, I want to be sure it's dropped when the <code>MyDriver</code> instance is dropped. Now I can't be sure of that. Well, at least the compiler doesn't ensure it for me anymore -- that's bad.</p>",
+        "id": 527568821,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751925079
+    },
+    {
+        "content": "<p>Hrm. OK. I guess we can take a crack with the PinInit mode. I suppose one benefit is that the PinInit mode does <em>support</em> putting an <code>Arc</code> in the pin so if we end up with anything where in-place ownership is too onerous, there is an escape hatch.</p>",
+        "id": 527569151,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751925200
+    },
+    {
+        "content": "<p>Less work for me to only polish one of the two changesets I suppose</p>",
+        "id": 527569187,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751925215
+    },
+    {
+        "content": "<p>It also scales horribly. If I have a lot of debugfs files I end up with either having to have all of my private data in a huge <code>Arc</code>, which entirely undermines the <code>Pin&lt;KBox&lt;T&gt;&gt;</code> return value design we have for a reason, affecting all the data, or I have to create lots of <code>Arc</code> instances within the driver data to do it more fine grained, for the purpose of debugfs, which also isn't nice.</p>",
+        "id": 527570253,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751925604
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/channel/291566-Library/topic/DebugFS.20ForeignOwnable.20vs.20PinInit.20ownership/near/527569151\">said</a>:</p>\n<blockquote>\n<p>Hrm. OK. I guess we can take a crack with the PinInit mode. I suppose one benefit is that the PinInit mode does <em>support</em> putting an <code>Arc</code> in the pin so if we end up with anything where in-place ownership is too onerous, there is an escape hatch.</p>\n</blockquote>\n<p>Yeah, pin-init really seems to be the correct tool for this; thanks for working this out!</p>",
+        "id": 527570637,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751925729
+    },
+    {
+        "content": "<p>OK. If you think that being a platform driver is sufficient to be dynamic enough, I'll try just porting the driver I actually wanted to put on the initial stuff on top of this.  (original draft is here: <a href=\"https://github.com/maurer/linux/commit/968b443329d4379f39334b57b04247caf7ae17d5\">https://github.com/maurer/linux/commit/968b443329d4379f39334b57b04247caf7ae17d5</a> )</p>",
+        "id": 527570672,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751925740
+    },
+    {
+        "content": "<p>I'll have to quickly package up the soc driver interface for it though, I think that one is likely to be substantially less contentious though</p>",
+        "id": 527570724,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751925758
+    },
+    {
+        "content": "<p>I recommend not mixing those two things up. Please keep a sample driver in your debugfs patch series. You can always send a second patch series for the SoC abstractions and driver that builds on top of it referencing the other patch series.</p>",
+        "id": 527571578,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751926048
+    },
+    {
+        "content": "<p>OK. Do you think I should make the sample driver probable then?</p>",
+        "id": 527571631,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751926067
+    },
+    {
+        "content": "<p>(rather than doing the miscdevice input stream thing I have?)</p>",
+        "id": 527571692,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1751926087
+    },
+    {
+        "content": "<p>Absolutely! You can easily achieve this with ACPI, please see the platform driver sample [1] in <code>driver-core-next</code> [2]. You can simply copy the sample, keeping only the ACPI device ID table and you should be good to go. You should also base your code on <code>driver-core-next</code>.</p>\n<p>[1] <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/driver-core/driver-core.git/tree/samples/rust/rust_driver_platform.rs?h=driver-core-next\">https://git.kernel.org/pub/scm/linux/kernel/git/driver-core/driver-core.git/tree/samples/rust/rust_driver_platform.rs?h=driver-core-next</a><br>\n[2] <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/driver-core/driver-core.git/log/?h=driver-core-next\">https://git.kernel.org/pub/scm/linux/kernel/git/driver-core/driver-core.git/log/?h=driver-core-next</a></p>",
+        "id": 527572144,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1751926241
+    }
+]

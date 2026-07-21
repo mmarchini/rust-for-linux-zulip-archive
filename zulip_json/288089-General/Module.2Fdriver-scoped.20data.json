@@ -1,0 +1,1112 @@
+[
+    {
+        "content": "<p>This summarizes my recent thoughts on the topic</p>\n<h2>What's needed</h2>\n<p>The ability to define data shared among a driver (or module), which are accessible inside <code>probe</code> callbacks. Or (even better), accessible to most part of driver code.</p>\n<p>An example would be creating a debugfs directory on driver load, and each individual probe can add a subdirectory.</p>\n<p>Another example is the existing <code>global_lock!</code> today, but this is trying to find a more generic approach to all data (that potentially need <code>Drop</code>, too).</p>\n<h2>Approaches</h2>\n<h3>Unsafe</h3>\n<p>One can define <code>static mut</code> or create a <code>static</code> that is uninitialized unsafely, and unsafely initialize it.</p>\n<p>The issue for this is that unsafe initialization is needed, and manual drop is needed in the <code>impl Drop for Module</code>, as statics don't have their destructor executed.</p>\n<h3>Put it inside struct that <code>impl Module</code></h3>\n<p>One immediate thought is to put the data inside the struct that implements module, e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">MyModule</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">dir</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">kernel</span><span class=\"p\">::</span><span class=\"n\">debugfs</span><span class=\"p\">::</span><span class=\"n\">Dir</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and possible expose a way to get data associated with the current module (while performing a check to see if data is actually implemented).</p>\n<p>However, this is problematic as you want to access data before module init is completed. <code>probe</code> can be called before module initialization is done, and at that point the <code>MyModule</code> is not yet fully initialized.</p>\n<p>Partially accessing the module fields probably need major rethink and re-work for pin-init.</p>\n<h3><code>OnceLock</code>-like approach</h3>\n<p>Having a boolean flag (static key, if needed) and use <code>OnceLock</code>-like approach is a plausible way. This ensures that data can be safely accessed and initialized.</p>\n<p>However this does not handle the destruction part. This can be solved in various ways:</p>\n<ol>\n<li>\n<p>Add <code>dtor</code> support to module system</p>\n<p>* Currently module system support ctor, but only supports a single exit function</p>\n</li>\n<li>\n<p>Keep a linked list of dtors to run within the module, and have the generated glue for module walk through the destrutor list and execute them.</p>\n</li>\n</ol>\n<h3>Discourage globals -- passing pointers around always?</h3>\n<p>This is problematic for a couple of reasons:</p>\n<ol>\n<li>\n<p>Driver's probe callbacks today do not receive data pointers</p>\n<p>* In C code, people just use globals, so there isn't any case where the registration would need to hand some data across to the probe fn.</p>\n</li>\n<li>\n<p>Performance</p>\n<p>* You'd need to use an <code>Arc</code> to wrap the data<br>\n  * The access becomes indirect access instead of global loads</p>\n</li>\n</ol>",
+        "id": 564311425,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1765993764
+    },
+    {
+        "content": "<p>Actually, I have an interesting idea.</p>\n<p>It contains a few parts (skip name bikeshedding for now):</p>\n<ol>\n<li>A macro that defines a global and unique type for each global (somewhat similar to lazy-static), let's call them <code>FOO</code></li>\n<li>A token type, <code>GlobalOwned&lt;G&gt;</code> which represents that a global has been initialized. Dropping it runs the destructor of global.  This will be stored in the module data. So <code>OwnedToken</code> will be stored.</li>\n<li>A token type, <code>GlobalRef&lt;'a, G&gt;</code> which will deref to the global's storage. This can be derived from <code>GlobalOwned&lt;G&gt;</code> and associated with the lifetime of <code>GlobalOwned&lt;G&gt;</code>. Borrowck will ensure that while we're holding the ref, the global has been initialized and not yet dropped.</li>\n<li>The module will pass <code>GlobalRef</code> to driver when registering. This is a ZST, so it does not actually have to exist in memory. Hence, <code>probe</code> callback and obtain it from a thin-air (minus some caveat similar to <span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> 's trick discussed in Kangrejos)</li>\n<li>Module can then access the global using this token type inside probe callback. It can also further pass it to other data if it wishes.</li>\n</ol>\n<p>Drawback: <code>GlobalRef</code> has a lifetime param, so would all structs that reference it.</p>\n<p>I am not sure whether I want this approach or the <code>OnceLock</code>-like approach</p>",
+        "id": 564316235,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1765995289
+    },
+    {
+        "content": "<p>Re: discouraging globals, could we put references to statics into the match table, and pass the \"global\" in through the <code>IdInfo</code> parameter?</p>\n<p>Since we use macros to declare our match tables already, it would also be feasible to have them generate initialization/destruction code for table-attached statics. We could then make it so that the driver traits being implemented expect an <code>init</code> function to be called before using the table and a <code>drop</code> function to be called when the driver is being released.</p>\n<p>The main downside I see for this is that OF vs ACPI-based stuff wouldn't share declarations of the statics.</p>\n<p>This doesn't solve global data initialization/dropping for non-devices, but re-using the table scope seems a good way to avoid globals.</p>",
+        "id": 564340811,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1766004842
+    },
+    {
+        "content": "<p>I don't think tying things to <code>IdInfo</code> is a good idea -- if anything it would be a new mechanism that looks similar to <code>IdInfo</code>.</p>",
+        "id": 564341797,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766005264
+    },
+    {
+        "content": "<p>I don't understand the limitation on putting a pointer to the data in the module struct?</p>",
+        "id": 564399551,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045008
+    },
+    {
+        "content": "<p>Allocate and initialize in module init function, stick an to the thing in the module struct?</p>",
+        "id": 564399646,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045049
+    },
+    {
+        "content": "<p>Oh, you want access in probe, which potentially happens before module init. I wasn't reading close enough.</p>",
+        "id": 564399809,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045121
+    },
+    {
+        "content": "<p>I don't understand why module init would potentially be run concurrently with probe. At least in C, this is not the case.</p>",
+        "id": 564400904,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045526
+    },
+    {
+        "content": "<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>",
+        "id": 564401315,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1766045688
+    },
+    {
+        "content": "<p>We could allow a type to be constructed in <code>impl InPlaceModule for DriverModule</code>.</p>",
+        "id": 564401334,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045695
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401315\">said</a>:</p>\n<blockquote>\n<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>\n</blockquote>\n<p>Right, but I see no blocker for us to allow this.</p>",
+        "id": 564401396,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045720
+    },
+    {
+        "content": "<p>It's kind of tricky to access it safely. During module load and unload, the value may be missing.</p>",
+        "id": 564401508,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1766045758
+    },
+    {
+        "content": "<p>I think it is better to allow driver implementations to hook into the driver init impl and tie something to the lifetime of the module, than to start with globals.</p>",
+        "id": 564401566,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045777
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401508\">said</a>:</p>\n<blockquote>\n<p>It's kind of tricky to access it safely. During module load and unload, the value may be missing.</p>\n</blockquote>\n<p>Well, if we make it reference counted, it will be there as long as anyone has a handle for it.</p>",
+        "id": 564401984,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766045939
+    },
+    {
+        "content": "<p>Also, the lifetime would be bounded by <code>module_init</code> and <code>module_exit</code>, so we know when it is safe to access.</p>",
+        "id": 564402198,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766046013
+    },
+    {
+        "content": "<p>Probe can run as soon as driver is registered I believe</p>",
+        "id": 564434076,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766056726
+    },
+    {
+        "content": "<p>We control when we register the driver. We can make sure to initialize the module data before we register the driver.</p>",
+        "id": 564440643,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766058931
+    },
+    {
+        "content": "<p>That's how C side does it, but this does rule out putting these as fields of the module, as <code>Registration</code> needs to go there too.</p>",
+        "id": 564440933,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766059025
+    },
+    {
+        "content": "<p>I guess we have the option of always returing <code>EPROBE_DEFER</code> if the module_init hasn't returned, but I am not sure if driver-core would be happy with this approach <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> .</p>",
+        "id": 564441715,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766059266
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401315\">said</a>:</p>\n<blockquote>\n<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>\n</blockquote>\n<p>A call to <code>driver_register()</code> can directly end up in <code>probe()</code>, such that you can have a call stack where eventually <code>probe()</code> is called from <code>module_init()</code>.</p>",
+        "id": 564447321,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766060955
+    },
+    {
+        "content": "<p>It may happen when <code>driver_autoprobe</code> is <code>true</code>, which is almost always the case (there are only a few exceptions with e.g. VFIO, etc.) and the device is already present in the corresponding bus when the driver is registered.</p>",
+        "id": 564448118,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766061187
+    },
+    {
+        "content": "<p>It is also worth noting that there may also be a race condition when the matching device is not yet present in the system, but becomes available while the driver is already registered and <code>module_init()</code> is still running.</p>",
+        "id": 564448276,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766061242
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564441715\">said</a>:</p>\n<blockquote>\n<p>I guess we have the option of always returing <code>EPROBE_DEFER</code> if the module_init hasn't returned, but I am not sure if driver-core would be happy with this approach <span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> .</p>\n</blockquote>\n<p>IIUC the proposal is to let the driver-core check the origin of a driver registration (i.e. the module) and whether the module has some (atomic?) flag set that indicates whether the module has been fully initialized and otherwise return <code>EPROBE_DEFER</code>?</p>",
+        "id": 564448915,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766061466
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 564449590,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766061672
+    },
+    {
+        "content": "<p>We can do this in Rust binding side</p>",
+        "id": 564449737,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766061716
+    },
+    {
+        "content": "<p>What about other asynchronous cases, such as scheduling some work from module_init()?</p>",
+        "id": 564450100,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766061838
+    },
+    {
+        "content": "<p>We can initialize the data before creating <code>Registration</code></p>",
+        "id": 564450328,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766061892
+    },
+    {
+        "content": "<p>Accessing module fields would check the same flag and panic if this happens</p>",
+        "id": 564450340,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766061893
+    },
+    {
+        "content": "<p>So we can be certain that the data is always valid when probe is called.</p>",
+        "id": 564450468,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766061927
+    },
+    {
+        "content": "<p>We can then pass some kind of pointer to the data to the probe function.</p>",
+        "id": 564450559,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766061950
+    },
+    {
+        "content": "<p>Either way, I'm not sold on <code>EPROBE_DEFER</code>. I think if we want to defer things, we should write a small module initializer abstraction that takes a callback that is executed when the module structure is fully initialized and calls the actual work from there.</p>",
+        "id": 564450571,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766061955
+    },
+    {
+        "content": "<p>I don't think we need to defer probing.</p>",
+        "id": 564450653,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766061977
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559\">said</a>:</p>\n<blockquote>\n<p>We can then pass some kind of pointer to the data to the probe function.</p>\n</blockquote>\n<p>I've explained in the original post why this isn't an option</p>",
+        "id": 564450741,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062000
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450741\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559\">said</a>:</p>\n<blockquote>\n<p>We can then pass some kind of pointer to the data to the probe function.</p>\n</blockquote>\n<p>I've explained in the original post why this isn't an option</p>\n</blockquote>\n<p>I'll go reread that.</p>",
+        "id": 564450782,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766062018
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450653\">said</a>:</p>\n<blockquote>\n<p>I don't think we need to defer probing.</p>\n</blockquote>\n<p>No, we just need to defer the register call to after the module structure has been initialized.</p>",
+        "id": 564450840,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062035
+    },
+    {
+        "content": "<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>",
+        "id": 564450996,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062082
+    },
+    {
+        "content": "<p>The user needs to ensure whatever is accessible from probe is initialized in the first phase</p>",
+        "id": 564451060,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062099
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450741\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559\">said</a>:</p>\n<blockquote>\n<p>We can then pass some kind of pointer to the data to the probe function.</p>\n</blockquote>\n<p>I've explained in the original post why this isn't an option</p>\n</blockquote>\n<p>I think you refer to your explanation that probe can be called before module_init has completed. However, the reason for this is that we register the driver. Probe will not be called before we register the driver. If we initialize the data before we create the <code>Registration</code>, this issue goes away.</p>",
+        "id": 564451132,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766062126
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996\">said</a>:</p>\n<blockquote>\n<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>\n</blockquote>\n<p>Yes, this is what I was trying to communicate.</p>",
+        "id": 564451256,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766062167
+    },
+    {
+        "content": "<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>",
+        "id": 564451296,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062180
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296\">said</a>:</p>\n<blockquote>\n<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>\n</blockquote>\n<p>I can put it in the module struct if I put it behind an Arc.</p>",
+        "id": 564451451,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766062236
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996\">said</a>:</p>\n<blockquote>\n<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>\n</blockquote>\n<p>Yeah, that's pretty much what I mean, the <code>driver::Registration</code> should impl a Trait with a callback that's called in phase 2, such that it can call <code>driver_register()</code> from there.</p>",
+        "id": 564451523,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062260
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451451\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296\">said</a>:</p>\n<blockquote>\n<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>\n</blockquote>\n<p>I can put it in the module struct if I put it behind an Arc.</p>\n</blockquote>\n<p>You'd then need to pass this <code>Arc</code> to the probe function, and there's currently no way</p>",
+        "id": 564451590,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062282
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451523\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996\">said</a>:</p>\n<blockquote>\n<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>\n</blockquote>\n<p>Yeah, that's pretty much what I mean, the <code>driver::Registration</code> should impl a Trait with a callback that's called in phase 2, such that it can call <code>driver_register()</code> from there.</p>\n</blockquote>\n<p>I don't think this is necessary. Arguably it can be quite confusing if this callback fails and the rollback then needs to be implicit and the user cannot handle the error explicitly.</p>\n<p>I'd rather just have a <code>init</code> and <code>early_init</code> so user can just do registration normally in <code>init</code>. They just need to make sure they don't call it from <code>early_init</code>.</p>",
+        "id": 564451911,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062391
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451590\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451451\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296\">said</a>:</p>\n<blockquote>\n<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>\n</blockquote>\n<p>I can put it in the module struct if I put it behind an Arc.</p>\n</blockquote>\n<p>You'd then need to pass this <code>Arc</code> to the probe function, and there's currently no way</p>\n</blockquote>\n<p>That is unfortunate.</p>",
+        "id": 564451912,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766062392
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451911\">said</a>:</p>\n<blockquote>\n<p>I don't think this is necessary. Arguably it can be quite confusing if this callback fails and the rollback then needs to be implicit and the user cannot handle the error explicitly.</p>\n</blockquote>\n<p>If the callback fails, we can just drop the module structure, no?</p>\n<blockquote>\n<p>I'd rather just have a <code>init</code> and <code>early_init</code> so user can just do registration normally in <code>init</code>. They just need to make sure they don't call it from <code>early_init</code>.</p>\n</blockquote>\n<p>It shouldn't be on the user to declare proper order and if messed up cause panics otherwise.</p>",
+        "id": 564452466,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062556
+    },
+    {
+        "content": "<p>Yes, <code>module</code> can be dropped, however for user they won't be able to handle the registration failure, to them it becomes effectively undistinguishable from module unload, which is bad.</p>",
+        "id": 564452653,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062612
+    },
+    {
+        "content": "<p>There isn't really anything to handle, if the Registration fails you just bail out.</p>",
+        "id": 564453062,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062745
+    },
+    {
+        "content": "<p>I.e. it's not different from a plain <code>module_foo_driver!()</code> call.</p>",
+        "id": 564453243,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062801
+    },
+    {
+        "content": "<p>I personally won't consider a OOPS triggerable only during <code>init</code> or <code>exit</code> to be too problematic; this is something that can be easily found (and adding a custom lint for this sort of misuse is easy).</p>",
+        "id": 564453361,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062833
+    },
+    {
+        "content": "<p>Your idea is basically just that we only ever auto-generate <code>init</code> call and user fills in <code>early_init</code> only?</p>",
+        "id": 564453423,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766062856
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453361\">said</a>:</p>\n<blockquote>\n<p>I personally won't consider a OOPS triggerable only during <code>init</code> or <code>exit</code> to be too problematic; this is something that can be easily found (and adding a custom lint for this sort of misuse is easy).</p>\n</blockquote>\n<p>Well, you have to have the hardware to be able to catch the oops, because it will only ever happen if your driver is actually probed and timing is relevant as well, so you even have to be lucky to catch it.</p>",
+        "id": 564453745,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062958
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453423\">said</a>:</p>\n<blockquote>\n<p>Your idea is basically just that we only ever auto-generate <code>init</code> call and user fills in <code>early_init</code> only?</p>\n</blockquote>\n<p>Yes.</p>",
+        "id": 564453782,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766062971
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453745\">said</a>:</p>\n<blockquote>\n<p>Well, you have to have the hardware to be able to catch the oops, because it will only ever happen if your driver is actually probed and timing is relevant as well, so you even have to be lucky to catch it.</p>\n</blockquote>\n<p>Basically you only need the rule of \"early_init\" cannot (transitively) call registration functions. And this is pretty easy for static analyzers.</p>",
+        "id": 564454077,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766063066
+    },
+    {
+        "content": "<p>Also for human reviewers (and note that on C side we currently relying exclusively on reviewers to catch this sort of ordering bugs)</p>",
+        "id": 564454313,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766063127
+    },
+    {
+        "content": "<p>Iff we have a way to check on every build automatically, then I think it's fine.</p>",
+        "id": 564454432,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766063162
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564454313\">said</a>:</p>\n<blockquote>\n<p>Also for human reviewers (and note that on C side we currently relying exclusively on reviewers to catch this sort of ordering bugs)</p>\n</blockquote>\n<p>But we <strong>can</strong> do better with Rust. :)</p>",
+        "id": 564454583,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766063208
+    },
+    {
+        "content": "<p>Actually, with what mechanism are we going to collect the list of all callbacks to call?</p>",
+        "id": 564455523,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766063495
+    },
+    {
+        "content": "<p>Maybe a static list that we clean up at the end of the initialization sequence?</p>",
+        "id": 564469032,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766067031
+    },
+    {
+        "content": "<p>This static needs to be unique per module, and there's no such construct as per-module variables unless we resort to use macros for all registrations (which are all just functions if ignoring convience macros)</p>",
+        "id": 564469464,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766067130
+    },
+    {
+        "content": "<p>We only have a single module per compilation unit, so we also only need a name for the static that doesn't get into the way of drivers, e.g. <code>__MODULE_INIT_CALLBACK_LIST</code>, similar to <code>__LOG_PREFIX</code>.</p>",
+        "id": 564470148,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1766067293
+    },
+    {
+        "content": "<p>Such statics are only referenced from macros. <code>__LOG_PREFIX</code> is referenced by path within the formatting macros. I'll see if I can add something to <code>ThisModule</code> to achieve something similar.</p>",
+        "id": 564476412,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766068747
+    },
+    {
+        "content": "<p>Quick question: Is .drvdata misnamed? There is device driver level (module) data such as module parameters, and there is per-device data.</p>\n<p>And so far we only have access to one (per-device data) and it is named in a way that sounds like the other, yes? <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 567889448,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768354964
+    },
+    {
+        "content": "<p>Do you refer to <code>Device::drvdata()</code> [1]? If so, that's the correct name; it is the driver's device private data.</p>\n<p>The module data, such as module parameters, is not at the device driver level and it is not called \"device driver level data\".</p>\n<p>It is not (necessarily) specific to a driver and it is not specific to a device either, i.e. there may be an arbitrary number of devices bound to a driver and therefore an arbitrary number of driver instances.</p>\n<p>[1] <a href=\"https://rust.docs.kernel.org/kernel/device/struct.Device.html#method.drvdata\">https://rust.docs.kernel.org/kernel/device/struct.Device.html#method.drvdata</a></p>",
+        "id": 567965337,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768391045
+    },
+    {
+        "content": "<p>Yes, that's what I was asking about. I guess the names works if-and-only-if one uses the fully qualified name: Device::drvdata.</p>",
+        "id": 568098941,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768433702
+    },
+    {
+        "content": "<p>It does still throw me off, because it sounds like \"given a device, go find the driver data (which is sort of global)\", as opposed to \"for this device, find per-device driver data(?)\", but maybe that's just me.</p>",
+        "id": 568099660,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768434234
+    },
+    {
+        "content": "<p>There is nothing like \"global driver data\". The C function is called <code>dev_get_drvdata()</code>, which is exactly the same except for the <code>get</code> which does not make any sense in the C version.</p>",
+        "id": 568102151,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768435545
+    },
+    {
+        "content": "<p>I see, OK you followed the C. Thanks for explaining.</p>",
+        "id": 568108953,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768439429
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782725\">John Hubbard</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/567889448\">said</a>:</p>\n<blockquote>\n<p>Quick question: Is .drvdata misnamed? There is device driver level (module) data such as module parameters, and there is per-device data.</p>\n<p>And so far we only have access to one (per-device data) and it is named in a way that sounds like the other, yes? <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>\n</blockquote>\n<p>I think drvdata is not misnamed, but the our <code>Driver</code> trait kinda is. The probe method constructs an instance of <code>Driver</code> and we put it into the <code>drvdata</code>. But the instance is actually device data (from driver's perspective).</p>",
+        "id": 568210077,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768483599
+    },
+    {
+        "content": "<p>No, it is the driver's data, which the driver temporarily stores in the device as long as it is bound to this device.</p>",
+        "id": 568210322,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768483654
+    },
+    {
+        "content": "<p>It's driver's per-device data. So it shouldn't be called <code>Driver</code></p>",
+        "id": 568210644,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768483727
+    },
+    {
+        "content": "<p>Having multiple instances of <code>Driver</code> where there's one driver and multiple device is just misnomer</p>",
+        "id": 568210774,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768483749
+    },
+    {
+        "content": "<p>Well, you do have multiple driver instances, one per device.</p>",
+        "id": 568210928,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768483788
+    },
+    {
+        "content": "<p>You have a single object of driver (e.g. <code>pci_driver</code>)</p>",
+        "id": 568211232,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768483850
+    },
+    {
+        "content": "<p>From a language point the instances should be at least called \"drivee\"</p>",
+        "id": 568211529,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768483915
+    },
+    {
+        "content": "<p>Traits like <code>pci::Driver</code> do not represent the C <code>struct device_driver</code>(which is the base struct for structs like <code>struct pci_driver</code>).</p>\n<p>Those <code>struct device_driver</code>structures are represented by (and live in) <code>driver::Registration</code>, whereas e.g. the <code>pci::Driver</code> trait represents an instance of the driver.</p>",
+        "id": 568218957,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768485521
+    },
+    {
+        "content": "<p>I know, but that's why I think it's a misnomer</p>",
+        "id": 568251367,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768492553
+    },
+    {
+        "content": "<p>Can we improve the name(s)? It would help when trying to remember which does what. :)</p>",
+        "id": 568287943,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768502681
+    },
+    {
+        "content": "<p>The name of what?</p>",
+        "id": 568289454,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768503262
+    },
+    {
+        "content": "<p>Also, let me put it in other words: The (per device) private data is exactly what represents an instance of a driver.</p>",
+        "id": 568290247,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768503536
+    },
+    {
+        "content": "<p>The entities we have are a (bus) device, which represents the physical device, the registration of a driver and instances of a driver which are created whenever a device is matched with a driver registration.</p>",
+        "id": 568290753,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768503686
+    },
+    {
+        "content": "<p>The fact that a driver instance is stored as private data of a device is an implementation detail.</p>",
+        "id": 568290945,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768503748
+    },
+    {
+        "content": "<p>I think some of the difficulty is with \"instance of a driver\". Because there is (or should be) only one instance of a driver, whereas there can be multiple instances of a device.</p>",
+        "id": 568292418,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504191
+    },
+    {
+        "content": "<p>No, this is wrong.</p>",
+        "id": 568292468,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504210
+    },
+    {
+        "content": "<p>I think what whatever mental model John and I have is more close resemblance to the C code that we have</p>",
+        "id": 568292636,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504255
+    },
+    {
+        "content": "<p>The driver itself is just code, but an instance of a driver represents the state of the driver for a certain device, i.e. an instance.</p>",
+        "id": 568292757,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504293
+    },
+    {
+        "content": "<p>Perhaps. And if the Rust side is different, then what we can do is to make the Rust names <em>clearly</em> different, to help with seeing that.</p>",
+        "id": 568292823,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504318
+    },
+    {
+        "content": "<p>You don't create instances of code, though, so to me an instance of driver doesn't make much sense. It's supposed to be a singleton</p>",
+        "id": 568292855,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504325
+    },
+    {
+        "content": "<p>Danilo, that's just not quite...right. :)</p>\n<p>As soon as you make \"an instance of the driver\", it's really a per-device set of data. There is no additional driver instance.</p>",
+        "id": 568292998,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504379
+    },
+    {
+        "content": "<p>Exactly! The driver is a singleton.</p>",
+        "id": 568293034,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504394
+    },
+    {
+        "content": "<p>In C it is exactly the same, the object you create in probe() and store in the device's private data pointer is what people consider the instance of the driver.</p>\n<p>See nouveau for instance, the object that is stored is <code>struct nouveau_drm</code>, i.e. an instance of the nouveau driver.</p>\n<p><a href=\"https://elixir.bootlin.com/linux/v6.18.5/source/drivers/gpu/drm/nouveau/nouveau_drm.c#L755\">https://elixir.bootlin.com/linux/v6.18.5/source/drivers/gpu/drm/nouveau/nouveau_drm.c#L755</a></p>",
+        "id": 568293270,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504483
+    },
+    {
+        "content": "<p>$ ll /proc/driver/<br>\ntotal 0<br>\ndr-xr-xr-x 11 root root 0 Jan 15 10:19 nvidia<br>\ndr-xr-xr-x  5 root root 0 Jan 15 11:14 nvidia-caps<br>\ndr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-modeset<br>\ndr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-nvlink<br>\ndr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-nvswitch<br>\ndr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-uvm<br>\n-r--r--r--  1 root root 0 Jan 15 11:14 nvram<br>\n-r--r--r--  1 root root 0 Jan 15 11:14 rtc</p>",
+        "id": 568293331,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504505
+    },
+    {
+        "content": "<p>There is only one driver there, even though there may be multiple GPUs that it handles.</p>",
+        "id": 568293485,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504563
+    },
+    {
+        "content": "<p>It's not an instance of the driver though, it's an instance of driver's data. Calling it an instance of driver is inconsistent with the way the term is used (in Linux today or in other kenels).</p>",
+        "id": 568293589,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504602
+    },
+    {
+        "content": "<p>If you think calling it <code>Device</code> is too overloaded, I hope we can at least call it <code>DriverData</code></p>",
+        "id": 568293617,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504615
+    },
+    {
+        "content": "<p>so it is clear that it is not <em>a driver</em>, but an instance of driver's data.</p>",
+        "id": 568293676,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504638
+    },
+    {
+        "content": "<p>It should be DeviceData, right?</p>",
+        "id": 568293677,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504638
+    },
+    {
+        "content": "<p>Yeah, there is only one driver and multiple instances of it, one for each device that we store in the device private data pointer.</p>",
+        "id": 568293691,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504645
+    },
+    {
+        "content": "<p>But that idea never shows up. I think it got invented on the Rust end.</p>",
+        "id": 568293796,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504681
+    },
+    {
+        "content": "<p>It perfectly corresponds with a normal object oriented model, i.e. an Object has shared code, i.e. probe(), unbind(), etc. and per instance data.</p>",
+        "id": 568293827,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504691
+    },
+    {
+        "content": "<p>I don't think that's the way \"instance\" is supposed to be used. A singleton has one instance, period. It's just plain confusion otherwise.</p>",
+        "id": 568293903,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504723
+    },
+    {
+        "content": "<p>Sure, but the kernel is only about X% object oriented. :)</p>",
+        "id": 568293931,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504732
+    },
+    {
+        "content": "<p>Rust is not OOP either</p>",
+        "id": 568293952,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504741
+    },
+    {
+        "content": "<p>A OOP language would probably call it <code>DeviceFactory</code></p>",
+        "id": 568293991,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504752
+    },
+    {
+        "content": "<p>That makes no sense, drivers don't create devices.</p>",
+        "id": 568294071,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504778
+    },
+    {
+        "content": "<p>But drivers <em>do</em> create device instances.</p>",
+        "id": 568294135,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504797
+    },
+    {
+        "content": "<p>No, they don't.</p>",
+        "id": 568294173,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504809
+    },
+    {
+        "content": "<p>At least not bus device instances, they may create class device instances, such as a DRM device, but they never create a PCI device.</p>",
+        "id": 568294252,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504838
+    },
+    {
+        "content": "<p>This comes from the bus.</p>",
+        "id": 568294302,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504856
+    },
+    {
+        "content": "<p>OK, so the bus would be the DeviceFactory, in Gary's imaginary OOP naming system. :)</p>",
+        "id": 568294396,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768504889
+    },
+    {
+        "content": "<p>Kinda.</p>",
+        "id": 568294424,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768504900
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">$</span><span class=\"w\"> </span><span class=\"n\">ls</span><span class=\"w\"> </span><span class=\"o\">/</span><span class=\"n\">sys</span><span class=\"o\">/</span><span class=\"n\">module</span><span class=\"o\">/</span><span class=\"n\">onboard_usb_dev</span><span class=\"o\">/</span><span class=\"n\">drivers</span>\n<span class=\"n\">platform</span><span class=\"p\">:</span><span class=\"nc\">onboard</span><span class=\"o\">-</span><span class=\"n\">usb</span><span class=\"o\">-</span><span class=\"n\">dev</span><span class=\"w\">  </span><span class=\"n\">usb</span><span class=\"p\">:</span><span class=\"nc\">onboard</span><span class=\"o\">-</span><span class=\"n\">usb</span><span class=\"o\">-</span><span class=\"n\">dev</span>\n</code></pre></div>\n<p>In my model, a module has some drivers (which are completely distinct, and most module has just one), and each driver. Each driver can bind with some bus devices and create devices of their own kind.</p>",
+        "id": 568294607,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768504965
+    },
+    {
+        "content": "<p>They can create a class device, yes.</p>",
+        "id": 568294742,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768505009
+    },
+    {
+        "content": "<p>But that is a separate concept and has nothing to do with the device / driver binding matched through a bus.</p>",
+        "id": 568294835,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768505040
+    },
+    {
+        "content": "<p>I think the confusing bit is that class device is explicitly created, and the bus device is just bound to, so there's we're trying to find a good term to describe what's the thing that gets attached to the bound device.</p>",
+        "id": 568294938,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505071
+    },
+    {
+        "content": "<p>A  driver instance. :)</p>",
+        "id": 568295013,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768505092
+    },
+    {
+        "content": "<p>I <em>strongly</em> disagree that term is called <code>Driver</code> (instance or not). I get your point that it shouldn't be called <code>Device</code>.</p>",
+        "id": 568295054,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505109
+    },
+    {
+        "content": "<p>We have instances of drivers already, and they're what's inside /sys/module/*/drivers</p>",
+        "id": 568295122,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505135
+    },
+    {
+        "content": "<p>Aka, a singleton, one for each registration</p>",
+        "id": 568295151,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505146
+    },
+    {
+        "content": "<p>I also disagree with \"driver instance\" naming in the strongest way, as well.</p>\n<p>It does not match what the kernel is doing.</p>\n<p>What Gary said.</p>",
+        "id": 568295276,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768505196
+    },
+    {
+        "content": "<p>I personally think <code>DriverData</code>/<code>DeviceData</code> are both acceptable names to me (depends on which aspect you view this from, from device's angle or driver's angle). Probably with a touch of documentation comment that explains this is drvdata in C.</p>",
+        "id": 568295873,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505424
+    },
+    {
+        "content": "<p>Or, perhaps, we can name it <code>Binding</code> as the relation between driver and device?</p>",
+        "id": 568295932,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505452
+    },
+    {
+        "content": "<p>The C side is sketchy on naming too, that's probably how we slid into this mess: dev_set_drvdata() is setting per-device data.</p>",
+        "id": 568296032,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768505491
+    },
+    {
+        "content": "<p>How about PerDeviceData?</p>",
+        "id": 568296131,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768505525
+    },
+    {
+        "content": "<p>Ok, let me explain. What we have is sysfs are types of drivers, not instances, e.g.:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"o\">/</span><span class=\"n\">sys</span><span class=\"o\">/</span><span class=\"n\">module</span><span class=\"o\">/</span><span class=\"n\">psmouse</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">serio</span><span class=\"p\">:</span><span class=\"nc\">psmouse</span>\n</code></pre></div>\n<p>The type of this driver is serio:psmouse, i.e. a generic driver that can operate PS2 mouse devices.</p>\n<p>This serio:psmouse type has methods, such as probe(), remove() etc. Once a matching serial device is connected to the machine, we create an instance of serio:psmouse in probe(). This instance is then stored in the serial device's private data field.</p>",
+        "id": 568296146,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768505527
+    },
+    {
+        "content": "<p><code>serio:psmouse</code> is <em>the</em> driver, not the type of driver, though.</p>",
+        "id": 568296715,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768505716
+    },
+    {
+        "content": "<p>Also:</p>\n<p>$ tree /proc/driver/nvidia<br>\n/proc/driver/nvidia<br>\n├── capabilities<br>\n│   ├── fabric-imex-mgmt<br>\n│   ├── gpu0<br>\n│   │   └── mig<br>\n│   └── mig<br>\n│       ├── config<br>\n│       └── monitor<br>\n├── gpus<br>\n│   └── 0000:61:00.0<br>\n│       ├── information<br>\n│       ├── power<br>\n│       └── registry<br>\n├── params<br>\n├── patches<br>\n│   └── README<br>\n├── registry<br>\n├── suspend<br>\n├── suspend_depth<br>\n├── version<br>\n└── warnings<br>\n    └── README</p>",
+        "id": 568296954,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768505813
+    },
+    {
+        "content": "<p>Just trying to show that the kernel reports: \"a driver has devices\", as opposed to \"driver instances\".</p>",
+        "id": 568297203,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768505900
+    },
+    {
+        "content": "<p>A driver never owns devices.</p>",
+        "id": 568297296,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768505933
+    },
+    {
+        "content": "<p>OK, well however you want to say it, there are multiple devices <em>under</em> a singleton driver, in /proc/driver</p>",
+        "id": 568297555,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768506024
+    },
+    {
+        "content": "<blockquote>\n<p>When a driver is attached to a device, the device is inserted into the driver’s list of devices.</p>\n</blockquote>\n<p><a href=\"https://docs.kernel.org/driver-api/driver-model/binding.html\">https://docs.kernel.org/driver-api/driver-model/binding.html</a></p>",
+        "id": 568297727,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506092
+    },
+    {
+        "content": "<p>\"the driver\"</p>",
+        "id": 568297772,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506108
+    },
+    {
+        "content": "<p>The text, when talking about \"drivers\", means multiple different kinds of drivers, and not different devices bind to the same data.</p>",
+        "id": 568298334,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506307
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782725\">John Hubbard</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568297555\">said</a>:</p>\n<blockquote>\n<p>OK, well however you want to say it, there are multiple devices <em>under</em> a singleton driver, in /proc/driver</p>\n</blockquote>\n<p>The driver model is not in procfs, this seems to be some nvidia OOT thing, the driver model is represented by sysfs.</p>\n<p>In sysfs you do have symbolic links of the devices that are bound to a driver, this binding is what defines an instance.</p>",
+        "id": 568298724,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506441
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568297727\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>When a driver is attached to a device, the device is inserted into the driver’s list of devices.</p>\n</blockquote>\n<p><a href=\"https://docs.kernel.org/driver-api/driver-model/binding.html\">https://docs.kernel.org/driver-api/driver-model/binding.html</a></p>\n</blockquote>\n<p>The documentation is extremely old and wrong, drivers don't have a list of devices.</p>",
+        "id": 568298774,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506472
+    },
+    {
+        "content": "<p>Then we should call this <code>binding</code>, not <code>driver</code>.</p>",
+        "id": 568298779,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506474
+    },
+    {
+        "content": "<p>I think you should not confuse how the code is implemented with the mental model. Of course conceptually the list of devices that the driver has bind to is the \"list of devices\"</p>",
+        "id": 568298949,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506535
+    },
+    {
+        "content": "<p>In the mental model there is no list of devices for a driver either.</p>",
+        "id": 568299141,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506616
+    },
+    {
+        "content": "<p>\"The documentation is extremely old and wrong, drivers don't have a list of devices.\"</p>\n<p>I admire this bold claim, but I expect that a patch to change it would fail. WWGS (What Would Greg KH Say)? :)</p>",
+        "id": 568299167,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768506623
+    },
+    {
+        "content": "<p>I don't know, I'm not Greg. :)</p>",
+        "id": 568299371,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506705
+    },
+    {
+        "content": "<p>$ tree /sys/module/nvidia/drivers<br>\n/sys/module/nvidia/drivers<br>\n├── pci:nvidia -&gt; ../../../bus/pci/drivers/nvidia<br>\n├── pci:nvidia-nvswitch -&gt; ../../../bus/pci/drivers/nvidia-nvswitch<br>\n└── platform:nv_platform -&gt; ../../../bus/platform/drivers/nv_platform</p>",
+        "id": 568299405,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768506717
+    },
+    {
+        "content": "<p>A list of driver types in a modules, so?</p>",
+        "id": 568299476,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506746
+    },
+    {
+        "content": "<p>One item for each type of driver.</p>",
+        "id": 568299496,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768506751
+    },
+    {
+        "content": "<p>I think it's very straightforward that the <code>struct device</code> is named <code>Device</code>, and <code>struct device_driver</code> is named <code>Driver</code>. Anything that deviates from this is just confusion</p>",
+        "id": 568299666,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506800
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782725\">John Hubbard</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568299496\">said</a>:</p>\n<blockquote>\n<p>One item for each type of driver.</p>\n</blockquote>\n<p>This means that the nvidia module implements three driver types. That seems orthogonal to what we are discussing.</p>",
+        "id": 568299766,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768506841
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568299666\">said</a>:</p>\n<blockquote>\n<p>I think it's very straightforward that the <code>struct device</code> is named <code>Device</code>, and <code>struct device_driver</code> is named <code>Driver</code>. Anything that deviates from this is just confusion</p>\n</blockquote>\n<p>I don't see why we should deviate from a well-known and working naming convention if we are so insistent on sticking to the C names.</p>",
+        "id": 568300053,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506965
+    },
+    {
+        "content": "<p>Anyway, enough for today.</p>",
+        "id": 568300080,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768506979
+    },
+    {
+        "content": "<p>If we ever abstract a <code>struct device_driver</code> we can name the surrounding struct <code>Driver</code>, that is fine.</p>",
+        "id": 568300532,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768507161
+    },
+    {
+        "content": "<p>The point is, there are multiple things that we call drivers, i.e. in C we call the structs to register a driver e.g. <code>struct pci_driver</code>, but we also call the implementation of the callbacks of e.g. a <code>struct pci_driver</code> a driver.</p>\n<p>For instance, nouveau is a driver (implementation), nova is driver (implementation), etc.</p>\n<p>So, let's look at:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fw</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Firmware</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Here<code>NovaCore </code>is an implementation (or a specific type) of a <code>pci::Driver</code>. When a new <code>pci::Device</code> is now detected in the system then this PCI device is matched with the driver and <code>probe()</code> is called. So, <code>probe()</code> really is the constructor of a driver type. I.e. we create an instance of this driver type, now that we have to store information for this specific device that we have been matched with.</p>\n<p>So, <code>probe()</code> then returns an instance of the <code>NovaCore</code>driver type. This instance represents the binding of the NovaCore driver type and a PCI device, which we also store in this PCI device.</p>\n<p>Alternatively - and I think this is what you propose - we could have something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"p\">;</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCoreData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fw</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Firmware</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NovaCoreData</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But what does this improve? We now have a useless empty type <code>NovaCore</code> that we use for nothing but implement <code>pci::Driver</code> for. And we represent the instance of the <code>NovaCore</code> driver as a separate <code>NovaCoreData</code> type. Seems pretty useless and eventually people will most likely just end up just doing this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fw</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Firmware</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 568303773,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768508334
+    },
+    {
+        "content": "<p>The mental model is that a specific driver, such as <code>NovaCore</code> consists out of shared code (probe(), unbind(), etc.) and per instance data (where a new instance is created for every matched device).</p>\n<p>I.e. exactly the pattern of a normal Object: shared code (methods), and per instance data.</p>\n<p>This is also exactly the same in C, the driver consists out of shared code, probe() is called for a new instance when a device is matched and the instance is stored in the matched device with dev_set_drvdata().</p>",
+        "id": 568311359,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768511015
+    },
+    {
+        "content": "<p>Maybe a naming change could use Gary's bindings idea, like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">/// The Nova PCI driver.</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"p\">;</span>\n\n<span class=\"sd\">/// Per-device data created by probe(), stored in the device's drvdata.</span>\n<span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaBinding</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"n\">gpu</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Gpu</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">_reg</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Devres</span><span class=\"o\">&lt;</span><span class=\"n\">auxiliary</span><span class=\"p\">::</span><span class=\"n\">Registration</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">IdInfo</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Binding</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NovaBinding</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID_TABLE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">IdTable</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">PCI_TABLE</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Binding</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// ...</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">unbind</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">binding</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Binding</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">binding</span><span class=\"p\">.</span><span class=\"n\">gpu</span><span class=\"p\">.</span><span class=\"n\">unbind</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">());</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and: </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Driver</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">IdInfo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">static</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// The per-device data created by [`Driver::probe`] and stored in the device's `drvdata`.</span>\n<span class=\"w\">    </span><span class=\"sd\">///</span>\n<span class=\"w\">    </span><span class=\"sd\">/// This represents the binding between the driver and a specific device. A new instance</span>\n<span class=\"w\">    </span><span class=\"sd\">/// is created for each device that matches the driver's ID table.</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Binding</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID_TABLE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">IdTable</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">id_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Binding</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">unbind</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">binding</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Binding</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">binding</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 568346963,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1768531151
+    },
+    {
+        "content": "<p>This is exactly what I’ve discussed above already, with the only difference being <code>s/Data/Binding/</code>:</p>\n<p><a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773\">https://rust-for-linux.zulipchat.com/#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773</a></p>",
+        "id": 568376042,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768550567
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773\">said</a>:</p>\n<blockquote>\n<p>Alternatively - and I think this is what you propose - we could have something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"p\">;</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCoreData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fw</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Firmware</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NovaCoreData</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But what does this improve? We now have a useless empty type <code>NovaCore</code> that we use for nothing but implement <code>pci::Driver</code> for. And we represent the instance of the <code>NovaCore</code> driver as a separate <code>NovaCoreData</code> type. Seems pretty useless and eventually people will most likely just end up just doing this:</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fw</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Firmware</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>The idea is that now you actually have a type that represents driver. So if your driver need some data structure shared between multiple device bindings, you put it into the type.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">debugfs</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Dir</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">NovaCore</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NovaCoreData</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">probe</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">pdev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_info</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// Use self.debugfs</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 568391592,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768555996
+    },
+    {
+        "content": "<p>This makes creation of the driver singleton explicit -- you create it when you register your driver. Just like when C code creates a <code>pci_driver</code>. It also makes sure that we don't overload the name \"driver\".</p>",
+        "id": 568391905,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768556102
+    },
+    {
+        "content": "<p>If a driver impl doesn't need anything, good. Then it just do <code>struct MyDriver;</code>, which is quite common in Rust. I don't think we need to \"save a type\".</p>",
+        "id": 568392428,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768556274
+    },
+    {
+        "content": "<p>I think I can get debugfs change needed by Nova to work with this idea very cleanly. No globals, no debugfs lookups, no failing path. I can work on a prototype next week and we can discuss from there if you're unconvinced.</p>",
+        "id": 568392946,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768556469
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568391905\">said</a>:</p>\n<blockquote>\n<p>This makes creation of the driver singleton explicit -- you create it when you register your driver. Just like when C code creates a <code>pci_driver</code>. It also makes sure that we don't overload the name \"driver\".</p>\n</blockquote>\n<p>The misunderstanding relies in the fact that a <code>struct pci_driver</code> does not define or represent the driver as a whole.</p>\n<p>A driver conceptually consists out of much more: the implementation of the bus device callbacks, implementation of the class devices callbacks, IRQ registrations, I/O mappings and other physical device resources. All those are instantiated on a per-device basis.</p>\n<p>The <code>struct pci_driver</code> is only the structure a (PCI) driver type is registered through in the driver core. I.e. it does not represent the driver as a whole, but only one single instance of a registration of a driver. So, yes an instance of <code>struct pci_driver</code> is kind of a singleton (at least from the perspective of a certain driver, e.g. nova-core). The only thing you ever do with this structure is to make a specific driver type present in the system by registering it. This is why we have the <code>driver::Registration</code> type in Rust.</p>\n<p>(And yes, you could probably argue that <code>struct pci_driver</code> should rather be named <code>struct pci_driver_registration</code> instead.)</p>\n<p>But the driver as a whole (e.g. nova-core, nouveau, etc.) is - through its per-device state - instanciated per-device and is not a singleton.</p>\n<p>Think about it, when we say \"the nouveau driver\", we do not only mean the <code>struct pci_driver</code> which is used for registration in the bus and in the driver core. We mean the whole thing, with all of its code, device resources and a per-device state, i.e. a per-device instance.</p>\n<p>In ancient times, drivers in the kernel did not have a per-device state and a lot of drivers kept their data in globals, i.e. not even per driver registration, but per module.</p>\n<p>One of the big goals of the introduction of the driver-model back then was to fix this by introducing instances of drivers that are created per-device (i.e. a per-device state), such that it became transparent to drivers how many times they are instanciated by the driver core when multiple matching devices were found in the system.</p>\n<p>Now, back to your proposal:</p>\n<p>What you are proposing to add is per-driver-registration data. This sits quite in between per-module and per-device data. I.e. a module can have multiple driver registrations.</p>\n<p>For instance, the nouveau module does have (and the nova-core module will have) a platform driver registration <em>and</em> a PCI driver registration, since the driver can support hardware on both busses.</p>\n<p>This shows why the solution of per-driver-registration data is not the solution of the problem. The problem is that we really want to support accessing per-module data. Introducing per-driver-registration data instead is just a workaround.</p>\n<p>Surely, you could continue the game and reference count the data and pass it to multiple driver registrations, but what are you doing for modules that do not even connect with the driver core at all, i.e. modules that do not have driver registrations in the first place? One example for this is binder. How can binder access per-module data?</p>",
+        "id": 568406784,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768560921
+    },
+    {
+        "content": "<p>For binder it can still pass the reference around with file ops. AFAIK global is really used for convience</p>",
+        "id": 568417507,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768564698
+    },
+    {
+        "content": "<p>I think in long run, we should:</p>\n<ul>\n<li>Support self-referential structs with pin-init, so you can reference a field from another</li>\n<li>Add data to registration, so you can carry a reference to module fields into a registration (or, multiple registrations, e.g. both platform and PCI regs)</li>\n</ul>\n<p>In short term though, I am trying to get things work by runtime checks in a form of <code>LazyRevocable</code>, where you it is initialized manually inside module init and revoked before module unload. It does have a slight overhead of needing to check for state, however this shouldn't be an issue in many cases (at least it won't be for Nova and debugfs).</p>\n<p>I have a POC branch here: <a href=\"https://github.com/nbdd0121/linux/commits/lazy_revocable_nova_wip/\">https://github.com/nbdd0121/linux/commits/lazy_revocable_nova_wip/</a> which I adds <code>LazyRevocable</code> on top of <span class=\"user-mention\" data-user-id=\"897540\">@Timur Tabi</span> 's series. This doesn't work yet, as <code>Revocable</code> today only supports RCU, and for debugfs I believe SRCU is needed, but the design is roughly there.</p>",
+        "id": 572202149,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770310293
+    },
+    {
+        "content": "<p>8 messages were moved from this topic to <a class=\"stream-topic\" data-stream-id=\"561532\" href=\"/#narrow/channel/561532-pin-init/topic/safe.20self-referential.20structs/with/572220686\">#pin-init &gt; safe self-referential structs</a> by <span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span>.</p>",
+        "id": 572220687,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1770315741
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/572202149\">said</a>:</p>\n<blockquote>\n<p>This doesn't work yet, as <code>Revocable</code> today only supports RCU, and for debugfs I believe SRCU is needed, but the design is roughly there.</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span><br>\nI'm currently adding debugfs support for the Tyr driver. For module‑scoped debugfs data, would you recommend using LazyRevocable as the short‑term solution?</p>\n<p>Also, is anyone actively working on adding SRCU support to Revocable/LazyRevocable?</p>",
+        "id": 576922890,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1772529387
+    },
+    {
+        "content": "<p>I haven't been working on it currently due to other priorities. If you want to work on it, perhaps a good first step is to create abstractions for SRCU?</p>",
+        "id": 576936532,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772533190
+    },
+    {
+        "content": "<p>One idea I have in mind is to have it protected by hazard pointers, so there's no need of RCU at all.</p>",
+        "id": 576936641,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772533223
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576936641\">said</a>:</p>\n<blockquote>\n<p>One idea I have in mind is to have it protected by hazard pointers, so there's no need of RCU at all.</p>\n</blockquote>\n<p>Thanks for the idea. I'd like to try the hazard-pointer approach. Could you outline how you'd use it here?</p>",
+        "id": 576979254,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1772545518
+    },
+    {
+        "content": "<p>Note that hazard pointer isn't merged yet: <a href=\"https://lore.kernel.org/all/20260223204418.1429025-1-mathieu.desnoyers@efficios.com/\">https://lore.kernel.org/all/20260223204418.1429025-1-mathieu.desnoyers@efficios.com/</a></p>",
+        "id": 576979361,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772545547
+    },
+    {
+        "content": "<p>To use hazard pointer for revocable:</p>\n<p>On the accessor side:</p>\n<ol>\n<li>put pointer into a hazard pointer slot</li>\n<li>check that the data is not revoked</li>\n</ol>\n<p>On the revoker side:</p>\n<ol>\n<li>update revocation flag</li>\n<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>\n<li>free the revoked data</li>\n</ol>",
+        "id": 576981643,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772546108
+    },
+    {
+        "content": "<p>Thanks for the pointers; I’ll give it a try following this approach.</p>",
+        "id": 576983125,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1772546437
+    },
+    {
+        "content": "<p>Notice you can do a <code>call_hazptr()</code> that combine (2 &amp; 3) but asynchronously once we support that.</p>",
+        "id": 577020080,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1772554881
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576981643\">said</a>:</p>\n<blockquote>\n<p>To use hazard pointer for revocable:</p>\n<p>On the accessor side:</p>\n<ol>\n<li>put pointer into a hazard pointer slot</li>\n<li>check that the data is not revoked</li>\n</ol>\n<p>On the revoker side:</p>\n<ol>\n<li>update revocation flag</li>\n<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>\n<li>free the revoked data</li>\n</ol>\n</blockquote>\n<p>Based on your patch, I added a Rust wrapper for the Hazard Pointer and modified <code>LazyRevocable</code> to use it internally. I'm not sure whether my approach is correct:<br>\n<a href=\"https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c\">https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c</a></p>",
+        "id": 577699064,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1772788846
+    },
+    {
+        "content": "<p>The order in <code>try_access</code> is prone to race. You need to protect pointer first before check revocation.</p>",
+        "id": 577772947,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772810064
+    },
+    {
+        "content": "<p>Also <code>data_ptr</code> shouldn't be needed, you should be able to just protect the <code>data.as_ptr()</code> directly</p>",
+        "id": 577773223,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772810143
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1018855\">Alvin Sun</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/577699064\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576981643\">said</a>:</p>\n<blockquote>\n<p>To use hazard pointer for revocable:</p>\n<p>On the accessor side:</p>\n<ol>\n<li>put pointer into a hazard pointer slot</li>\n<li>check that the data is not revoked</li>\n</ol>\n<p>On the revoker side:</p>\n<ol>\n<li>update revocation flag</li>\n<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>\n<li>free the revoked data</li>\n</ol>\n</blockquote>\n<p>Based on your patch, I added a Rust wrapper for the Hazard Pointer and modified <code>LazyRevocable</code> to use it internally. I'm not sure whether my approach is correct:<br>\n<a href=\"https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c\">https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c</a></p>\n</blockquote>\n<p>synchronize needs to be unsafe I think? How is addr guaranteed to be valid?</p>",
+        "id": 577783163,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1772812862
+    },
+    {
+        "content": "<p>It doesn't need to be valid</p>",
+        "id": 577785561,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772813481
+    },
+    {
+        "content": "<p>The comment needs an update then</p>",
+        "id": 577794447,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1772815990
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>  I've revised the code per your suggestions:<br>\n<a href=\"https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7\">https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7</a></p>\n<p>On a separate note, do you have plans to push the LazyRevocable patches upstream soon?</p>",
+        "id": 579731625,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773673845
+    },
+    {
+        "content": "<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>",
+        "id": 579732423,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773674012
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1018855\">Alvin Sun</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579731625\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7\">https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7</a></p>\n</blockquote>\n<p>Tyr debugfs could be the first user of your LazyRevocable implementation. After adapting it to use hazard pointers, it's now working properly on the development board with no kernel warnings.</p>",
+        "id": 579855460,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773725455
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/577020080\">said</a>:</p>\n<blockquote>\n<p>Notice you can do a <code>call_hazptr()</code> that combine (2 &amp; 3) but asynchronously once we support that.</p>\n</blockquote>\n<p>We also need to avoid busy waiting in <code>synchronize_hazptr()</code> by using something similar to: <a href=\"https://lore.kernel.org/lkml/20250414060055.341516-5-boqun.feng@gmail.com/\">https://lore.kernel.org/lkml/20250414060055.341516-5-boqun.feng@gmail.com/</a> on top of Mathieu's patch.</p>",
+        "id": 580287491,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1773866701
+    },
+    {
+        "content": "<p>Let me learn how to do this and I'm very happy to participate in the discussion.</p>",
+        "id": 580347447,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773902514
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579732423\">said</a>:</p>\n<blockquote>\n<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <br>\nDaniel suggested I push the Tyr Debugfs patch series to the list for review. It currently depends on your LazyRevocable, how should I handle this?</p>",
+        "id": 580585596,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773989027
+    },
+    {
+        "content": "<p>Feel free to carry my patch with your series</p>",
+        "id": 580626023,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774003772
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576936532\">said</a>:</p>\n<blockquote>\n<p>I haven't been working on it currently due to other priorities. If you want to work on it, perhaps a good first step is to create abstractions for SRCU?</p>\n</blockquote>\n<p>fwiw I will be working on the SRCU support this week for tyr reset implementation (ref. discussion: <a href=\"https://lore.kernel.org/all/20260411055215.120719-1-work@onurozkan.dev\">https://lore.kernel.org/all/20260411055215.120719-1-work@onurozkan.dev</a>)</p>",
+        "id": 585245591,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1776101171
+    },
+    {
+        "content": "<p>In the meeting we (me, Alice, Daniel and Boris) agreed on using SRCU</p>",
+        "id": 585245867,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1776101249
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1018855\">Alvin Sun</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/580585596\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579732423\">said</a>:</p>\n<blockquote>\n<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <br>\nDaniel suggested I push the Tyr Debugfs patch series to the list for review. It currently depends on your LazyRevocable, how should I handle this?</p>\n</blockquote>\n<p>Can you share the status quo of tyr debugfs support? I need it for my series</p>",
+        "id": 588602486,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1776772366
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/588602486\">said</a>:</p>\n<blockquote>\n<p>Can you share the status quo of tyr debugfs support? I need it for my series</p>\n</blockquote>\n<p>I've sent a version of the Tyr-Debugfs patches to the list [1],<br>\nbut they may be out of date and can't be directly applied to<br>\ntyr-for-upstream. I've resolved the conflicts and pushed an updated<br>\nversion to the downstream repository [2].</p>\n<p>This patch series currently depends on Mathieu's hazptr work [3], which<br>\nseems to still be under review.</p>\n<p>[1] <a href=\"https://lore.kernel.org/all/20260326-b4-tyr-debugfs-v1-0-074badd18716@linux.dev/\">https://lore.kernel.org/all/20260326-b4-tyr-debugfs-v1-0-074badd18716@linux.dev/</a><br>\n[2] <a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/59\">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/59</a><br>\n[3] <a href=\"https://lore.kernel.org/all/20260223204418.1429025-2-mathieu.desnoyers@efficios.com/\">https://lore.kernel.org/all/20260223204418.1429025-2-mathieu.desnoyers@efficios.com/</a></p>",
+        "id": 590152668,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1776849750
+    }
+]

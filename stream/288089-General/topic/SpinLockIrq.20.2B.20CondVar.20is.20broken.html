@@ -1,0 +1,74 @@
+<html>
+<head><meta charset="utf-8"><title>SpinLockIrq + CondVar is broken · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html">SpinLockIrq + CondVar is broken</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="509186322"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509186322" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509186322">(Mar 31 2025 at 12:30)</a>:</h4>
+<p>I've discussed with Alice and Lyude before, but I think <span class="user-mention" data-user-id="411647">@Boqun Feng</span> was left out of the loop until now.</p>
+<p>Using CondVar with SpinLockIrq does not work, it results in a lot of lockdep splats instead.</p>
+<p>The issue is that <code>do_unlocked()</code> releases the guard, but not the <code>IrqDisabled</code> token:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">        </span><span class="c1">// SAFETY: Switches to another thread. The timeout can be any number.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ret</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">guard</span><span class="p">.</span><span class="n">do_unlocked</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">schedule_timeout</span><span class="p">(</span><span class="n">timeout_in_jiffies</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+<p>This means that we go to sleep with IRQs still disabled. </p>
+<p>Alice sketched out a solution for this, but she's on leave currently.</p>
+
+
+
+<a name="509196570"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509196570" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509196570">(Mar 31 2025 at 13:10)</a>:</h4>
+<p>with the new SpinLockIrq semantics, this is not a problem because irq will be reenable at unlock time</p>
+
+
+
+<a name="509196810"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509196810" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509196810">(Mar 31 2025 at 13:11)</a>:</h4>
+<p>Hi Boqun, how recent is that? I had a pretty recent version IIRC</p>
+
+
+
+<a name="509197643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509197643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509197643">(Mar 31 2025 at 13:14)</a>:</h4>
+<p><a href="https://lore.kernel.org/rust-for-linux/20250227221924.265259-1-lyude@redhat.com/">https://lore.kernel.org/rust-for-linux/20250227221924.265259-1-lyude@redhat.com/</a></p>
+
+
+
+<a name="509459946"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509459946" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509459946">(Apr 01 2025 at 13:59)</a>:</h4>
+<p>How recent is your discussion? ;-) Lyude should be aware of the changes, the POC was posted like months ago:<br>
+<a href="https://lore.kernel.org/rust-for-linux/20241018055125.2784186-1-boqun.feng@gmail.com/">https://lore.kernel.org/rust-for-linux/20241018055125.2784186-1-boqun.feng@gmail.com/</a>, and Andreas and Dirk had it tested.</p>
+
+
+
+<a name="509461043"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509461043" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509461043">(Apr 01 2025 at 14:03)</a>:</h4>
+<p>I feel like I am waiting for a new version / non PoC. When that happens, I will add back the examples of hrtimer that use this feature.</p>
+
+
+
+<a name="509461618"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509461618" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509461618">(Apr 01 2025 at 14:05)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken/near/509459946">said</a>:</p>
+<blockquote>
+<p>How recent is your discussion? ;-) Lyude should be aware of the changes, the POC was posted like months ago:<br>
+<a href="https://lore.kernel.org/rust-for-linux/20241018055125.2784186-1-boqun.feng@gmail.com/">https://lore.kernel.org/rust-for-linux/20241018055125.2784186-1-boqun.feng@gmail.com/</a>, and Andreas and Dirk had it tested.</p>
+</blockquote>
+<p>I am using this <a href="https://lore.kernel.org/rust-for-linux/20241018055125.2784186-5-boqun.feng@gmail.com/">https://lore.kernel.org/rust-for-linux/20241018055125.2784186-5-boqun.feng@gmail.com/</a></p>
+
+
+
+<a name="509462527"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLockIrq%20%2B%20CondVar%20is%20broken/near/509462527" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLockIrq.20.2B.20CondVar.20is.20broken.html#509462527">(Apr 01 2025 at 14:09)</a>:</h4>
+<p>Ok, so that's the old version, and my POC was posted as a reply to that version. What it does is allowing a refcounted interrupt disable handling, and so that <code>SpinLockIrq</code> can disable/enable interrupts itself, that makes the concept much simpler.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

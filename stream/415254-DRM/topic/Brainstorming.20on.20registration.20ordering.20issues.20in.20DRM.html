@@ -1,0 +1,794 @@
+<html>
+<head><meta charset="utf-8"><title>Brainstorming on registration ordering issues in DRM · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html">Brainstorming on registration ordering issues in DRM</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="547794571"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547794571" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547794571">(Oct 29 2025 at 19:13)</a>:</h4>
+<p>So - now that I'm finally at a point where all of the dependencies for rvkms are waiting for review on the mailing list, I've started rebasing rvkms back onto the more recent DRM work and I ran into an issue that had slipped my mind.<br>
+A while back we tried having users only create <code>Registration</code> objects for new DRM drivers, and then acquire the actual DRM <code>Device</code> from that. We ended up changing this for Tyr but, unfortunately the current solution that we have doesn't work for rvkms (or any KMS driver) without changing it.<br>
+The main one being the ordering of when registration happens. Currently, the whole set of KMS bindings that I have for rust rely on the assumption that we will never get a fully fledged <code>Device</code> until the KMS initialization has completed, which we can't guarantee at all if there's a split between device creation and device registration - since the user would have access to a <code>Device</code> well before KMS initialization finished. Checking if KMS init at runtime would be a really ugly fix I'm not really willing to do, because "calling a KMS function too early" doesn't really have a reasonable recovery path in a driver. And then there's the issue of: if <code>Device</code> is our default device type, and we already have plenty of object types that can return references to their owning devices (like GEM objects), any of those objects can also be used to retrieve a <code>Device</code> and call KMS methods on it before KMS has been setup.<br>
+So - I'd really like to again propose the idea of not exposing <code>Device</code> before registration finishes, and instead come up with a pre-registration type that could be used for various pre-registration init purposes (like creating the gem objects that Tyr needs early on, though I do really wish we could create these outside of gem). And I'd definitely like to some feedback here.</p>
+<p>My main goals:</p>
+<ul>
+<li>Keep having a <code>Device</code> type, but make it so that this type is <em>only</em> ever exposed in contexts where we're fully registered, and then design pre-reg <code>De vice</code> types</li>
+<li>Not breaking Tyr's usecase for early gem object creation</li>
+<li>Not handling this in reverse. E.g. I would strongly like to avoid a <code>RegisteredDevice</code> type, because it is a lot easier to define the surface for a restricted <code>Device </code> variant then it is to assume our default <code>Device</code> type might not even be registered yet. Remember: there's a lot of types in DRM that can (and need to) return backpointers to their owning device, and we want to avoid making all of those backpointers return what might not be a registered device since that means the caller can never use those backpointers without having to check the registration state at runtime. And we should probably be designing bindings around registered drivers in the first place.</li>
+</ul>
+<p>The one idea I've had so far is adding a sort of "UnregisteredDevice" type, and then adding traits for the various capabilities that we need before registration. For instance: <code>GemDevice</code> could represent any type that can return a <code>drm_device</code> pointer and is known to be in a state where it can create gem objects. We could also add a type market to gem objects that indicates what type of device was used for creating the device and have it default to <code>Device</code> so that users don't need to check registration status outside of gem objects they created before registration.</p>
+
+
+
+<a name="547794694"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547794694" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547794694">(Oct 29 2025 at 19:13)</a>:</h4>
+<p>Also since I forgot: <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> ^</p>
+
+
+
+<a name="547810195"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547810195" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547810195">(Oct 29 2025 at 20:56)</a>:</h4>
+<p>That sounds good, I already had a patch for exactly this, but before I reworked <code>drm::Device</code> to the subclassing pattern.</p>
+<p>With the subclassing pattern it becomes slightly more complicated, because we now have to track whether we have to call <code>drop()</code> for <code>drm::Device::data</code> in the <code>release()</code> callback.</p>
+
+
+
+<a name="547810309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547810309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547810309">(Oct 29 2025 at 20:56)</a>:</h4>
+<p>I assume you will pick this work up, Lyude?</p>
+
+
+
+<a name="547812207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547812207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547812207">(Oct 29 2025 at 21:07)</a>:</h4>
+<p>yeah I'm happy to!</p>
+
+
+
+<a name="547813686"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/547813686" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#547813686">(Oct 29 2025 at 21:16)</a>:</h4>
+<p>Great, thanks for doing this!</p>
+
+
+
+<a name="554188140"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/554188140" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#554188140">(Nov 06 2025 at 20:56)</a>:</h4>
+<p>I thought I didn't like the <code>DeviceCtx</code> solution that <code>kernel::device::Device</code> had when I first saw it a little while ago, but actually it's incredible and ended up being the basis for how I was able to come up with a solution to this problem that I think I'm extremely happy with :).</p>
+
+
+
+<a name="554194715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/554194715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#554194715">(Nov 06 2025 at 21:42)</a>:</h4>
+<p><a href="https://gitlab.freedesktop.org/lyudess/linux/-/commit/3e61960c7d2bd10ba84e6cad4c1b9e45a157d14b">https://gitlab.freedesktop.org/lyudess/linux/-/commit/3e61960c7d2bd10ba84e6cad4c1b9e45a157d14b</a> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> if you two are curious btw<br>
+The idea is pretty much the same as <code>DeviceCtx</code>: we introduce a type parameter representing the registration state of the device and then generalize any DRM objects that can exist before registration over said parameter. So like:</p>
+<p><code>drm::Device&lt;T&gt;</code> -&gt; <code>drm::Device&lt;T, R: RegistrationCtx = Registered&gt;</code><br>
+<code>drm::gem::Object&lt;T&gt;</code> -&gt; <code>drm::gem::Object&lt;T, R: RegistrationCtx = Registered&gt;</code></p>
+<p>etc.</p>
+<p>You can even take references to a device before it's registered! Though, all such references will be <code>drm::Device&lt;T, Any&gt;</code></p>
+
+
+
+<a name="555679300"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/555679300" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#555679300">(Nov 14 2025 at 21:18)</a>:</h4>
+<p>JFYI: Will be sending out another vesion of the patch series for this in the future, I had to make a few changes to get this working with RVKMS:</p>
+<ul>
+<li>We have 3 <code>DeviceCtx</code> now:<ul>
+<li><code>Uninitialized</code> (for very limited use in driver methods that have to be called before the device struct is fully initialized)</li>
+<li><code>Initialized</code>. <code>Device</code> is fully initialized but not guaranteed to be registered with userspace.</li>
+<li><code>Registered</code>.  <code>Device</code> is fully initialized and guaranteed to have been registered with userspace once.</li>
+</ul>
+</li>
+<li>No more <code>KmsDriver::create_objects()</code>, <code>UnregisteredDevice</code> can now be used for this<br>
+I think I'm quite happy with how this is working :).</li>
+</ul>
+
+
+
+<a name="564498552"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/564498552" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#564498552">(Dec 18 2025 at 15:59)</a>:</h4>
+<p><a href="https://lore.kernel.org/rust-for-linux/20251107193204.398657-1-lyude@redhat.com/">https://lore.kernel.org/rust-for-linux/20251107193204.398657-1-lyude@redhat.com/</a> </p>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span> That's the latest version, right?</p>
+
+
+
+<a name="564498813"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/564498813" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#564498813">(Dec 18 2025 at 16:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="582628">@Daniel Almeida</span> yeah, but I'm going to be rebasing rvkms and seeing how the design actually works out there before sending another version</p>
+
+
+
+<a name="564498904"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/564498904" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#564498904">(Dec 18 2025 at 16:01)</a>:</h4>
+<p>Just since I really want to make sure I get this bit right for KMS</p>
+
+
+
+<a name="564499171"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/564499171" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#564499171">(Dec 18 2025 at 16:02)</a>:</h4>
+<p>I think there will likely be three device contexts in the end, with one of them only being available in driver callbacks that are called before handing a <code>Device</code> back from <code>Device::new</code></p>
+
+
+
+<a name="568088194"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568088194" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568088194">(Jan 14 2026 at 22:03)</a>:</h4>
+<p>Hi! So danilo asked if I could handle getting back to work on this, I thought that I might need to implement this in rvkms to figure out the right way of doing this (so we don't need to rework everything for KMS). But it looks like what I really needed was just a vacation because I think I've got a much clearer idea of how to do this now that I've come back. my notes:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Uninit</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Initialized</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Registered</span>
+
+<span class="n">Uninit</span><span class="p">:</span><span class="w"> </span><span class="nc">No</span><span class="w"> </span><span class="n">KMS</span><span class="w"> </span><span class="n">operations</span>
+<span class="w">        </span><span class="n">No</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="n">data</span>
+<span class="n">Init</span><span class="p">:</span><span class="w"> </span><span class="nc">Device</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="n">present</span>
+<span class="w">      </span><span class="n">KMS</span><span class="w"> </span><span class="n">operations</span><span class="w"> </span><span class="n">allowed</span>
+<span class="n">Registered</span><span class="p">:</span><span class="w"> </span><span class="nc">Nothing</span><span class="w"> </span><span class="n">specific</span><span class="w"> </span><span class="n">yet</span><span class="p">,</span><span class="w"> </span><span class="n">maybe</span><span class="w"> </span><span class="n">omit</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">now</span><span class="o">?</span>
+
+<span class="n">Context</span><span class="o">-</span><span class="n">specific</span><span class="w"> </span><span class="n">types</span><span class="p">:</span>
+<span class="w">  </span><span class="o">*</span><span class="w"> </span><span class="n">UninitializedKmsDevice</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">Uninit</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="w">  </span><span class="o">*</span><span class="w"> </span><span class="n">UninitializedDevice</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">Uninit</span><span class="o">&gt;</span><span class="p">)</span>
+
+<span class="p">(</span><span class="o">=&gt;</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">callback</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">performed</span><span class="w"> </span><span class="n">before</span><span class="w"> </span><span class="n">returning</span><span class="p">)</span>
+
+<span class="n">Device</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">  </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Kms</span><span class="p">::</span><span class="n">probe</span><span class="p">(</span><span class="n">d</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">UninitializedKmsDevice</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="nc">SomeDriverArgType</span><span class="p">)</span><span class="w"> </span><span class="c1">// setup various modesetting objects</span>
+<span class="w">  </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">UninitializedDevice</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="n">Registration</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">d</span><span class="p">:</span><span class="w"> </span><span class="nc">InitializedDevice</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="nc">CustomDriverArgType</span><span class="p">)</span>
+<span class="w">  </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Kms</span><span class="p">::</span><span class="n">atomic_init</span><span class="p">(</span><span class="n">d</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">Init</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="c1">// Setup initial atomic display state[1]</span>
+<span class="w">  </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Registration</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+
+<span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="n">This</span><span class="w"> </span><span class="n">likely</span><span class="w"> </span><span class="n">won</span><span class="o">'</span><span class="na">t</span><span class="w"> </span><span class="n">be</span><span class="w"> </span><span class="n">added</span><span class="w"> </span><span class="n">right</span><span class="w"> </span><span class="n">away</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">we</span><span class="o">'</span><span class="na">ll</span><span class="w"> </span><span class="n">hard</span><span class="o">-</span><span class="n">code</span><span class="w"> </span><span class="n">resetting</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">atomic</span><span class="w"> </span><span class="n">display</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">now</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="n">still</span><span class="w"> </span><span class="n">important</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">keep</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">mind</span>
+</code></pre></div>
+
+
+
+<a name="568088673"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568088673" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568088673">(Jan 14 2026 at 22:06)</a>:</h4>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span>  Maybe this is about KMS specifics, but as we discussed today we need the Registered state to pass the DRM device private data in the register() call rather then on creation of the DRM device.</p>
+
+
+
+<a name="568088700"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568088700" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568088700">(Jan 14 2026 at 22:06)</a>:</h4>
+<p>I think for the time being we are better off focusing on Uninit/Init rather than device registration. While the latter is important, KMS callbacks are unfortunately a bit less lucky then GEM's in that it's perfectly normal for them to be called before device registration - and presumably we actually do want access to the device data by that point so that KMS callbacks can always rely on having access to it. I assume we'll probably need <code>Registered</code> for something or other eventually, but for now it may just make sense to omit it.</p>
+
+
+
+<a name="568088786"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568088786" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568088786">(Jan 14 2026 at 22:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568088673">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span>  Maybe this is about KMS specifics, but as we discussed today we need the Registered state to pass the DRM device private data in the register() call rather then on creation of the DRM device.</p>
+</blockquote>
+<p>Yeah that's what we're doing here, Registration::new() would be expected to take the device data as an argument</p>
+
+
+
+<a name="568088879"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568088879" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568088879">(Jan 14 2026 at 22:07)</a>:</h4>
+<p>Cool, but then we need Device&lt;Registered&gt; as a type, which has the dereference to the private data.</p>
+
+
+
+<a name="568089136"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568089136" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568089136">(Jan 14 2026 at 22:09)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> so, the slightly non-obvious thing here: Device&lt;Init&gt; would actually be the first one with access to the device data. Because I realized KMS is gong to need access to it pre-user registration. It's just you don't get Device&lt;Init&gt; from anywhere except callbacks invoked by Registration::new(), and Registration::new() itself would return Device&lt;Registered&gt; (which would also be able to access the user data).</p>
+
+
+
+<a name="568089543"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568089543" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568089543">(Jan 14 2026 at 22:12)</a>:</h4>
+<p>The reason I think it needs to be this way is because there's still an order of operations we have to maintain for driver registration, and at least for KMS two of those requirements are:</p>
+<ul>
+<li>Don't allow modesets before we finished creating all of the modesetting resources (CRTCs, connectors, etc.)</li>
+<li>Require a Device ensure it's atomic state is "ready" before allowing modesets, but after we can access the private device data (because ensuring the state is ready may actually involve needing to perform a modeset, which means all of the modesetting callbacks get called and we probably want access to the device data by that point)</li>
+</ul>
+
+
+
+<a name="568089731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568089731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568089731">(Jan 14 2026 at 22:13)</a>:</h4>
+<p>And this would still allow us to create gem objects in the same way we would pre-registration with just <code>Uninit/Registered</code>, so tyr could still create the gem objects it needs before registration and private device data availability</p>
+
+
+
+<a name="568094319"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568094319" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568094319">(Jan 14 2026 at 22:49)</a>:</h4>
+<p>Ok, can you please split this up in two (or more) separate patches, where the first one only implements the registration / private data dance and types and then built KMS type states on top?</p>
+
+
+
+<a name="568094946"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568094946" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568094946">(Jan 14 2026 at 22:56)</a>:</h4>
+<p>Oh yeah - the only thing that's going to be in the actual patches is just the devicectx stuff and unregistereddevice</p>
+
+
+
+<a name="568095118"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568095118" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568095118">(Jan 14 2026 at 22:57)</a>:</h4>
+<p>The Kms mentions are mostly for my own notes and just knowing how KMS will eventually fit in with this</p>
+
+
+
+<a name="568095176"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568095176" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568095176">(Jan 14 2026 at 22:58)</a>:</h4>
+<p>I assume you mean just Device and Device&lt;Registered&gt;? I don't think we need a UnregisteredDevice type.</p>
+<p>NIT: Let's be consistent with driver-core infrastructure and name it DeviceContext. :)</p>
+
+
+
+<a name="568095271"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568095271" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568095271">(Jan 14 2026 at 22:58)</a>:</h4>
+<p>We do need the UninitializedDevice type because the type itself acts as a token that gets consumed by Registration::new</p>
+
+
+
+<a name="568095523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568095523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568095523">(Jan 14 2026 at 23:00)</a>:</h4>
+<p>@Lyude so we would get a Device&lt;Init&gt; before registration, or UnregisteredDevice?</p>
+
+
+
+<a name="568095947"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568095947" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568095947">(Jan 14 2026 at 23:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568095523">said</a>:</p>
+<blockquote>
+<p>@Lyude so we would get a Device&lt;Init&gt; before registration, or UnregisteredDevice?</p>
+</blockquote>
+<p>UninitializedDevice, but that would implement Deref&lt;Device&lt;T, Uninit&gt;&gt;. I'm realizing though Danilo is also right in that we can probably just have <code>Uninit</code>, and <code>Registered</code> for now since <code>Init</code> sits between <code>Uninit</code> and <code>Registered</code>, and is only really needed right now for KMS callbacks.</p>
+
+
+
+<a name="568096907"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568096907" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568096907">(Jan 14 2026 at 23:14)</a>:</h4>
+<p>Device is drm::Device, right? Why do we need both UninitializedDevice and Device&lt;T, Uninit&gt;?</p>
+
+
+
+<a name="568097663"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568097663" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568097663">(Jan 14 2026 at 23:21)</a>:</h4>
+<p>Yes. And there's a few reasons but the relevant one: - <code>&amp;Device&lt;T, Uninit&gt;</code> just means that the device wasn't initialized or registered at the time the reference was taken. A <code>&amp;Device&lt;T, Uninit&gt;</code> could therefore be registered, which means we can't safely pass it to <code>Registration::new()</code> since registration can only happen once, and we also can't safely expose methods on it that could only be called before device registration for the same reason (which I assume we will probably want at some point).</p>
+
+
+
+<a name="568097767"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568097767" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568097767">(Jan 14 2026 at 23:23)</a>:</h4>
+<p><code>UninitializedDevice</code> would also be <code>!Send</code> as well</p>
+
+
+
+<a name="568304896"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568304896" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568304896">(Jan 15 2026 at 20:25)</a>:</h4>
+<p>Hm. So, the one thing I'm still working out is how to check on device drop whether or not we've initialized the driver private data - because it's possible for initializing the private data to fail in Register::new(), so the main <code>Device</code> needs to at least be aware of when it should/shouldn't drop it.<br>
+Currently my solution is very simple:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(C)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">drm</span><span class="p">::</span><span class="n">Driver</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">:</span><span class="w"> </span><span class="nc">DeviceContext</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Registered</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">drm_device</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">data_is_init</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafeCell</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">MaybeUninit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">::</span><span class="n">Data</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_ctx</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomData</span><span class="o">&lt;</span><span class="n">C</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Where the idea is that <code>data_is_init</code> is only written to from one call-site, <code>Register::new()</code>, and is only read-back from a single call-site, <code>::Drop()</code>. Is there a cleaner way I could do this?</p>
+
+
+
+<a name="568372292"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568372292" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568372292">(Jan 16 2026 at 07:31)</a>:</h4>
+<p>Could you swap out the drop function in the vtable?</p>
+
+
+
+<a name="568486266"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568486266" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568486266">(Jan 16 2026 at 17:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568372292">said</a>:</p>
+<blockquote>
+<p>Could you swap out the drop function in the vtable?</p>
+</blockquote>
+<p>No unfortunately, since our VTABLE is a const and I'm pretty sure we want to keep it const iirc</p>
+
+
+
+<a name="568487637"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568487637" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568487637">(Jan 16 2026 at 17:33)</a>:</h4>
+<p>Is the device not being teared down in the failing path?</p>
+
+
+
+<a name="568487729"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568487729" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568487729">(Jan 16 2026 at 17:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568487637">said</a>:</p>
+<blockquote>
+<p>Is the device not being teared down in the failing path?</p>
+</blockquote>
+<p>It is (assuming all references to it have been dropped</p>
+
+
+
+<a name="568487755"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568487755" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568487755">(Jan 16 2026 at 17:33)</a>:</h4>
+<p>oops, sorry i hit enter too early</p>
+
+
+
+<a name="568487882"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568487882" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568487882">(Jan 16 2026 at 17:34)</a>:</h4>
+<p>It is assuming all references are dropped, but the main problem we're trying to solve here is that we're making it so that device data isn't available before registration - since drivers like Tyr need to be able to use the DRM device itself in order to construct some of the GEM objects they store in the driver private data</p>
+
+
+
+<a name="568488066"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568488066" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568488066">(Jan 16 2026 at 17:35)</a>:</h4>
+<p>Which means that if we drop the device we need to know whether or not we got far enough that we initialized the private driver data so we can choose whether or not we need to tear it down in the drop path (or <code>Device::release()</code>, since that's what gets called on the last <code>drm_dev_put()</code>)</p>
+
+
+
+<a name="568492173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568492173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568492173">(Jan 16 2026 at 17:57)</a>:</h4>
+<p>Okay, I see, so the additional refcnt can be already taken before data is initialized, and the cleanup is done by devres</p>
+
+
+
+<a name="568492217"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568492217" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568492217">(Jan 16 2026 at 17:57)</a>:</h4>
+<p>In that case dynamic tracking would be necessary</p>
+
+
+
+<a name="568492272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568492272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568492272">(Jan 16 2026 at 17:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568487637">said</a>:</p>
+<blockquote>
+<p>Is the device not being teared down in the failing path?</p>
+</blockquote>
+<p>(Just to clarify, the term "device teardown" usually refers to the process of unbinding a bus device from a driver, while the reference count dropping to zero is referred to as "device release".)</p>
+<p>Of course, in this case there is no ambiguity anyways, since DRM is class device. :)</p>
+
+
+
+<a name="568492537"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568492537" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568492537">(Jan 16 2026 at 17:59)</a>:</h4>
+<p>Regarding the cleanup question, I think we have to track the state unfortunately. Maybe we can make it a bit cleaner by encapsulating the tuple in a new type, but that's not adding a lot of value either I guess.</p>
+
+
+
+<a name="568492609"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568492609" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568492609">(Jan 16 2026 at 17:59)</a>:</h4>
+<p>Gotcha - in that case I'm fine with this solution then ^^</p>
+
+
+
+<a name="568499981"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568499981" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568499981">(Jan 16 2026 at 18:39)</a>:</h4>
+<p>could we swap out the entire vtable?</p>
+
+
+
+<a name="568502306"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568502306" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568502306">(Jan 16 2026 at 18:53)</a>:</h4>
+<p>As long as we ensure that the contents (except for the release callback) are exactly the same and we ensure proper memory barriers, that should work as well. But a simple atomic is probably easier. Size wise it doesn't matter, DRM device instances are huge structures anyways.</p>
+
+
+
+<a name="568503068"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/568503068" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#568503068">(Jan 16 2026 at 18:57)</a>:</h4>
+<p>ah right, I forgot about atomics. I can just switch it to <code>AtomicBool</code> then</p>
+
+
+
+<a name="570548239"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570548239" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> pengfuyuan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570548239">(Jan 28 2026 at 12:52)</a>:</h4>
+<p>Hi Lyude, I saw your work on Rust-based DRM/KMS. I used to work on DC driver development in C (DRM/KMS) and am now shifting my work to Rust. I'm really interested in your progress.<br>
+Where does it stand now? Is it in early stages or already functional? Would you mind if I join in to learn and help? I’m happy to start with small tasks or tests.</p>
+
+
+
+<a name="570869056"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570869056" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570869056">(Jan 29 2026 at 18:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="949180">pengfuyuan</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/570548239">said</a>:</p>
+<blockquote>
+<p>Hi Lyude, I saw your work on Rust-based DRM/KMS. I used to work on DC driver development in C (DRM/KMS) and am now shifting my work to Rust. I'm really interested in your progress.<br>
+Where does it stand now? Is it in early stages or already functional? Would you mind if I join in to learn and help? I’m happy to start with small tasks or tests.</p>
+</blockquote>
+<p>Right now it's in very early stages, and a bit out of date. Atm rvkms only really creates a device and then emulates vblanking with an hr timer. A lot of time has gotten spent just trying to push dependencies through, and there's likely going to still be design work to do when I actually start writing nova's display driver.</p>
+<p>This being said though, is AMD planning on moving away from DC or the like? My main worry would be trying to adapt DC to work with rust might run into a lot of friction considering we're really a lot stricter about correctness with rust then with C, and a really big goal right now is not to compromise that</p>
+
+
+
+<a name="570872213"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570872213" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570872213">(Jan 29 2026 at 18:52)</a>:</h4>
+<p><span class="user-mention" data-user-id="670868">@Dave Airlie</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span>  btw, any thoughts on this?<br>
+To be clear- I'm always down for more help. It's just my main concern is with how outside contributions are handled for DC and how flexible DC will be design-wise if it hits friction against how DRM works. But, maybe with nova this isn't as much of a concern?</p>
+
+
+
+<a name="570872761"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570872761" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570872761">(Jan 29 2026 at 18:55)</a>:</h4>
+<p>I'm fairly certain too DC would need to be rewritten in rust at a minimum?</p>
+
+
+
+<a name="570885459"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570885459" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570885459">(Jan 29 2026 at 20:05)</a>:</h4>
+<p>I think splitting a driver in a C and in a Rust part is calling for trouble.</p>
+
+
+
+<a name="570886140"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570886140" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570886140">(Jan 29 2026 at 20:09)</a>:</h4>
+<p>We had the discussion with Panthor / Tyr in the beginning, and my position has always been that it would lead to fragmentation of the DRM core infrastructure in Rust as we would need to provide C interfaces at more or less arbitrary boundaries.</p>
+
+
+
+<a name="570886389"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570886389" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570886389">(Jan 29 2026 at 20:10)</a>:</h4>
+<p>I.e. we'd probably need to make compromises feature wise to stay compatible with a C API, duplicate code, etc.</p>
+
+
+
+<a name="570886897"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570886897" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570886897">(Jan 29 2026 at 20:14)</a>:</h4>
+<p>It would be different if it would be actual separate drivers connected only by the driver core, e.g. through the auxiliary bus, since then the API between the C and Rust driver is purely between the two drivers without any subsystem involvement.</p>
+
+
+
+<a name="570887404"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/570887404" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#570887404">(Jan 29 2026 at 20:17)</a>:</h4>
+<p>But maybe I'm not getting the idea right, but AFAIK DC is essentially part of AMDGPU.</p>
+
+
+
+<a name="580299015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/580299015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#580299015">(Mar 18 2026 at 22:10)</a>:</h4>
+<p>btw <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> - do we want to try to get the device context fixes in for v7.0? or just hold off until 7.1</p>
+
+
+
+<a name="580512230"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/580512230" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#580512230">(Mar 19 2026 at 19:16)</a>:</h4>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span> Will take a look tomorrow or over the weekend, thanks!</p>
+
+
+
+<a name="603500283"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603500283" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603500283">(Jun 15 2026 at 20:57)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> been thinking about it and yeah - I definitely think we could remodel the device contexts to be <code>Uninit</code>, <code>Normal</code>, <code>Registered</code> if we only implement <code>AlwaysReferenceCounted</code> for the first two typestates (taking ARefs to <code>Registered</code> can't be allowed because we can't make guarantee that a <code>ARef&lt;Device&lt;_, Registered&gt;&gt;</code> remains registered for its lifetime, but we can do that for plain old references).<br>
+Is this something we'd want sooner or later? (Mostly asking since it would probably be good for me to make sure the KMS work is rebased on top of changes to be made here)</p>
+
+
+
+<a name="603889557"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603889557" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603889557">(Jun 16 2026 at 19:12)</a>:</h4>
+<p>yeah - actually I think I might submit something sooner then later, since doing this now will prevent me from having to also pass through the <code>DeviceContext</code> to stuff like <code>Crtc</code></p>
+
+
+
+<a name="603906581"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603906581" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603906581">(Jun 16 2026 at 20:22)</a>:</h4>
+<p>(which will make rebasing go faster)</p>
+
+
+
+<a name="603933807"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603933807" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603933807">(Jun 16 2026 at 22:24)</a>:</h4>
+<p>I think we should only have an ARef impl for <code>drm::Device&lt;Normal&gt;</code>, what would we need the <code>Uninit</code>type state for? So far, if it does not hold the invariant that it is registered there's no different between <code>Uninit</code> and <code>Normal</code>. So I assume you want it for something in KMS?</p>
+
+
+
+<a name="603934051"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603934051" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603934051">(Jun 16 2026 at 22:26)</a>:</h4>
+<p>Yeah - it's so we have access to the <code>Device</code> during the various KMS setup callbacks which happen before returning the <code>UnregisteredDevice</code>.</p>
+
+
+
+<a name="603934114"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603934114" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603934114">(Jun 16 2026 at 22:26)</a>:</h4>
+<p>So it should only really appear in a handful of places</p>
+
+
+
+<a name="603934322"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/603934322" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#603934322">(Jun 16 2026 at 22:27)</a>:</h4>
+<p>And agree d- I also think ARef for Normal only is a good idea</p>
+
+
+
+<a name="606326109"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/606326109" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Deborah Brouwer <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#606326109">(Jun 24 2026 at 19:09)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <a href="https://lore.kernel.org/rust-for-linux/20260620184924.2247517-1-dakr@kernel.org/#r">[PATCH v4 00/16] rust: drm: Higher-Ranked Lifetime private data</a> is working well for Tyr. But it's causing conflicts with patches from <span class="user-mention" data-user-id="690399">@Lyude</span>  that are already in <code>drm-rust-next</code>. How will those conflicts be resolved?  Specifically these patches conflict:</p>
+<ul>
+<li>rust: drm: gem: shmem: Add vmap functions</li>
+<li>rust: drm: gem: shmem: Add DmaResvGuard helper</li>
+<li>rust: drm: gem: shmem: Fix Default implementation for ObjectConfig</li>
+</ul>
+
+
+
+<a name="606326317"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/606326317" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#606326317">(Jun 24 2026 at 19:10)</a>:</h4>
+<p>FWIW I am sending out a follow-up patch for the DeviceContext stuff, and that is currently based off a rebase of Danilo's patch series against drm-rust-next</p>
+
+
+
+<a name="606326755"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/606326755" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Deborah Brouwer <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#606326755">(Jun 24 2026 at 19:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/606326317">said</a>:</p>
+<blockquote>
+<p>FWIW I am sending out a follow-up patch for the DeviceContext stuff, and that is currently based off a rebase of Danilo's patch series against drm-rust-next</p>
+</blockquote>
+<p>Ah yeah that's what i was wondering, great <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="606326887"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/606326887" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#606326887">(Jun 24 2026 at 19:13)</a>:</h4>
+<p><span class="user-mention" data-user-id="981233">@Deborah Brouwer</span> Yeah, I'm aware of those, I will resolve them once I have the prerequisite series landed.</p>
+
+
+
+<a name="606326934"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/606326934" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#606326934">(Jun 24 2026 at 19:13)</a>:</h4>
+<p>yeah - though I mostly mentioned that in case you wanted a version of the series that doesn't have conflicts. it sounds like Danilo will be able to handle the conflicts though</p>
+
+
+
+<a name="609952092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609952092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609952092">(Jul 13 2026 at 19:33)</a>:</h4>
+<p>Hey, quick question <span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span>  - was wondering if you might be able to help me understand why we added lifetime parameters to both <code>Core</code> and <code>CoreInternal</code> <code>DeviceContext</code>s?<br>
+Now that I'm back on rebasing rvkms, one of the things I'm doing is removing <code>UnregisteredKmsDevice</code> and just using <code>DeviceContext</code>, and adding a <code>Early</code> and <code>KmsProbe</code> context. I'm mainly wondering if we would want to add a lifetime parameter to the <code>KmsProbe</code> context since we'd only be using it for a single KMS callback once</p>
+
+
+
+<a name="609952374"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609952374" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609952374">(Jul 13 2026 at 19:35)</a>:</h4>
+<p>Core derefs to Bound, but it lives shorter than it. So <code>&amp;'bound Device&lt;Core&lt;'core&gt;&gt;</code> is bound for <code>'bound</code> but it only has the device mutex taken for <code>'core</code></p>
+
+
+
+<a name="609952432"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609952432" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609952432">(Jul 13 2026 at 19:35)</a>:</h4>
+<p>ahhh, so that's the reason for it. gotcha</p>
+
+
+
+<a name="609952735"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609952735" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609952735">(Jul 13 2026 at 19:37)</a>:</h4>
+<p>Actually now you mentioned it, this might be unsound as well, because the implied bound would be <code>'core: 'bound</code> which isn't correct</p>
+
+
+
+<a name="609952764"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609952764" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609952764">(Jul 13 2026 at 19:37)</a>:</h4>
+<p>hehe</p>
+
+
+
+<a name="609953504"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609953504" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609953504">(Jul 13 2026 at 19:42)</a>:</h4>
+<p>We can probably fix this by making the lifetime on <code>Core</code> invariant, so it's just a marker of "arbitrary lifetime" and the code inside <code>probe</code> cannot cast and store it. Although this doesn't change that <code>'core: 'bound</code></p>
+
+
+
+<a name="609954126"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954126" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954126">(Jul 13 2026 at 19:46)</a>:</h4>
+<p>It might be the case that <code>DeviceCtx</code> should be better represented by wrapper type instead of generics.</p>
+
+
+
+<a name="609954228"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954228" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954228">(Jul 13 2026 at 19:47)</a>:</h4>
+<p>E.g. <code>Bound&lt;Device&gt;</code> where <code>Bound</code> is a special <code>ARef</code> and <code>Core&lt;Device&gt;</code> where <code>Core</code> is somewhat similar to mutex guard.</p>
+
+
+
+<a name="609954247"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954247" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954247">(Jul 13 2026 at 19:47)</a>:</h4>
+<p>Do you mean the kernel's core devicecontext or DRM's?</p>
+
+
+
+<a name="609954274"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954274" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954274">(Jul 13 2026 at 19:47)</a>:</h4>
+<p>ah the kernel core's</p>
+
+
+
+<a name="609954410"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954410" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954410">(Jul 13 2026 at 19:48)</a>:</h4>
+<p>It kinda can do both. <code>Bound&lt;Foo&gt;</code> can be used for any foo, and it just means <code>Foo</code> but with special annotation that it is bound.</p>
+
+
+
+<a name="609954759"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609954759" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609954759">(Jul 13 2026 at 19:50)</a>:</h4>
+<p>I mean TBH - at least from DRM's side I do kind of like using generics for this over extra types, and only really using new types where needed (such as UnregisteredDevice) if only because it makes it a lot easier to share functionality between contexts</p>
+
+
+
+<a name="609955080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955080">(Jul 13 2026 at 19:53)</a>:</h4>
+<p>Possibly. You can still use deref chain for wrapper types, but it might indeed be difficult to write generics that turn one type with a specific context to different one with the same context</p>
+
+
+
+<a name="609955249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955249">(Jul 13 2026 at 19:54)</a>:</h4>
+<p>Especially that arbitrary self type cannot be generic</p>
+
+
+
+<a name="609955320"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955320" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955320">(Jul 13 2026 at 19:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609953504">said</a>:</p>
+<blockquote>
+<p>We can probably fix this by making the lifetime on <code>Core</code> invariant, so it's just a marker of "arbitrary lifetime" and the code inside <code>probe</code> cannot cast and store it. Although this doesn't change that <code>'core: 'bound</code></p>
+</blockquote>
+<p>We don't particular care about the lifetime on <code>Core</code>, so this fix is probably sufficient.</p>
+
+
+
+<a name="609955569"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955569" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955569">(Jul 13 2026 at 19:56)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609952735">said</a>:</p>
+<blockquote>
+<p>Actually now you mentioned it, this might be unsound as well, because the implied bound would be <code>'core: 'bound</code> which isn't correct</p>
+</blockquote>
+<p>This is purely a semantics mismatch; I don't think this can ever happen. Core must always deref to Bound, this is the type state contract. So 'bound can't ever actually outlive 'core, as that wouldn't make sense.</p>
+
+
+
+<a name="609955747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955747">(Jul 13 2026 at 19:57)</a>:</h4>
+<p>Currently <code>Core&lt;'a&gt;</code> has <code>PhantomData&lt;&amp;'a ()&gt;</code> so you can convert <code>&amp;'bound Device&lt;Core&lt;'_&gt;&gt;</code> to <code>&amp;'bound Device&lt;Core&lt;'bound&gt;&gt;</code>, essentially erasing the lifetime, so it is indeed problematic.</p>
+
+
+
+<a name="609955896"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609955896" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609955896">(Jul 13 2026 at 19:57)</a>:</h4>
+<p>So this doesn't prevent the case that motivate the addition of lifetime in the first place.</p>
+
+
+
+<a name="609956345"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609956345" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609956345">(Jul 13 2026 at 20:00)</a>:</h4>
+<p>Hm...you could indeed do:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="na">bound</span><span class="w"> </span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&lt;'</span><span class="na">bound</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">;</span>
+</code></pre></div>
+
+
+
+<a name="609956378"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609956378" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609956378">(Jul 13 2026 at 20:00)</a>:</h4>
+<p>I'll send a quick fix</p>
+
+
+
+<a name="609956809"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609956809" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609956809">(Jul 13 2026 at 20:03)</a>:</h4>
+<p>BTW <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> might also be worth mentioning since we talked about this before: there is a private <code>EarlyInternal</code> context I'm going to be introducing as well, with the main idea being internal DRM helpers can take an <code>ARef</code> to it - primarily because it lets us rely on using devres for cleaning up the results of intermediate setup states if the driver fails when setting up the DRM device.</p>
+
+
+
+<a name="609956878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609956878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609956878">(Jul 13 2026 at 20:03)</a>:</h4>
+<p>which I think should be fine, since the whole idea is that only the drm crate can use <code>EarlyInternal</code></p>
+
+
+
+<a name="609957074"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609957074" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609957074">(Jul 13 2026 at 20:04)</a>:</h4>
+<p>Why do we need this to be an ARef?</p>
+
+
+
+<a name="609957209"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609957209" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609957209">(Jul 13 2026 at 20:05)</a>:</h4>
+<p>It doesn't need to be, but after doing the SGTable work I realized it was a better idea to try to use RAII even for internal setup steps in DRM. and uhhh, lemme just copy the relevant code to a pastebin really quick so I can show you</p>
+
+
+
+<a name="609958001"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609958001" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609958001">(Jul 13 2026 at 20:10)</a>:</h4>
+<p><a href="https://paste.centos.org/view/f5aeefad">https://paste.centos.org/view/f5aeefad</a> <a href="http://kms.rs">kms.rs</a><br>
+<a href="https://paste.centos.org/view/6d804910">https://paste.centos.org/view/6d804910</a> <a href="http://device.rs">device.rs</a></p>
+<p>Basically, the reason we want to be able to get an <code>ARef</code> (but only from the internal DRM bindings) is because we want the ability to make cleanup in the event of an error from the driver easy, and imo the most sensible way to do that i s to just use DRM's refcounting mechanism (along with hooking up KMS-specific resources to <code>devres</code>, so they only get released along with the <code>Device</code> if we actually got to setting up KMS before the failure).</p>
+
+
+
+<a name="609958420"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609958420" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609958420">(Jul 13 2026 at 20:13)</a>:</h4>
+<p>doing it this way also acts as a preventative measure to stop us from causing UB if we were to have a <code>Normal</code> reference that early. Since ideally we're going to want KMS methods available on <code>Normal</code> that can't actually be used until all of the KMS initialization steps have completed, e.g. those methods would be UB to make available before said init</p>
+
+
+
+<a name="609959150"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959150" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959150">(Jul 13 2026 at 20:18)</a>:</h4>
+<p>I think this should just get a lifetime for it to go into the drm::Registration private data. This way you don't need to keep the drm::Device alive with a reference count, as it can't outlive the drm::Device if it can't outlive the drm::Registration private data. Plus, the drm::Registration can theoretically be shorter lived than the bus device is bound, so devres isn't the best fit conceptually.</p>
+
+
+
+<a name="609959421"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959421" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959421">(Jul 13 2026 at 20:19)</a>:</h4>
+<p>keep in mind: KMS is fully initialized by the point <code>UnregisteredDevice</code> is returned. it would need to be carried around until then</p>
+
+
+
+<a name="609959537"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959537" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959537">(Jul 13 2026 at 20:20)</a>:</h4>
+<p>Also yeah - I had been worried about that with <code>devres</code>, which is why I had been curious about adding a binding for the drm managed devres stuff, since I believe that might get stuff in the right order?</p>
+
+
+
+<a name="609959661"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959661" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959661">(Jul 13 2026 at 20:21)</a>:</h4>
+<p>also wait</p>
+
+
+
+<a name="609959817"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959817" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959817">(Jul 13 2026 at 20:22)</a>:</h4>
+<p>I don't see why the registration portion would matter if it is shorter lived then the bus device is bound? The KMS teardown can happen before or after registration, the device being unregistered by the time we do it is completely fine</p>
+
+
+
+<a name="609959866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609959866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609959866">(Jul 13 2026 at 20:22)</a>:</h4>
+<p>We're more concerned about the <code>drm_device</code> structure being accessible</p>
+
+
+
+<a name="609962792"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609962792" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609962792">(Jul 13 2026 at 20:40)</a>:</h4>
+<p>KMS mode object private data and callbacks need to be scoped to the registration anyway, as they carry device resources, no?</p>
+
+
+
+<a name="609963874"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609963874" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609963874">(Jul 13 2026 at 20:48)</a>:</h4>
+<p>I mean, I get your point it is technically OK if it outlives the drm::Registration as long as it does not outlive driver unbind. But there's no need for this. Tying it to the same lifetime is more consistent and allows mode setting object private data to share resources with the registration data, etc.</p>
+
+
+
+<a name="609964704"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609964704" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609964704">(Jul 13 2026 at 20:54)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> and I guess that when dropping <code>Registration</code> we already have the guarantee of ioctls not getting called?</p>
+
+
+
+<a name="609965030"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609965030" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609965030">(Jul 13 2026 at 20:55)</a>:</h4>
+<p>Yes, they're guarded.</p>
+
+
+
+<a name="609965113"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609965113" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609965113">(Jul 13 2026 at 20:56)</a>:</h4>
+<p>ok - yeah, that actually should work then. I guess we could just carry around <code>KmsResources</code> in the <code>UnregisteredDevice</code>.</p>
+
+
+
+<a name="609983067"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/609983067" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#609983067">(Jul 13 2026 at 23:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609959150">said</a>:</p>
+<blockquote>
+<p>I think this should just get a lifetime for it to go into the drm::Registration private data. This way you don't need to keep the drm::Device alive with a reference count, as it can't outlive the drm::Device if it can't outlive the drm::Registration private data. Plus, the drm::Registration can theoretically be shorter lived than the bus device is bound, so devres isn't the best fit conceptually.</p>
+</blockquote>
+<p>FWIW: I still think it might not be a bad idea to allow some limited <code>ARef</code> in the way I described before, e.g. DRM bindings can get an early ARef in the <code>EarlyInternal</code> context but actual users can't. If not mostly just because in the <a href="http://device.rs">device.rs</a> file I showed you: we still need to handle resource cleanup if say, we successfully create the <code>Device</code> before registration but fail on the KMS portion. We can currently clean that up, but that implies needing to manually call the destructor functions for the device (which we could just skip if we had an ARef to drop).</p>
+
+
+
+<a name="610664664"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/610664664" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#610664664">(Jul 14 2026 at 20:31)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> any chance y'all have any examples of implementing <code>ForLt</code> manually for something so I can double check I've got this correct? Trying to implement it for the <code>KmsResources</code> type I came up with atm</p>
+
+
+
+<a name="610668961"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Brainstorming%20on%20registration%20ordering%20issues%20in%20DRM/near/610668961" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM.html#610668961">(Jul 14 2026 at 21:00)</a>:</h4>
+<p>ah, nevermind, it is not the thing I wanted here whoops :)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

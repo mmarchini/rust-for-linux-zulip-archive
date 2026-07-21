@@ -1,0 +1,75 @@
+<html>
+<head><meta charset="utf-8"><title>Includes in kernel/ · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html">Includes in kernel/</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="327774725"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327774725" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327774725">(Feb 14 2023 at 13:26)</a>:</h4>
+<p>I want to call methods defined in <code>kernel/locking/rtmutex_common.h</code> from Rust code. Since it's not in the <code>include/linux/</code> directory, it doesn't seem like I can include it in a helper. How should I approach this?</p>
+
+
+
+<a name="327775009"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327775009" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327775009">(Feb 14 2023 at 13:27)</a>:</h4>
+<p>(Specifically, I want to use the proxy APIs currently only used by futexes.)</p>
+
+
+
+<a name="327819978"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327819978" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327819978">(Feb 14 2023 at 16:33)</a>:</h4>
+<p>Temporarily something like below?:</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/rust/helpers.c b/rust/helpers.c</span>
+<span class="gh">index 9ac4a06e6bbe..ddb6ce04b3df 100644</span>
+<span class="gd">--- a/rust/helpers.c</span>
+<span class="gi">+++ b/rust/helpers.c</span>
+<span class="gu">@@ -25,6 +25,7 @@</span>
+<span class="w"> </span>#define CREATE_TRACE_POINTS
+<span class="w"> </span>#include &lt;trace/events/rust.h&gt;
+
+<span class="gi">+#include "../kernel/locking/rtmutex_common.h"</span>
+<span class="w"> </span>__noreturn void rust_helper_BUG(void)
+<span class="w"> </span>{
+<span class="w"> </span>       BUG();
+<span class="gu">@@ -57,6 +58,12 @@ void rust_helper_trace_arc_drop_inner(const char *name,</span>
+<span class="w"> </span>}
+<span class="w"> </span>EXPORT_SYMBOL_GPL(rust_helper_trace_arc_drop_inner);
+
+<span class="gi">+void rust_helper_xxx(void)</span>
+<span class="gi">+{</span>
+<span class="gi">+       rt_mutex_init_waiter(NULL);</span>
+<span class="gi">+}</span>
+<span class="gi">+EXPORT_SYMBOL_GPL(rust_helper_xxx);</span>
+<span class="gi">+</span>
+<span class="w"> </span>/*
+<span class="w"> </span> * We use `bindgen`'s `--size_t-is-usize` option to bind the C `size_t` type
+<span class="w"> </span> * as the Rust `usize` type, so we can use it in contexts where Rust
+</code></pre></div>
+
+
+
+<a name="327826602"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327826602" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327826602">(Feb 14 2023 at 17:02)</a>:</h4>
+<p>Yeah, for the moment I would do that. Note that for private APIs, we will need to be very clear to upstream maintainers that we will use them on Rust's side.</p>
+
+
+
+<a name="327826709"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327826709" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327826709">(Feb 14 2023 at 17:03)</a>:</h4>
+<p>Eventually, when the <code>kernel</code> crate is split, we will want to limit the access to such private C APIs to particular crates, i.e. it would really be a case where the Rust code is considered part of the same privacy boundary as the C side, even if written in a different language.</p>
+
+
+
+<a name="327956430"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Includes%20in%20kernel//near/327956430" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jeff Vander Stoep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Includes.20in.20kernel.2F.html#327956430">(Feb 15 2023 at 09:11)</a>:</h4>
+<p>(deleted)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

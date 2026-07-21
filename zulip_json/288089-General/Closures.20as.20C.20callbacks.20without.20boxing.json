@@ -1,0 +1,410 @@
+[
+    {
+        "content": "<p>I am wondering if one can get in work in halfway sane way to pass a small Rust closure to the kind of C callback API we see sometimes in the kernel without having to allocate heap memory.</p>\n<p>The kind of API I talk about looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">CObjectWithCallback</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"w\">    </span><span class=\"n\">void</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">callback_func</span><span class=\"p\">)(</span><span class=\"n\">void</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">void</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">user_data</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The question is, if the size of the closure is not more than the size of a pointer, could we store the closure somehow in the <code>user_data</code> pointer directly - to avoid the memory allocation - instead of boxing it and setting <code>user_data</code> to <code>Box::into_raw(closure)</code>.</p>\n<p>It looks to me that would be useful in kernel to do callbacks 'the rust way'.</p>\n<p>Unfortunately it seems using <code>mem::transmute</code> for that can result in UB.</p>\n<p>We had a discussion about the matter (without finding an elegant solution) here:</p>\n<p><a href=\"https://users.rust-lang.org/t/is-transmuting-a-value-to-a-pointer-and-back-safe/126296\">https://users.rust-lang.org/t/is-transmuting-a-value-to-a-pointer-and-back-safe/126296</a></p>\n<p>The TLDR is, if the data (here: the closure) contains padding between values, like if it contains an <code>u16</code> and an <code>u32</code>, llvm treats the padding as unitialized memory. There seems to be no way to make the compiler assume it to be initialized in Rust (without knowing the exact layout of the data, which is impossible for a closure).</p>\n<p>I wonder if it would be worth the trouble to make that work anyway somehow, like with some C or assembly helpers. Would that feature be generally useful enough? Thoughts?</p>",
+        "id": 504518798,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741598980
+    },
+    {
+        "content": "<p>I'm a bit confused, you're talking about storing a closure, but <code>user_data</code> is just a<code>void*</code>. What kinds of closures do you think this would apply to? If you're not capturing any data, you can cast a closure to a <code>fn</code> pointer, which you can store as the <code>void*</code> (it will be \"statically allocated\" like any other normal function).</p>",
+        "id": 504552308,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741606947
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504552308\">schrieb</a>:</p>\n<blockquote>\n<p>I'm a bit confused, you're talking about storing a closure, but <code>user_data</code> is just a<code>void*</code>. What kinds of closures do you think this would apply to?</p>\n</blockquote>\n<p>I mean, if the closure captures something simple, small, that is not larger than a pointer, like a an <code>u64</code> or a <code>Box</code>. I mean physically a pointer are 8 bytes (or 4 on 32bit), so in there is space to store anything that is &lt;= 8 bytes in size.</p>",
+        "id": 504559546,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741608596
+    },
+    {
+        "content": "<p>do you have some concrete examples?</p>",
+        "id": 504593512,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741615782
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504593512\">schrieb</a>:</p>\n<blockquote>\n<p>do you have some concrete examples?</p>\n</blockquote>\n<p>You mean use case or implementation?</p>\n<p>My current use case is the completion callback of a <code>bio</code>. There you have</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">bio_end_io_t</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">::</span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">option</span><span class=\"p\">::</span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"n\">arg1</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">bio</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">bi_end_io</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">bio_end_io_t</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">bi_private</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">ffi</span><span class=\"p\">::</span><span class=\"n\">c_void</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n</code></pre></div>\n<p>You get the <code>bio</code> passed to the callback and can get the closure back from <code>bi_private</code>.</p>\n<p>Currently I'm doing it like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Bio</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">callback_wrapper</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"n\">Bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">static</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">from_raw</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">.</span><span class=\"n\">read</span><span class=\"p\">().</span><span class=\"n\">bi_private</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">CB</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">submit_bio</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">(</span><span class=\"n\">NonNull</span><span class=\"p\">::</span><span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">));</span>\n<span class=\"w\">            </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">into_inner</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">)(</span><span class=\"n\">submit_bio</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">submit_noacct</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"n\">Bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">static</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">CB</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">ManuallyDrop</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">).</span><span class=\"n\">as_raw_bio</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">callback_wrapper</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">into_raw</span><span class=\"p\">(</span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">alloc</span><span class=\"p\">::</span><span class=\"n\">flags</span><span class=\"p\">::</span><span class=\"n\">GFP_NOIO</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">bio</span><span class=\"p\">).</span><span class=\"n\">bi_end_io</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">bio</span><span class=\"p\">).</span><span class=\"n\">bi_private</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">submit_bio_noacct</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>As you can see, I allocate a KBox on each call to <code>submit_noacct()</code>. What I would like to do is something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&lt;=</span><span class=\"w\"> </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// UB, depending on what the closure captures</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">transmute</span><span class=\"o\">&lt;</span><span class=\"n\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">into_raw</span><span class=\"p\">(</span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">alloc</span><span class=\"p\">::</span><span class=\"n\">flags</span><span class=\"p\">::</span><span class=\"n\">GFP_NOIO</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>It probably can be made sound with assembly or C, but correctness will be hard to check (without in-depth knowledge of the compiler). Thus the question if it is worth the trouble.</p>",
+        "id": 504606284,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741618236
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504606284\">said</a>:</p>\n<blockquote>\n<p>You mean use case or implementation?</p>\n</blockquote>\n<p>I mean the use-case.</p>\n<p>Thanks for the details, how do the <code>submit_noacct</code> call sites look like?</p>",
+        "id": 504607241,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741618426
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504607241\">schrieb</a>:</p>\n<blockquote>\n<p>Thanks for the details, how do the <code>submit_noacct</code> call sites look like?</p>\n</blockquote>\n<p>No really clear. It's supposed to be a generic interface.</p>\n<p>Sure, I could tailor it to my specific use cases, where I typically need to store an int, Box or ARef. No capturing closures, only func pointers with a fixed argument type. That would be plan B.</p>",
+        "id": 504651251,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741628707
+    },
+    {
+        "content": "<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns, e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"p\">.</span><span class=\"n\">submit_noacct</span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">.</span><span class=\"n\">do_sth</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">});</span>\n<span class=\"p\">}</span>\n<span class=\"c1\">// the closure above gets dropped and so does `y`.</span>\n<span class=\"c1\">// &lt;callback_wrapper&gt; will reference a dangling pointer</span>\n</code></pre></div>",
+        "id": 504687707,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741640870
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504687707\">schrieb</a>:</p>\n<blockquote>\n<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns</p>\n</blockquote>\n<p>But that should be possible to handle with <code>ManuallyDrop</code>, no?</p>",
+        "id": 504688258,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741641089
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504687707\">said</a>:</p>\n<blockquote>\n<p>If you don't pull <code>end_io_callback</code> in a box, it may be dropped after <code>submit_noacct()</code> returns, e.g.</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"p\">.</span><span class=\"n\">submit_noacct</span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">.</span><span class=\"n\">do_sth</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">});</span>\n<span class=\"p\">}</span>\n<span class=\"c1\">// the closure above gets dropped and so does `y`.</span>\n<span class=\"c1\">// &lt;callback_wrapper&gt; will reference a dangling pointer</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>that can't happen, since <code>CB</code> has to be <code>'static</code></p>",
+        "id": 504688337,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741641122
+    },
+    {
+        "content": "<p>Oh, my bad. Shouldn't use word \"dropped\", if we don't move the closure in <code>Box</code>, the pointer will become dangling when the calling function stack popped.</p>",
+        "id": 504689849,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741641725
+    },
+    {
+        "content": "<p>which pointer?</p>",
+        "id": 504689909,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741641752
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689909\">said</a>:</p>\n<blockquote>\n<p>which pointer?</p>\n</blockquote>\n<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>",
+        "id": 504689977,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741641792
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689977\">schrieb</a>:</p>\n<blockquote>\n<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>\n</blockquote>\n<p>It shouldn't. The closure will be moved into the function with normal move semantics. When dropping is prevented there using <code>ManuallyDrop</code> it should be fine.</p>",
+        "id": 504690209,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741641884
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690209\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504689977\">schrieb</a>:</p>\n<blockquote>\n<p>The pointer to the closure, that Oliver wants to store in <code>bio</code>.</p>\n</blockquote>\n<p>It shouldn't. The closure will be moved into the function with normal move semantics. When dropping is prevented there using <code>ManuallyDrop</code> it should be fine.</p>\n</blockquote>\n<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>",
+        "id": 504690296,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741641921
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">foo</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"p\">.</span><span class=\"n\">submit_noacct</span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">.</span><span class=\"n\">do_sth</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">});</span>\n<span class=\"w\">  </span><span class=\"c1\">// both y and the closure should be allocated on the stack of `foo()`.</span>\n<span class=\"p\">}</span>\n\n<span class=\"n\">foo</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">);</span>\n<span class=\"c1\">// y and the closure are not valid. yet the callback may have not executed.</span>\n</code></pre></div>",
+        "id": 504690601,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642040
+    },
+    {
+        "content": "<p>that doesn't work because of the <code>'static</code> bound</p>",
+        "id": 504690641,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642059
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690641\">said</a>:</p>\n<blockquote>\n<p>that doesn't work because of the <code>'static</code> bound</p>\n</blockquote>\n<p>which doesn't work? I thought Oliver was proposing to use <code>ManuallyDrop</code></p>",
+        "id": 504690851,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642140
+    },
+    {
+        "content": "<p>but it might be implementation detail</p>",
+        "id": 504690855,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642141
+    },
+    {
+        "content": "<p>Yeah..</p>",
+        "id": 504690876,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642149
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296\">schrieb</a>:</p>\n<blockquote>\n<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>\n</blockquote>\n<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>",
+        "id": 504690895,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741642158
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690895\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296\">schrieb</a>:</p>\n<blockquote>\n<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>\n</blockquote>\n<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>\n</blockquote>\n<p>move to where?</p>",
+        "id": 504690931,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642175
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690851\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690641\">said</a>:</p>\n<blockquote>\n<p>that doesn't work because of the <code>'static</code> bound</p>\n</blockquote>\n<p>which doesn't work? I thought Oliver was proposing to use <code>ManuallyDrop</code></p>\n</blockquote>\n<p>in your example the closure will be moved into the <code>submit_noacct</code> function and stay valid for as long as it exists</p>",
+        "id": 504690938,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642178
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690931\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690895\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504690296\">schrieb</a>:</p>\n<blockquote>\n<p>If you don't use <code>Box</code>, where the closure should be? On the stack, right?</p>\n</blockquote>\n<p>Wherever it is moved. The same way as you pass primitives or structs around. The idea here is to store it in the <code>bi_private</code> field (after checking that it fits)-</p>\n</blockquote>\n<p>move to where?</p>\n</blockquote>\n<p>Or you mean <code>bi_private</code> should be able to hold the whole closure?</p>",
+        "id": 504691073,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642230
+    },
+    {
+        "content": "<p>yes that is the idea</p>",
+        "id": 504691090,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642239
+    },
+    {
+        "content": "<p>if we store the data inside of an <code>Opaque&lt;CB&gt;</code>, then it would work</p>",
+        "id": 504691152,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642262
+    },
+    {
+        "content": "<p>but no idea how to bring that into C land...</p>",
+        "id": 504691206,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642291
+    },
+    {
+        "content": "<p>correct me if I'm wrong, a closure is at least a size of <code>usize</code> because it has a function pointer in it?</p>",
+        "id": 504691380,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642358
+    },
+    {
+        "content": "<p>nope, if you have a <code>'static</code> closure, then it can be smaller</p>",
+        "id": 504691412,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642376
+    },
+    {
+        "content": "<p>for example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">size</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">static</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">f</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"o\">&gt;</span><span class=\"p\">());</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">foo</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">size</span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">foo</span><span class=\"p\">(</span><span class=\"mi\">42</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>prints <code>4</code>.</p>",
+        "id": 504691551,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642445
+    },
+    {
+        "content": "<p>(and the binary representation of that closure will just be its captured data, so in this case <code>42</code>)</p>",
+        "id": 504691608,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741642474
+    },
+    {
+        "content": "<p>Ok, this makes sense.</p>",
+        "id": 504691706,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741642512
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504691152\">said</a>:</p>\n<blockquote>\n<p>if we store the data inside of an <code>Opaque&lt;CB&gt;</code>, then it would work</p>\n</blockquote>\n<p>what do you mean by this?</p>",
+        "id": 504694050,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741643462
+    },
+    {
+        "content": "<p>if the <code>bi_private</code> field had the type <code>Opaque&lt;usize&gt;</code>, then we could store <code>CB</code> in there without padding bytes becoming an issue</p>",
+        "id": 504694148,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741643504
+    },
+    {
+        "content": "<p>Oh, right. Because whatever the type of <code>bi_private</code> is, it needs to be valid.</p>",
+        "id": 504694392,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741643601
+    },
+    {
+        "content": "<p>I guess if we have a <code>__opaque</code> on C side</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"cp\">#define __opaque __attribute__((???))</span>\n</code></pre></div>\n<p>and bindgen can understand it. Generating <code>void *bi_private __opaque</code> into a <code>bi_private: Opaque&lt;*mut c_void&gt;</code>, then this could work.</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">bio</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">...</span>\n<span class=\"w\">    </span><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">bi_private</span><span class=\"w\"> </span><span class=\"n\">__opaque</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"p\">...</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>into</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Bio</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"w\">    </span><span class=\"n\">bi_private</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 504695022,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741643838
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504694148\">schrieb</a>:</p>\n<blockquote>\n<p>if the <code>bi_private</code> field had the type <code>Opaque&lt;usize&gt;</code>, then we could store <code>CB</code> in there without padding bytes becoming an issue</p>\n</blockquote>\n<p>According to the forum discussion I linked, it seems not. If it were an <code>Opaque&lt;[u8; 8]&gt;</code> it might. Not sure. </p>\n<p>With an <code>Opaque&lt;usize&gt;</code>, converting the closure into that should be okay, but when you want to get the data back, you have a problem. Some bytes of the <code>usize</code> being uninitialized will make the compiler declare the whole <code>usize</code> to be uninitialized.</p>",
+        "id": 504695673,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741644059
+    },
+    {
+        "content": "<p>you can probably do a:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">.</span><span class=\"n\">bi_private</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">CB</span><span class=\"p\">).</span><span class=\"n\">read</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"n\">cb</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>, that is, don't read it as a <code>unsize</code>.</p>",
+        "id": 504696536,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741644398
+    },
+    {
+        "content": "<p><a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975</a></p>",
+        "id": 504697784,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741644940
+    },
+    {
+        "content": "<p>(it makes miri happy)</p>",
+        "id": 504698225,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741645126
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504697784\">schrieb</a>:</p>\n<blockquote>\n<p><a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=64adacc3f2c393fce19d05c5364de975</a></p>\n</blockquote>\n<p>Interesting. Works also for me, if I replace <code>usize</code> with <code>*mut c_void</code>.</p>",
+        "id": 504698738,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741645307
+    },
+    {
+        "content": "<p>Now bindgen would need to be taught to generate <code>MaybeUninit&lt;*mut c_void&gt;</code> instead of <code>*mut c_void</code>...</p>",
+        "id": 504699095,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741645416
+    },
+    {
+        "content": "<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>",
+        "id": 504699354,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741645510
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699354\">schrieb</a>:</p>\n<blockquote>\n<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>\n</blockquote>\n<p>Yes. Does that help?</p>",
+        "id": 504699823,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741645678
+    },
+    {
+        "content": "<p>then you could do:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&lt;=</span><span class=\"w\"> </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">addr_mut_of</span><span class=\"o\">!</span><span class=\"p\">((</span><span class=\"o\">*</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">get</span><span class=\"p\">()).</span><span class=\"n\">bi_private</span><span class=\"p\">).</span><span class=\"n\">write</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"n\">forget</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"o\">&lt;</span><span class=\"kr\">do</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">normal</span><span class=\"w\"> </span><span class=\"k\">box</span><span class=\"w\"> </span><span class=\"n\">thing</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 504700015,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741645742
+    },
+    {
+        "content": "<p>the whole point is \"don't read <code>.bi_private</code> directly, instead re-interpret it as a <code>CB</code>\".</p>",
+        "id": 504700346,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741645870
+    },
+    {
+        "content": "<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>",
+        "id": 504700796,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741646065
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700346\">schrieb</a>:</p>\n<blockquote>\n<p>the whole point is \"don't read <code>.bi_private</code> directly, instead re-interpret it as a <code>CB</code>\".</p>\n</blockquote>\n<p>Good idea. That make sense. If it is effectively never accesses as a <code>*c_void</code> it might indeed be okay.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700796\">schrieb</a>:</p>\n<blockquote>\n<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>\n</blockquote>\n<p>Is it actually possible, that it is not? If the size of CB is not greater than a pointer?</p>",
+        "id": 504701257,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741646313
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504701257\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504700796\">schrieb</a>:</p>\n<blockquote>\n<p>and you probably need to check align of <code>CB</code> is smaller or equal than <code>*mut c_void</code> just in case.</p>\n</blockquote>\n<p>Is it actually possible, that it is not? If the size of CB is not greater than a pointer?</p>\n</blockquote>\n<p>No for right now, but these are compile time switches only, so it won't hurt being careful.</p>",
+        "id": 504702344,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741646844
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504702344\">schrieb</a>:</p>\n<blockquote>\n<p>No for right now, but these are compile time switches only, so it won't hurt being careful.</p>\n</blockquote>\n<p>True. </p>\n<p>But seems you indeed found a solution. Thanks a lot!</p>",
+        "id": 504703078,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1741647227
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699823\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/504699354\">schrieb</a>:</p>\n<blockquote>\n<p>Hmm.. your <code>Bio</code> is a <code>Opaque&lt;bindings::bio&gt;</code>, right?</p>\n</blockquote>\n<p>Yes. Does that help?</p>\n</blockquote>\n<p><span aria-label=\"man facepalming\" class=\"emoji emoji-1f926-200d-2642\" role=\"img\" title=\"man facepalming\">:man_facepalming:</span>  oh right!</p>",
+        "id": 504704880,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1741648054
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"783888\">@Oliver Mangold</span> do you really need to be able to pass a closure here?</p>",
+        "id": 506120186,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742210421
+    },
+    {
+        "content": "<p>Could the callback not be decided by a generic parameter on <code>Bio</code> ?</p>",
+        "id": 506120270,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742210441
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506120270\">schrieb</a>:</p>\n<blockquote>\n<p>Could the callback not be decided by a generic parameter on <code>Bio</code> ?</p>\n</blockquote>\n<p>Basically that's what I'm doing. But the question is about passing how to pass <code>user_data</code> to the callback in safe code. </p>\n<p>If doing things like above is not okay, I could still make it usable by only allowing a fixed set of types that can be used for that (like an <code>usize</code> or a <code>Box</code>). That said, being able to use closures seems to me to be most flexible way and also the common Rust idiom for callbacks, no?</p>",
+        "id": 506179584,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742224026
+    },
+    {
+        "content": "<p>We do something similar for tag set private data. There we require foreignOwnable for the parameter I think, and then it is generic.</p>",
+        "id": 506187287,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742225594
+    },
+    {
+        "content": "<p>As long as you always have the same type on a code path, that works well, it can be generic.</p>",
+        "id": 506187446,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742225630
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506187446\">schrieb</a>:</p>\n<blockquote>\n<p>As long as you always have the same type on a code path, that works well, it can be generic.</p>\n</blockquote>\n<p>Yes, it would. Don't get me wrong, I'm not saying closures are absolutely required.</p>",
+        "id": 506199618,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742228012
+    },
+    {
+        "content": "<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>",
+        "id": 506217266,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742232307
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266\">said</a>:</p>\n<blockquote>\n<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>\n</blockquote>\n<p>Nope, compiler should figure if the data captured by the closure is relatively small.</p>",
+        "id": 506220772,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1742233267
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266\">schrieb</a>:</p>\n<blockquote>\n<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>\n</blockquote>\n<p>As I understand the <code>value</code> of the closure is just the captured data, somehow packed into a kinda struct. How that struct is passed around is decided by the compiler, of course. But I think memcpy'ing it to move it is just as valid a thing to do as for any other struct. The complication is just the type coercion if you want to store it in the space dedicated for data of a different type with causing UB. (The compiler surely won't convert a boxing into inline storage for you, if the reference to the <code>Box</code> is an FFI pointer, right?). But I believe Boqun figured that part out.</p>",
+        "id": 506225694,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742234611
+    },
+    {
+        "content": "<p>I guess some times it will be a fat pointer? A pointer for the function to jump to and a pointer to the captures?</p>",
+        "id": 506247665,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742241230
+    },
+    {
+        "content": "<p>Unless it is static dispatch, both are required</p>",
+        "id": 506247805,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742241270
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506220772\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506217266\">said</a>:</p>\n<blockquote>\n<p>I am not sure how the codegen works, but I guess you would always have some kind of  pointer deref, if you use a closure?</p>\n</blockquote>\n<p>Nope, compiler should figure if the data captured by the closure is relatively small.</p>\n</blockquote>\n<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>",
+        "id": 506248013,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742241351
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506247665\">schrieb</a>:</p>\n<blockquote>\n<p>I guess some times it will be a fat pointer? A pointer for the function to jump to and a pointer to the captures?</p>\n</blockquote>\n<p>No fat pointer in the regular sense. The function address is represented by the _type_ of the closure, while the capture is represented by it's value. Odd thing, I admit. If you want to have both addresses, you can get the function address by converting the closure to a function pointer and the data address by simply dereferencing the closure. I did that in my code here.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">submit_noacct</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"n\">Bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">static</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">CB</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">bio</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">ManuallyDrop</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">).</span><span class=\"n\">as_raw_bio</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cb</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">bio</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">callback_wrapper</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">CB</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">into_raw</span><span class=\"p\">(</span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">end_io_callback</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">alloc</span><span class=\"p\">::</span><span class=\"n\">flags</span><span class=\"p\">::</span><span class=\"n\">GFP_NOIO</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">bio</span><span class=\"p\">).</span><span class=\"n\">bi_end_io</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">cb</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">bio</span><span class=\"p\">).</span><span class=\"n\">bi_private</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">end_io_callback</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_void</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">submit_bio_noacct</span><span class=\"p\">(</span><span class=\"n\">bio</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 506253626,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742243240
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506248013\">schrieb</a>:</p>\n<blockquote>\n<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>\n</blockquote>\n<p>That's what I did. You can do <code>mem::size_of::&lt;C&gt;()</code> on a closure just like on any other type.</p>",
+        "id": 506440087,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742293595
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"783888\">Oliver Mangold</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506440087\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506248013\">schrieb</a>:</p>\n<blockquote>\n<p>But is it possible to put a bound on this? To accept only closures that will fit in a usize?</p>\n</blockquote>\n<p>That's what I did. You can do <code>mem::size_of::&lt;C&gt;()</code> on a closure just like on any other type.</p>\n</blockquote>\n<p>Right. What I meant was, is it possible to restrict the closures to only be he kind that fits in a usize, with a trait bound?</p>",
+        "id": 506440878,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742293794
+    },
+    {
+        "content": "<p>Maybe it is a stupid thing to do, but I am curious.</p>",
+        "id": 506441014,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742293818
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Closures.20as.20C.20callbacks.20without.20boxing/near/506440878\">schrieb</a>:</p>\n<blockquote>\n<p>Right. What I meant was, is it possible to restrict the closures to only be he kind that fits in a usize, with a trait bound?</p>\n</blockquote>\n<p>Don't think so. But one can do the size check in a const section, producing a compile time error when it doesn't fit.</p>",
+        "id": 506441238,
+        "sender_full_name": "Oliver Mangold",
+        "timestamp": 1742293885
+    }
+]

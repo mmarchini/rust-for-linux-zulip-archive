@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>Hi  <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>  and folks:</p>\n<p>In the patch<br>\n<a href=\"https://lore.kernel.org/all/20251030160315.451841-2-zhiw@nvidia.com/\">https://lore.kernel.org/all/20251030160315.451841-2-zhiw@nvidia.com/</a>,<br>\nthe driver callbacks will receive a <code>Device&lt;Bound&gt;</code> (it’s currently<br>\n<code>Device</code>, but I plan to refine it to <code>Device&lt;Bound&gt;</code> in the next spin).</p>\n<p>In that path, I need to convert it back to the reference of driver’s private<br>\ndata. I’m wondering if there’s an <em>official</em> or <em>intended</em> way to do this.</p>\n<p>First, I need to turn a <code>&amp;Device::Bound</code> into a <code>&amp;Pci::Device&lt;Bound&gt;</code>:</p>\n<p>let pdev_bound: &amp;pci::Device&lt;Bound&gt; = unsafe { dev.as_bound().try_into()? };</p>\n<p>I was<br>\nthinking of using <code>drvdata_borrow::&lt;T&gt;()</code>, but that is in<br>\n<code>Pci::Device::&lt;CoreInternal&gt;</code>, so I have to do:</p>\n<p>let pdev: &amp;pci::Device&lt;CoreInternal&gt; = unsafe { &amp;*(pdev_bound as *const _ as *const pci::Device&lt;CoreInternal&gt;) };</p>\n<p>Then I can get it:<br>\n let data = unsafe { pdev.as_ref().drvdata_borrow::&lt;Pin&lt;KBox&lt;NovaCore&gt;&gt;&gt;() };</p>\n<p>That doesn't look nice at all...<br>\nAlso, I likely need a mutable reference to the driver data structure.</p>\n<p>Any suggestions or examples on the right way to handle this?</p>\n<hr>\n<p>I also encountered the same requirement in my POC, where I need to convert &amp;pci::Device to the reference of mutable driver data.</p>\n<p><a href=\"https://github.com/zhiwang-nvidia/linux/blob/8d6ddc8ecb5a73e9e884806d298a7c09c31a40a0/drivers/gpu/nova-core/driver.rs#L58\">https://github.com/zhiwang-nvidia/linux/blob/8d6ddc8ecb5a73e9e884806d298a7c09c31a40a0/drivers/gpu/nova-core/driver.rs#L58</a></p>",
+        "id": 548155098,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1761916709
+    },
+    {
+        "content": "<p>See <a href=\"https://lore.kernel.org/all/20251020223516.241050-3-dakr@kernel.org/\">https://lore.kernel.org/all/20251020223516.241050-3-dakr@kernel.org/</a></p>",
+        "id": 548158845,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761917810
+    },
+    {
+        "content": "<p>Indeed, what Alice points out works and is technically correct to obtain the driver's bus device private data.</p>\n<p>However, the question here is whether you actually want the drivers's bus device private data or whether you should leverage the private data of the class device you receive the callback from, <code>fwctl</code> in this case.</p>\n<p>The driver's device private data should only be used in the context of the driver model (i.e. bus callbacks, driver to driver interaction, etc.). If you are within another scope, e.g. file operations, class device callbacks, etc. you should use the private data from those.</p>",
+        "id": 548167135,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761920073
+    },
+    {
+        "content": "<p>If there is data structures needed in both the private data of the device and the private data of something else, then this sounds like shared ownership and you may want to consider reference counting with <code>Arc</code>.</p>",
+        "id": 548167318,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761920115
+    },
+    {
+        "content": "<p>Regarding a mutable reference to the driver's private data, you won't ever get one since it can be accessed from multiple tasks concurrently. That means, if you need to modify a member within, you have to protect it with a lock, which if held will give you mutable access. In other words, this is the Rust compiler preventing you from implementing race conditions. :)</p>",
+        "id": 548167793,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761920224
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F/near/548167318\">said</a>:</p>\n<blockquote>\n<p>If there is data structures needed in both the private data of the device and the private data of something else, then this sounds like shared ownership and you may want to consider reference counting with <code>Arc</code>.</p>\n</blockquote>\n<p>You are right. In my vGPU RFC, I have to use Arc&lt;&gt; /Mutex&lt;&gt; and Guard. Or the compiler wouldn't let me move on. It is actually a nice way to do locking and sharing ownership. :)</p>",
+        "id": 548168499,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1761920395
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/.5BPCI.5D.20Getting.20the.20driver.20privatedata.20in.20other.20calling.20paths.3F/near/548167135\">said</a>:</p>\n<blockquote>\n<p>Indeed, what Alice points out works and is technically correct to obtain the driver's bus device private data.</p>\n<p>However, the question here is whether you actually want the drivers's bus device private data or whether you should leverage the private data of the class device you receive the callback from, <code>fwctl</code> in this case.</p>\n<p>The driver's device private data should only be used in the context of the driver model (i.e. bus callbacks, driver to driver interaction, etc.). If you are within another scope, e.g. file operations, class device callbacks, etc. you should use the private data from those.</p>\n</blockquote>\n<p>I see your point. Mostly, I am trying to reach the GSP command queue from fw_rpc callback in my PoC. Guess we need to make the GSP cmdq with Arc&lt;&gt; as well.</p>",
+        "id": 548169584,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1761920657
+    },
+    {
+        "content": "<p>Or just share the whole GPU instance with Arc&lt;Gpu&gt;, so we don't scatter lots of separate reference counted allocations.</p>",
+        "id": 548169929,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761920730
+    },
+    {
+        "content": "<p>We will need it in other places anyways.</p>",
+        "id": 548170026,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761920754
+    },
+    {
+        "content": "<p>Make sense. I will try that in my \"RM control via fwctl\" POC and see how deep I can go. :)</p>",
+        "id": 548170615,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1761920893
+    }
+]

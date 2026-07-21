@@ -1,0 +1,518 @@
+[
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339445596\">said</a>:</p>\n<blockquote>\n<p>But unlocked spinlock is safe to move</p>\n</blockquote>\n<p>hmm at the moment pinning in rust is a one-time thing, so unpinning and later repinning does not exist. If we really need this then we might be able to implement it via dropping the old value and immediately initializing an unpinned value with the same fields in the same location. Or try to get it implemented on the rust side. I could imagine a trait that would make it possible:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Unpinnable</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">try_unpin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span>: <span class=\"nc\">DerefMut</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"bp\">self</span>: <span class=\"nc\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But are there reasons to move a spinlock after locking it?</p>",
+        "id": 339500690,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1677914806
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339500690\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339445596\">said</a>:</p>\n<blockquote>\n<p>But unlocked spinlock is safe to move</p>\n</blockquote>\n<p>hmm at the moment pinning in rust is a one-time thing, so unpinning and later repinning does not exist. If we really need this then we might be able to implement it via dropping the old value and immediately initializing an unpinned value with the same fields in the same location. Or try to get it implemented on the rust side. I could imagine a trait that would make it possible:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Unpinnable</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">try_unpin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span>: <span class=\"nc\">DerefMut</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"bp\">self</span>: <span class=\"nc\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But are there reasons to move a spinlock after locking it?</p>\n</blockquote>\n<p>One situation I have in my mind about this <code>Unpinnable</code> is:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">some_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Work</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.);</span><span class=\"w\"> </span><span class=\"c1\">// create a work on stack, because it's fast. Assuming Work: !Unpin</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pinned</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">some_work</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"c1\">// publish the work</span>\n<span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">());</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">wait_for_work_done</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">timeout</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// sleep wait, return true if timeout.</span>\n<span class=\"w\">  </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">cancel_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// return true if cancel succeeds, i.e. work hasn't executed.</span>\n<span class=\"w\">    </span><span class=\"c1\">// slow path, we have to execute the work after the function returns.</span>\n<span class=\"w\">    </span><span class=\"c1\">// Now `some_work` is unpublished, so in theory it's safe to move.</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">boxed_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">some_work</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// move to the heap</span>\n<span class=\"w\">                                          </span><span class=\"c1\">// why not recreate the work? Because Work::new(..) has non-trivial computation.</span>\n<span class=\"w\">    </span><span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">boxed_work</span><span class=\"p\">.</span><span class=\"n\">into_pin</span><span class=\"p\">());</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I know this is totally UB, and probably a footgun, but I'm not suprised if one wants this works. And I don't find a (simple) sound way to make it work yet.</p>",
+        "id": 339729950,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678039867
+    },
+    {
+        "content": "<p>One safe way to make it work is providing:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">content</span><span class=\"p\">(</span><span class=\"bp\">self</span>: <span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Content</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// `Content` is the `Unpin` part in the work</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 339730475,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678040191
+    },
+    {
+        "content": "<p>But it has some layout requirement for <code>Work</code>.</p>",
+        "id": 339730554,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678040253
+    },
+    {
+        "content": "<p>Or use <code>ptr::read</code>?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">some_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Work</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.);</span><span class=\"w\"> </span><span class=\"c1\">// create a work on stack, because it's fast. Assuming Work: !Unpin</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pinned</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">some_work</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"c1\">// publish the work</span>\n<span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">());</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">wait_for_work_done</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">timeout</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// sleep wait, return true if timeout.</span>\n<span class=\"w\">  </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">cancel_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// return true if cancel succeeds, i.e. work hasn't executed.</span>\n<span class=\"w\">    </span><span class=\"c1\">// slow path, we have to execute the work after the function returns.</span>\n<span class=\"w\">    </span><span class=\"c1\">// Now `some_work` is unpublished, so in theory it's safe to move.</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">boxed_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ptr</span>::<span class=\"n\">read</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">get_ref</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">});</span><span class=\"w\"> </span><span class=\"c1\">// copy instead of moving</span>\n<span class=\"w\">    </span><span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">boxed_work</span><span class=\"p\">.</span><span class=\"n\">into_pin</span><span class=\"p\">());</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 339737248,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678044642
+    },
+    {
+        "content": "<p>hmm both still are technically UB, since you are moving a pinned object. Is there some way to create a function that takes a pinned work and essentially just copies it to a different location?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">copy_from</span><span class=\"p\">(</span><span class=\"n\">work</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">Work</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 339738179,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678045340
+    },
+    {
+        "content": "<p>I thought <code>ptr::read</code> means copying, no?</p>",
+        "id": 339738317,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045470
+    },
+    {
+        "content": "<p>well yes, it is essentially \"moving but without destroying the source\"</p>",
+        "id": 339738464,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678045564
+    },
+    {
+        "content": "<p>But the doc says:</p>\n<blockquote>\n<p>Reads the value from src without moving it. This leaves the memory in src unchanged.</p>\n</blockquote>",
+        "id": 339738499,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045584
+    },
+    {
+        "content": "<p>but if we <code>ptr::read</code> a linked list and then deallocate the original memory, the linked list will break</p>",
+        "id": 339738509,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678045593
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339738509\">said</a>:</p>\n<blockquote>\n<p>but if we <code>ptr::read</code> a linked list and then deallocate the original memory, the linked list will break</p>\n</blockquote>\n<p>True, but the new linked list is not in pinned state, so it's fine?</p>",
+        "id": 339738581,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045646
+    },
+    {
+        "content": "<p>superficially it is, but I am not sure what the rules are in that scenario...</p>",
+        "id": 339738672,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678045689
+    },
+    {
+        "content": "<p>You may be right, since we lose the protection provided by pin-init</p>",
+        "id": 339738719,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045729
+    },
+    {
+        "content": "<p>what do you mean?</p>",
+        "id": 339738743,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678045748
+    },
+    {
+        "content": "<p>I mean with <code>ptr::read</code>, you can get a object which is <code>!Unpin</code>, but it has not been pinned initialised.</p>",
+        "id": 339738859,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045827
+    },
+    {
+        "content": "<p>Of course, if we say <code>ptr::read</code> on the a pinned object is not UB.</p>",
+        "id": 339738896,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045854
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pinned_inited</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.);</span>\n\n<span class=\"c1\">// SAFETY: a is a valid pointer</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ptr</span>::<span class=\"n\">read</span><span class=\"p\">(</span><span class=\"n\">a</span><span class=\"p\">.</span><span class=\"n\">get_ref</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"c1\">// SAFETY: no one will move b.</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">p</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">b</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span><span class=\"w\"> </span><span class=\"c1\">// but `b` has a incorrect linked list in it.</span>\n</code></pre></div>",
+        "id": 339739100,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678045995
+    },
+    {
+        "content": "<p>Oh now I get what you meant by losing the protection. Yes that can happen, but that is another safety requirement on <code>ptr::read</code>, see <a href=\"https://doc.rust-lang.org/std/ptr/fn.read.html#ownership-of-the-returned-value\">here</a>.</p>",
+        "id": 339739220,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046088
+    },
+    {
+        "content": "<p>well it is not really a safety requirement, but a heads-up</p>",
+        "id": 339739260,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046115
+    },
+    {
+        "content": "<p>I am not sure why this is not listed at the top</p>",
+        "id": 339739274,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046131
+    },
+    {
+        "content": "<p>but after <code>ptr::read</code>, I indeed don't use <code>a</code> or the memory pointed by <code>a</code>.</p>",
+        "id": 339739399,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046199
+    },
+    {
+        "content": "<p>well, it still gets dropped</p>",
+        "id": 339739430,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046217
+    },
+    {
+        "content": "<p>I think it has to be UB, it is moving the pinned value</p>",
+        "id": 339739473,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046239
+    },
+    {
+        "content": "<p>Right, but if dropping is an issue, then you cannot use <code>ptr::read</code> on any <code>!Copy</code>, right?</p>",
+        "id": 339739486,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046263
+    },
+    {
+        "content": "<p>normally you would <code>mem::forget</code> the old value</p>",
+        "id": 339739519,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046283
+    },
+    {
+        "content": "<p>or overwrite it via <code>ptr::write</code></p>",
+        "id": 339739565,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046308
+    },
+    {
+        "content": "<p>ah, right, I mis-read the link you pasted.</p>",
+        "id": 339739588,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046333
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339739565\">said</a>:</p>\n<blockquote>\n<p>or overwrite it via <code>ptr::write</code></p>\n</blockquote>\n<p>And <code>ptr::write</code> is considered as move. Ok.</p>",
+        "id": 339739811,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046478
+    },
+    {
+        "content": "<p>in my mind, a move is a <code>ptr::drop_in_place</code> and then a <code>ptr::write</code></p>",
+        "id": 339739934,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046556
+    },
+    {
+        "content": "<p><a href=\"https://doc.rust-lang.org/std/ptr/fn.write.html\">doc</a> says:</p>\n<blockquote>\n<p>Additionally, it does not drop src. Semantically, src is moved into the location pointed to by dst.</p>\n</blockquote>",
+        "id": 339739983,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046604
+    },
+    {
+        "content": "<p>so <code>x = y;</code> is</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">ptr</span>::<span class=\"n\">drop_in_place</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">raw</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">);</span>\n<span class=\"n\">ptr</span>::<span class=\"n\">write</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">raw</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 339740011,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046630
+    },
+    {
+        "content": "<p>ah right it takes <code>y</code> by value</p>",
+        "id": 339740077,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046663
+    },
+    {
+        "content": "<p>in a normal move though the destination is first dropped</p>",
+        "id": 339740109,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678046696
+    },
+    {
+        "content": "<p>Now, I guess it's fair to say <code>ptr::read</code> doesn't work for this.</p>",
+        "id": 339740147,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046729
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339738179\">said</a>:</p>\n<blockquote>\n<p>hmm both still are technically UB, since you are moving a pinned object. Is there some way to create a function that takes a pinned work and essentially just copies it to a different location?</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">copy_from</span><span class=\"p\">(</span><span class=\"n\">work</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">Work</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>It's possible, just not a generic solution.</p>",
+        "id": 339740501,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678046976
+    },
+    {
+        "content": "<p>Why can't this be generalized?</p>",
+        "id": 339740574,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678047005
+    },
+    {
+        "content": "<p>The function means do a bit-wise copy of <code>Work</code>, and pinned initialisation before return, right?</p>",
+        "id": 339740657,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678047084
+    },
+    {
+        "content": "<p>If so, how can we do a generic bit-wise copy of any type?</p>",
+        "id": 339740743,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678047128
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339740657\">said</a>:</p>\n<blockquote>\n<p>The function means do a bit-wise copy of <code>Work</code>, and pinned initialisation before return, right?</p>\n</blockquote>\n<p>kinda, it should copy the fields that it is allowed to, so e.g. a <code>list_head</code> would not be allowed.</p>",
+        "id": 339740949,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678047281
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339740743\">said</a>:</p>\n<blockquote>\n<p>If so, how can we do a generic bit-wise copy of any type?</p>\n</blockquote>\n<p>maybe a macro? I first thought of making it a trait. I dont think that we need a general solution, since this problem should affect only a small number of datatypes, right?</p>",
+        "id": 339741122,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678047394
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339741122\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339740743\">said</a>:</p>\n<blockquote>\n<p>If so, how can we do a generic bit-wise copy of any type?</p>\n</blockquote>\n<p>maybe a macro? I first thought of making it a trait. I dont think that we need a general solution, since this problem should affect only a small number of datatypes, right?</p>\n</blockquote>\n<p>Right, and the problem is just a imaginational case.</p>",
+        "id": 339741256,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678047490
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339739519\">said</a>:</p>\n<blockquote>\n<p>normally you would <code>mem::forget</code> the old value</p>\n</blockquote>\n<p>Hmm, but the following is still a problem, if <code>ptr::read</code> + <code>forget</code> is not UB or considered moving on pinned objects:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">;</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pinned_inited</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// -&gt; return Pin&lt;&gt;</span>\n\n<span class=\"c1\">// SAFETY: a is a valid pointer</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ptr</span>::<span class=\"n\">read</span><span class=\"p\">(</span><span class=\"n\">a</span><span class=\"p\">.</span><span class=\"n\">get_ref</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"c1\">// SAFETY: no one will move b.</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">p</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">b</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span><span class=\"w\"> </span><span class=\"c1\">// but `b` has a incorrect linked list in it.</span>\n\n<span class=\"n\">forget</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 339741756,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678047902
+    },
+    {
+        "content": "<p>this is a move of pinned data IMO</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ptr</span>::<span class=\"n\">read</span><span class=\"p\">(</span><span class=\"n\">a</span><span class=\"p\">.</span><span class=\"n\">get_ref</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n</code></pre></div>",
+        "id": 339741868,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678047970
+    },
+    {
+        "content": "<p>Then <code>ptr::read</code> doc needs some help?</p>",
+        "id": 339741890,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678047994
+    },
+    {
+        "content": "<p>The <code>ptr::read</code> method duplicates the value. If you then proceed to forget the old one, then you effectively have a move.</p>",
+        "id": 339742078,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678048143
+    },
+    {
+        "content": "<p>I don't think there's anything wrong with saying that its not a move on its own — it's not because the previous location still holds one of the duplicates.</p>",
+        "id": 339742118,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678048181
+    },
+    {
+        "content": "<p>Agreed, but I feel like if you use <code>ptr::read</code>, you end up moving either way (forget or drop/write)</p>",
+        "id": 339742213,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678048243
+    },
+    {
+        "content": "<p>Well, sure.</p>",
+        "id": 339742277,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678048297
+    },
+    {
+        "content": "<p>/me just hope to use <code>ptr::read</code> as bit-wise copy ;-)</p>",
+        "id": 339742285,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678048308
+    },
+    {
+        "content": "<p><code>ptr::read</code> is a typed copy, so it only copies things relevant to the type in question<br>\nfor example, it doesn't preserve data in struct padding</p>",
+        "id": 339742358,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678048343
+    },
+    {
+        "content": "<p>Ah, good to know. What I meant is <code>ptr::read</code> doesn't provide the duplication as I thought unless <code>T: Copy</code>.</p>",
+        "id": 339742459,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678048431
+    },
+    {
+        "content": "<p>What do you mean? It can totally be used to duplicate non-Copy types. For example, if you have a struct with integers that doesn't derive Copy, then duplicating it with <code>ptr::read</code> is perfectly fine in the language's eyes.</p>",
+        "id": 339742570,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678048481
+    },
+    {
+        "content": "<p>I think that there are two different notions of \"move\" that are used in the docs/here, I will call them:</p>\n<ul>\n<li>\"rust\" move: \"x = y;\" a move, i.e. dropping <code>x</code>, copying <code>y</code> into <code>x</code> and then dropping <code>y</code></li>\n<li>semantic move: if we have some pinned data <code>x</code> and then use <code>ptr::read</code> to copy it into some other location calling it <code>y</code> and then call some function on <code>y</code>. Then this object can observe the change in its memory location, i.e. it has moved.</li>\n</ul>\n<p>When talking about \"pinned data is not allowed to be moved\" I think of the semantic kind.</p>",
+        "id": 339742581,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678048489
+    },
+    {
+        "content": "<p>In that sense, <code>ptr::read</code> on <code>Copy</code> is also a semantic move?</p>",
+        "id": 339742951,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678048719
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 339743116,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678048833
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339743116\">said</a>:</p>\n<blockquote>\n<p>yes</p>\n</blockquote>\n<p>Then is \"normal copy\" a semantic move?</p>",
+        "id": 339743299,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678048996
+    },
+    {
+        "content": "<p>with normal copy, do you mean <code>x = y</code> where <code>x,y: Copy</code>? and do you mean \"rust\" move?</p>",
+        "id": 339743421,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678049071
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339743421\">said</a>:</p>\n<blockquote>\n<p>with normal copy, do you mean <code>x = y</code> where <code>x,y: Copy</code>? and do you mean \"rust\" move?</p>\n</blockquote>\n<p>Yes on \"what normal copy means\", and by \"move\" I mean semantics move.</p>",
+        "id": 339743479,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678049137
+    },
+    {
+        "content": "<p>yes, <code>x = y</code> is a rust move and that always is a semantic move.</p>",
+        "id": 339743550,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678049166
+    },
+    {
+        "content": "<p>Usually the word \"move\" carries the connotation that the original is now invalid, which isn't the case for copy types. However, if you perform a copy and pretend that the original has become invalid and don't touch it again, then it is exactly like a move. (Since, for copy types, making the original valid is a no-op, since copy types don't have destructors.)</p>",
+        "id": 339743628,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678049235
+    },
+    {
+        "content": "<p>So for copy types, a move is a copy followed by a no-op.</p>",
+        "id": 339743656,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678049260
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// data is Copy + Clone but !Unpin</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pin</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">x</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// UB</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">.</span><span class=\"n\">clone</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"c1\">// not UB?</span>\n</code></pre></div>",
+        "id": 339743676,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678049281
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339743676\">said</a>:</p>\n<blockquote>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// data is Copy + Clone but !Unpin</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pin</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">x</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// UB</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">.</span><span class=\"n\">clone</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"c1\">// not UB?</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Indeed, <code>clone</code> allows me to do something more.</p>",
+        "id": 339743933,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678049432
+    },
+    {
+        "content": "<p>Pinning is a safety invariant and not a validity invariant, so breaking its promises does not, strictly speaking, lead to language UB. You only get true UB if you write unsafe code that relies on the pinning guarantees, and then break the pinning guarantees in a way that the unsafe code did not expect.</p>",
+        "id": 339743936,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678049434
+    },
+    {
+        "content": "<p><a href=\"https://www.ralfj.de/blog/2018/08/22/two-kinds-of-invariants.html\">https://www.ralfj.de/blog/2018/08/22/two-kinds-of-invariants.html</a></p>",
+        "id": 339744189,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678049642
+    },
+    {
+        "content": "<p>Interesting, so can I say the following is not UB?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">some_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Work</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.);</span><span class=\"w\"> </span><span class=\"c1\">// create a work on stack, because it's fast. Assuming Work: !Unpin</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pinned</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Pin</span>::<span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">some_work</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"c1\">// publish the work</span>\n<span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">());</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">wait_for_work_done</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">.</span><span class=\"n\">as_ref</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">timeout</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// sleep wait, return true if timeout.</span>\n<span class=\"w\">  </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">cancel_work</span><span class=\"p\">(</span><span class=\"n\">pinned</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"c1\">// return true if cancel succeeds, i.e. work hasn't executed.</span>\n<span class=\"w\">    </span><span class=\"c1\">// slow path, we have to execute the work after the function returns.</span>\n<span class=\"w\">    </span><span class=\"c1\">// Now `some_work` is unpublished, so in theory it's safe to move.</span>\n\n<span class=\"w\">    </span><span class=\"c1\">// I don't need pinning safety guarantee here.</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">boxed_work</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">some_work</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// move to the heap</span>\n<span class=\"w\">                                          </span><span class=\"c1\">// why not recreate the work? Because Work::new(..) has non-trivial computation.</span>\n<span class=\"w\">    </span><span class=\"n\">schedule_work</span><span class=\"p\">(</span><span class=\"n\">boxed_work</span><span class=\"p\">.</span><span class=\"n\">into_pin</span><span class=\"p\">());</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 339744427,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678049857
+    },
+    {
+        "content": "<p>\"Yes, I moved after pinned, but no I don't need it to be pinned\"</p>",
+        "id": 339744500,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678049896
+    },
+    {
+        "content": "<p>A type can definitely promise you that it has become safe to move again after having been pinned.</p>",
+        "id": 339744542,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678049947
+    },
+    {
+        "content": "<p>do you have any documentation link to that? like a UCG issue or something else?</p>",
+        "id": 339744579,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678049989
+    },
+    {
+        "content": "<p>It follows from pinning being a safety invariant, and I suspect I could find something on that if I tried.</p>",
+        "id": 339744658,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678050026
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744579\">said</a>:</p>\n<blockquote>\n<p>do you have any documentation link to that? like a UCG issue or something else?</p>\n</blockquote>\n<p>FWIW, pin doc does say:</p>\n<blockquote>\n<p>It is sometimes useful to have objects that are guaranteed not to move, in the sense that their placement in memory does not change, and can thus be relied upon. A prime example of such a scenario would be building self-referential structs, as moving an object with pointers to itself will invalidate them, which <em>could</em> cause undefined behavior.</p>\n</blockquote>",
+        "id": 339744733,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678050114
+    },
+    {
+        "content": "<p>not \"which is an undefined behavior\"</p>",
+        "id": 339744812,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678050155
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744542\">said</a>:</p>\n<blockquote>\n<p>A type can definitely promise you that it has become safe to move again after having been pinned.</p>\n</blockquote>\n<p>yay</p>",
+        "id": 339744861,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678050215
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744733\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744579\">said</a>:</p>\n<blockquote>\n<p>do you have any documentation link to that? like a UCG issue or something else?</p>\n</blockquote>\n<p>FWIW, pin doc does say:</p>\n<blockquote>\n<p>It is sometimes useful to have objects that are guaranteed not to move, in the sense that their placement in memory does not change, and can thus be relied upon. A prime example of such a scenario would be building self-referential structs, as moving an object with pointers to itself will invalidate them, which <em>could</em> cause undefined behavior.</p>\n</blockquote>\n</blockquote>\n<p>I meant reffering to this:<br>\n<span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744542\">said</a>:</p>\n<blockquote>\n<p>A type can definitely promise you that it has become safe to move again after having been pinned.</p>\n</blockquote>\n<p>i.e. having types that allow being unpinned without being dropped</p>",
+        "id": 339744865,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678050219
+    },
+    {
+        "content": "<p>I can't really find any discussion about pinning in the UCG repository at all?</p>",
+        "id": 339745005,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678050351
+    },
+    {
+        "content": "<p>I guess this one fits? <a href=\"https://github.com/rust-lang/unsafe-code-guidelines/issues/148\">https://github.com/rust-lang/unsafe-code-guidelines/issues/148</a></p>",
+        "id": 339745091,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678050392
+    },
+    {
+        "content": "<p>I guess.</p>",
+        "id": 339745145,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678050442
+    },
+    {
+        "content": "<blockquote>\n<p>Using terminology from Two Kinds of Invariants: Safety and Validity 3, basically every aspect of Pin is in the realm of \"safety invariants\", not \"validity invariants\". This means that violating these rules might not immediately cause UB in a way that Miri can detect or that could go wrong at runtime, it \"just\" means that invariants are broken and if control enters any code that depends on these invariants, it's your fault when that code goes wrong.<br>\n<a href=\"https://internals.rust-lang.org/t/pin-meaning-of-invalidation/17693/3\">https://internals.rust-lang.org/t/pin-meaning-of-invalidation/17693/3</a></p>\n</blockquote>",
+        "id": 339745817,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1678050965
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744865\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744733\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744579\">said</a>:</p>\n<blockquote>\n<p>do you have any documentation link to that? like a UCG issue or something else?</p>\n</blockquote>\n<p>FWIW, pin doc does say:</p>\n<blockquote>\n<p>It is sometimes useful to have objects that are guaranteed not to move, in the sense that their placement in memory does not change, and can thus be relied upon. A prime example of such a scenario would be building self-referential structs, as moving an object with pointers to itself will invalidate them, which <em>could</em> cause undefined behavior.</p>\n</blockquote>\n</blockquote>\n<p>I meant reffering to this:<br>\n<span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Unpinnable/near/339744542\">said</a>:</p>\n<blockquote>\n<p>A type can definitely promise you that it has become safe to move again after having been pinned.</p>\n</blockquote>\n<p>i.e. having types that allow being unpinned without being dropped</p>\n</blockquote>\n<p>My point is, if moving after <code>!Unpin</code> pinned is not a 100% UB (or 100% cause UB), then it means it's allowed.</p>",
+        "id": 339747254,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678052314
+    },
+    {
+        "content": "<p>Put it in another way, IIUC, moving <code>!Unpin</code> after pinned is unsound (not safe), but not always a UB (not valid).  It's something allowed since: <em>You must always be valid, but you only must be safe in safe code.</em></p>",
+        "id": 339774077,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678075814
+    },
+    {
+        "content": "<p>But of course, it's up to the operational semantics to say the above code doesn't have UB.</p>",
+        "id": 339774462,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678076212
+    },
+    {
+        "content": "<p>Yesterday I had totally forgotten about the Safety vs Validity invariants. As Alice already pointed out, this is a safety invariant, and thus we could define our own invariant for some type (that is <code>!Unpin</code>) allowing conditional unpinning. While I think we still should ask t-opsem for any additional info about this, but ultimately I think the possibility of creating such a type lies with us.</p>",
+        "id": 339787928,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678085687
+    },
+    {
+        "content": "<p>(I do not think that this would be a thing big enough for the std-lib ATM)</p>",
+        "id": 339788012,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1678085729
+    },
+    {
+        "content": "<p>I don't think there's anything special about opsem here. <code>Pin</code> is a purely library thing. <code>Unpin</code> does have opsem implications -- so you shouldn't accidentally make your <code>!Unpin</code> type <code>Unpin</code> -- but it's fine for an unpinned type to be <code>!Unpin</code>. You probably will miss some optimisation there, but it won't cause additional UBs.</p>",
+        "id": 340000154,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1678151791
+    },
+    {
+        "content": "<p>I'm lost on \"but it's fine for an unpinned type to be <code>!Unpin</code>\", could you elaborate?</p>",
+        "id": 340001956,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678152973
+    },
+    {
+        "content": "<p>You can make your type <code>!Unpin</code> even though you never pin it and move it freely.</p>",
+        "id": 340002209,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1678153157
+    }
+]

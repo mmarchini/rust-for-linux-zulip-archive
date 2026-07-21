@@ -1,0 +1,68 @@
+<html>
+<head><meta charset="utf-8"><title>try_format! macro · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html">try_format! macro</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="247809023"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247809023" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Mateusz Jabłoński <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247809023">(Jul 31 2021 at 15:20)</a>:</h4>
+<p>Hi! I was thinking about implementing <code>try_format!</code> macro, the panic-free equivalent of <code>format!</code>. But the more I am looking into the code, the more questions I have and more problems I can see:</p>
+<ul>
+<li>It will require implementing a few more <code>try_*</code> functions - Are we OK with implementing new <code>try_*</code> functions inside <code>alloc</code>? Or should we generally avoid any other than 'critically required' changes there?</li>
+<li>
+<p>There is a <code>fmt::Write</code> trait implementation used inside, which uses <code>push_str</code>, which may panic. It would be consistent to create and use something like <code>TryWrite</code> trait. But I see even more problems there:<br>
+    - The <code>write_*</code> methods of the <code>Write</code> trait return <code>fmt::Result</code>. What should be returned from <code>try_write_*</code> methods? I do not like the idea of <code>Result&lt;Result&lt;..., ...&gt;, ...&gt;</code>, I do not like creating a new container error type either,<br>
+    - For the same reason, the <code>TryWrite</code> name is confusing in my opinion. All methods of <code>Write</code> already return <code>Result</code>, so they already 'try' to do something,<br>
+    - The <code>Write</code> trait is defined inside core crate. It may be inconsistent if we define <code>TryWrite</code> somewhere else.</p>
+</li>
+<li>
+<p>The format function calls <code>.expect()</code> on the <code>Result</code> returned from <code>Write</code> trait implementation. I haven't investigated if it can ever happen for <code>String</code>, but I don't very like it there.</p>
+</li>
+</ul>
+<p>What do you think about it? Should I try to implement the <code>try_format!</code>, or should we avoid such ideas?</p>
+
+
+
+<a name="247810446"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247810446" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247810446">(Jul 31 2021 at 15:51)</a>:</h4>
+<p>On the topic of adding new APIs, it is fine to implement missing fallible equivalents that we need.</p>
+
+
+
+<a name="247811145"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247811145" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247811145">(Jul 31 2021 at 15:58)</a>:</h4>
+<p>On the <code>expect()</code>, the docs for the <code>format!</code> macro (not the function) say "This indicates an incorrect implementation since <code>fmt::Write for String</code> never returns an error itself."</p>
+
+
+
+<a name="247811517"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247811517" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247811517">(Jul 31 2021 at 16:00)</a>:</h4>
+<p>(nevertheless, we should avoid the possibility of a panic)</p>
+
+
+
+<a name="247811866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247811866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247811866">(Jul 31 2021 at 16:03)</a>:</h4>
+<p>Hmm, if you had your own Write mechanism, like we do in the printk impl, you can manage the allocations, right?</p>
+
+
+
+<a name="247821102"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/247821102" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Mateusz Jabłoński <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#247821102">(Jul 31 2021 at 19:42)</a>:</h4>
+<p>Ok, thanks! I will look into printk impl then.</p>
+
+
+
+<a name="264070970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/try_format%21%20macro/near/264070970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Ericson <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/try_format.21.20macro.html#264070970">(Dec 07 2021 at 21:01)</a>:</h4>
+<p>Is there an upstream issue for this? It would be very good to track that, and reference the <code>try_</code> function issues.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

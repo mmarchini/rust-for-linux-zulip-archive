@@ -1,0 +1,215 @@
+<html>
+<head><meta charset="utf-8"><title>Rust driver security · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html">Rust driver security</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="325759878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/325759878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#325759878">(Feb 04 2023 at 02:54)</a>:</h4>
+<p>Are drivers written in Rust generally going to be secure against malicious devices?  I ask because drivers written in C typically are not, and in Qubes OS there are several cases where the lack of a hardened driver is causing problems.</p>
+
+
+
+<a name="325955384"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/325955384" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#325955384">(Feb 05 2023 at 12:56)</a>:</h4>
+<p>This is something that came up in a discussion with some of the DRM folks... Personally, I think they should be, because otherwise that just opens up a lot of attack surface.</p>
+<p>In general my GPU driver tries not to trust the GPU firmware, though there is one <a href="https://github.com/AsahiLinux/linux/blob/gpu/rust-wip/drivers/gpu/drm/asahi/object.rs#L30">big fundamental problem</a> that makes it impractical to be provably secure against a malicious device with today's Rust support (C sort of makes it possible but not ergonomic). It's somewhat academic though, in that I think it's unlikely that the compiler will generate code that would introduce vulnerabilities, but it could...</p>
+
+
+
+<a name="326001075"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326001075" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326001075">(Feb 05 2023 at 18:58)</a>:</h4>
+<p>It seems like the "correct" solution to that would be to use volatile operations rather than atomics?</p>
+
+
+
+<a name="326005191"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326005191" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326005191">(Feb 05 2023 at 19:41)</a>:</h4>
+<p>But currently, Rust's "volatile" doesn't have atomic semantics, I think some of these operations are needed to be 32bit or 64bit atomic and volatile</p>
+
+
+
+<a name="326005312"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326005312" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326005312">(Feb 05 2023 at 19:43)</a>:</h4>
+<p>Also Rust atomics are not volatile, so compilers can merge two atomics into one <em>in theory</em>.</p>
+
+
+
+<a name="326006434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326006434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326006434">(Feb 05 2023 at 19:56)</a>:</h4>
+<p>Merging two atomic operations is definitely allowed, yes, and I wouldn't be surprised if there are optimizations that do so.</p>
+
+
+
+<a name="326006827"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326006827" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326006827">(Feb 05 2023 at 20:01)</a>:</h4>
+<p>Right, so when talking with C code or external hardware, I think we need "volatile atomics" sometimes. Not sure whether Lina's case requires that.</p>
+
+
+
+<a name="326006912"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326006912" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326006912">(Feb 05 2023 at 20:02)</a>:</h4>
+<p>There's an active discussion about volatile atomics over on the rust-lang zulip: &lt;<a href="https://rust-lang.zulipchat.com/#narrow/stream/136281-t-lang.2Fwg-unsafe-code-guidelines/topic/volatile.20atomic.20in.20Rust.3F">https://rust-lang.zulipchat.com/#narrow/stream/136281-t-lang.2Fwg-unsafe-code-guidelines/topic/volatile.20atomic.20in.20Rust.3F</a>&gt;</p>
+
+
+
+<a name="326028616"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326028616" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326028616">(Feb 06 2023 at 01:04)</a>:</h4>
+<p>The issue is less the atomicity itself and more that the compiler shouldn't expect data to not change out from under it. For example, let's say you have this kind of code:</p>
+<div class="codehilite"><pre><span></span><code>1    let mut buf = [0; 4];
+2    if count &gt; 4 { return Err(EINVAL); }
+3    gpu_shared_struct.foo = count;
+4    // some other code
+5    buf[..count].fill(1);
+</code></pre></div>
+<p>The compiler could elide any bounds checking in line 5, because the bound was already checked in line 2. But let's say line 4 causes register pressure, so the compiler decides to load back <code>gpu_shared_struct.foo</code> into <code>count</code>. Now the GPU could cause the CPU to overflow <code>buf</code> by changing that value.</p>
+<p>In C we have <code>READ_ONCE</code> and <code>WRITE_ONCE</code> to avoid this. Volatile also basically avoids this but it's a bigger hammer since it also forbids reordering and other things...</p>
+
+
+
+<a name="326028731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326028731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326028731">(Feb 06 2023 at 01:06)</a>:</h4>
+<p>What I really want is some kind of qualifier, ideally something that can be applied ergonomically to references, that tells the compiler to do exactly the reads and writes shown (reordering allowed but not adding more).</p>
+
+
+
+<a name="326032245"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326032245" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326032245">(Feb 06 2023 at 02:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326028616">said</a>:</p>
+<blockquote>
+<p>The issue is less the atomicity itself and more that the compiler shouldn't expect data to not change out from under it. For example, let's say you have this kind of code:</p>
+<div class="codehilite"><pre><span></span><code>1    let mut buf = [0; 4];
+2    if count &gt; 4 { return Err(EINVAL); }
+3    gpu_shared_struct.foo = count;
+4    // some other code
+5    buf[..count].fill(1);
+</code></pre></div>
+<p>The compiler could elide any bounds checking in line 5, because the bound was already checked in line 2. But let's say line 4 causes register pressure, so the compiler decides to load back <code>gpu_shared_struct.foo</code> into <code>count</code>. Now the GPU could cause the CPU to overflow <code>buf</code> by changing that value.</p>
+<p>In C we have <code>READ_ONCE</code> and <code>WRITE_ONCE</code> to avoid this. Volatile also basically avoids this but it's a bigger hammer since it also forbids reordering and other things...</p>
+</blockquote>
+<p>volatile allows reordering with normal memory accesses, just disallows reordering with another volatile</p>
+
+
+
+<a name="326033424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326033424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326033424">(Feb 06 2023 at 02:21)</a>:</h4>
+<p>Also since this somewhat involves with optimization, I doubt Rust can provide anything LLVM doesn’t support in the near future ;-)</p>
+
+
+
+<a name="326037149"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326037149" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326037149">(Feb 06 2023 at 03:16)</a>:</h4>
+<p>Yeah, this might need LLVM changes. I don't think it's urgent because it's low risk, but I think it's something we should push for, even if it takes a while to get all the pieces together ^^</p>
+
+
+
+<a name="326037169"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326037169" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326037169">(Feb 06 2023 at 03:16)</a>:</h4>
+<p>It's not just about hardware too, think about buffers shared with userspace, or even userspace processes sharing memory...</p>
+
+
+
+<a name="326037197"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326037197" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326037197">(Feb 06 2023 at 03:17)</a>:</h4>
+<p>Single mutable reference semantics just can't apply with shared memory without some kind of overarching entity enforcing that, which you almost never have, so we need another solution.</p>
+
+
+
+<a name="326037217"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326037217" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326037217">(Feb 06 2023 at 03:17)</a>:</h4>
+<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>
+
+
+
+<a name="326061878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326061878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326061878">(Feb 06 2023 at 08:04)</a>:</h4>
+<p>As far as I can tell, <code>READ_ONCE</code> and <code>WRITE_ONCE</code> are implemented using volatile operations as well, so those seem like the equivalent, no?</p>
+
+
+
+<a name="326063898"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326063898" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326063898">(Feb 06 2023 at 08:18)</a>:</h4>
+<p>Hmm, true, I thought they were something smarter than that these days...</p>
+
+
+
+<a name="326064601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326064601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326064601">(Feb 06 2023 at 08:22)</a>:</h4>
+<p>The tricky thing is I don't necessarily want to make everything volatile... I <em>do</em> want the compiler to optimize writes however it wants, what I don't want is for it to read things back or expect them to be the way it left them!</p>
+<p>Most of what I do with GPU memory is write (sometimes very large) structs, so it seems silly to use such a big hammer for that. For example, it's perfectly fine to reorder everything, split or merge writes, etc... I wouldn't want to lose performance by marking every field of multi-kilobyte structs as volatile. I already use actual atomics where ordering and access type strictly matters (things like ring buffer pointers).</p>
+
+
+
+<a name="326064861"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/326064861" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#326064861">(Feb 06 2023 at 08:24)</a>:</h4>
+<p>So I guess what I really want is some kind of "read-guarded" value: reads should be volatile, but not writes (and writes should never cause reads to be synthesized)</p>
+
+
+
+<a name="339720556"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/339720556" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#339720556">(Mar 05 2023 at 16:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217">said</a>:</p>
+<blockquote>
+<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>
+</blockquote>
+<p>I already implemented this in <a href="https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs">my qubes-castable crate</a>.</p>
+
+
+
+<a name="342300860"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/342300860" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#342300860">(Mar 16 2023 at 12:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="550795">Demi Obenour</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/339720556">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217">said</a>:</p>
+<blockquote>
+<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>
+</blockquote>
+<p>I already implemented this in <a href="https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs">my qubes-castable crate</a>.</p>
+</blockquote>
+<p>I'm aware, that's my reference! I meant I haven't integrated it yet / made it work for the driver ^^</p>
+
+
+
+<a name="343790235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/343790235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#343790235">(Mar 22 2023 at 21:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/342300860">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="550795">Demi Obenour</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/339720556">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217">said</a>:</p>
+<blockquote>
+<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>
+</blockquote>
+<p>I already implemented this in <a href="https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs">my qubes-castable crate</a>.</p>
+</blockquote>
+<p>I'm aware, that's my reference! I meant I haven't integrated it yet / made it work for the driver ^^</p>
+</blockquote>
+<p>Ah nice, thanks!  Feel free to submit PRs or file issues for anything you would find useful.</p>
+
+
+
+<a name="344556700"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/344556700" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#344556700">(Mar 25 2023 at 21:33)</a>:</h4>
+<p><span class="user-mention" data-user-id="522295">@Asahi Lina</span> FYI <code>qubes-castable</code> is dual-licensed MIT/Apache 2 and <code>#![no_std]</code> so you should be able to just use it in kernel code directly.  I’d prefer that we both be using the same code.</p>
+
+
+
+<a name="345837134"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/345837134" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#345837134">(Mar 31 2023 at 04:45)</a>:</h4>
+<p>I know, I'm not planning on reimplementing it! There's going to be interactions with the uapi and pinned-init series, which is why I'm not looking into this yet. If the other folks are happy with qubes-castable we can use it ^^</p>
+
+
+
+<a name="346694547"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Rust%20driver%20security/near/346694547" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Rust.20driver.20security.html#346694547">(Apr 03 2023 at 23:03)</a>:</h4>
+<p>That would be absolutely amazing!</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

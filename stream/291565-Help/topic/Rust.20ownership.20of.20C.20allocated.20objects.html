@@ -1,0 +1,60 @@
+<html>
+<head><meta charset="utf-8"><title>Rust ownership of C allocated objects · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html">Rust ownership of C allocated objects</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="358735610"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Rust%20ownership%20of%20C%20allocated%20objects/near/358735610" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html#358735610">(May 16 2023 at 13:40)</a>:</h4>
+<p>I found myself in a situation where I would like the reverse functionality of the <code>ForeignOwnable</code> trait: that is, get a C allocated object, transfer ownership to Rust, then release it at the end (or implement <code>Drop</code> and free it that way). <br>
+Specifically what I want to achieve is to call <code>clone_private_mount</code> when my filesystem is initialized, store the result in <code>s_fs_info</code> and make it available in <code>fs::file::Operations::open</code>.<br>
+I can do that with a rust allocated object via <code>ForeignOwnable</code>:</p>
+<ul>
+<li>call <code>into_foreign</code> at <code>init</code> and <code>from_foreign</code> at <code>kill</code></li>
+<li>call <code>borrow</code> on the raw <code>s_fs_info</code> pointer and pass that pointer to <code>open</code> =&gt; I get a reference to my object of type <code>ForeignOwnable::Borrowed</code></li>
+</ul>
+<p>Ultimately I want to define a rust structure which includes a C allocated object in some way (e.g. reference or <code>Box</code>), pass that to the C side (in <code>s_fs_info</code>) and get it back in rust (in the <code>open</code> callback).<br>
+So:</p>
+<ul>
+<li>is there a way I could get a <code>ForeignOwnable</code> object from a C allocated object? (the safety requirements suggest I can't)?</li>
+<li>is there a way to transfer ownership to rust from a C allocation (maybe it wouldn't be sound, since rust wasn't responsible for its allocation)?</li>
+<li>should I store a static reference to the C allocated object in my structure? (seems unsafe at first thought, but if I only deallocate the memory when the filesystem is unmounted, maybe it's the right approach)</li>
+</ul>
+
+
+
+<a name="358738367"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Rust%20ownership%20of%20C%20allocated%20objects/near/358738367" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html#358738367">(May 16 2023 at 13:48)</a>:</h4>
+<p>You can wrap a pointer to your C struct and implement <code>Drop</code> for the wrapper, call <code>kfree()</code> or whatever cleanup you want in drop.</p>
+
+
+
+<a name="358739016"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Rust%20ownership%20of%20C%20allocated%20objects/near/358739016" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html#358739016">(May 16 2023 at 13:51)</a>:</h4>
+<p>I'm not familiar with the API you are using, but perhaps you could call the allocator from the Rust side? <code>Pages</code> does this: <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/pages.rs">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/pages.rs</a></p>
+
+
+
+<a name="358741427"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Rust%20ownership%20of%20C%20allocated%20objects/near/358741427" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html#358741427">(May 16 2023 at 13:59)</a>:</h4>
+<p>I guess I could do the same thing as <code>Pages</code>, create a newtype which stores a raw pointer and then implement <code>new</code> (or something similar) and <code>drop</code> for them. Thanks, this looks smart.</p>
+<blockquote>
+<p>call the allocator from the Rust side</p>
+</blockquote>
+<p>Do you mean creating the <code>new</code> function which calls the C allocator behind the scenes or do you mean something else?</p>
+
+
+
+<a name="358759641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Rust%20ownership%20of%20C%20allocated%20objects/near/358759641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Rust.20ownership.20of.20C.20allocated.20objects.html#358759641">(May 16 2023 at 14:57)</a>:</h4>
+<p>Yes something like that. Either a new() that calls the C api to allocate or a from_raw() that takes ownership of the pointer if you cannot call the allocator yourself.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

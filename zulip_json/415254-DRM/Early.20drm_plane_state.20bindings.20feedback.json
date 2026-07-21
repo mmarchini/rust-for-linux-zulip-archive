@@ -1,0 +1,164 @@
+[
+    {
+        "content": "<p>Hi! If anyone has a moment, I'd love it if someone could take a look at <a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms-wip-02082024/rust/kernel/drm/kms/plane.rs?ref_type=tags#L113\">https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms-wip-02082024/rust/kernel/drm/kms/plane.rs?ref_type=tags#L113</a> - specifically <code>PlaneState</code> and <code>DriverPlaneState</code>. I'm mostly just curious if I've got the right idea with how this interface should look so far, if I'm correct in <code>PlaneState&lt;T&gt;</code> not needing to be pinned (my reasoning for which is mentioned in the commit message), etc.<br>\nI figured this would be the easiest place to ask since it's probably going to be a bit before I'm far enough with this that I can start testing things</p>",
+        "id": 420566853,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707438911
+    },
+    {
+        "content": "<p>It's possible that you can get away without pinning or <code>Opaque</code> if the struct is only accessed via raw pointers for the entire duration in which it is used. But <code>Plane</code> should use <code>Opaque</code> instead of <code>UnsafeCell</code>.</p>",
+        "id": 420597711,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707463355
+    },
+    {
+        "content": "<p>Also, the safety comment \"must not be null\" is not enough. I could pass a dangling but non-null pointer. Instead, require the pointer to point at a valid value.</p>",
+        "id": 420645375,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707482656
+    },
+    {
+        "content": "<p>Thanks for the feedback! Re <code>Opaque</code>: I'm pretty sure we've gotta be able to access some of the fields (and, possibly write to some of them?) directly</p>",
+        "id": 420721142,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707508490
+    },
+    {
+        "content": "<p>You can still do that.</p>",
+        "id": 420724353,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707509860
+    },
+    {
+        "content": "<p>Get a raw pointer with the <code>get</code> method and use that.</p>",
+        "id": 420724395,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707509879
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420724395\">said</a>:</p>\n<blockquote>\n<p>Get a raw pointer with the <code>get</code> method and use that.</p>\n</blockquote>\n<p>Oh, huh. What's the effective difference then? I've seen <code>UnsafeCell&lt;T&gt;</code> used a few times with asahi's bindings</p>",
+        "id": 420724611,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707509967
+    },
+    {
+        "content": "<p><code>Opaque</code> is allowed to be self-referential or be part of intrusive linked lists. UnsafeCell is not enough for that.</p>",
+        "id": 420726302,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707510647
+    },
+    {
+        "content": "<p>OH! I didn't realize that, that would also explain why I might not need pinning then huh?</p>",
+        "id": 420730456,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707512285
+    },
+    {
+        "content": "<p>The reason why you don't necessarily have to use pinning or Opaque is that those only really matter for structs that are accessed with a refernce or <code>Box</code>. If you never create those to the struct while it is in use, then it doesn't make a difference.</p>",
+        "id": 420730931,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707512457
+    },
+    {
+        "content": "<p>But anything where the user of your library can have direct ownership of it cannot use that strategy.</p>",
+        "id": 420731017,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707512494
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420731017\">said</a>:</p>\n<blockquote>\n<p>But anything where the user of your library can have direct ownership of it cannot use that strategy.</p>\n</blockquote>\n<p>So - if we're allocating structs like the example I mentioned, where the struct itself is in a Box&lt;&gt; but the ffi type in question is embedded in that struct, I assume that -does- require pinning?</p>",
+        "id": 420731416,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707512653
+    },
+    {
+        "content": "<p>Basically, whenever the <code>Box</code> exists, you assert uniqueness over the allocation. That's incompatible with self-referential structs.</p>",
+        "id": 420733488,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707513594
+    },
+    {
+        "content": "<p>But <code>Opaque</code> opts-out of that uniqueness assertion.</p>",
+        "id": 420735718,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707514562
+    },
+    {
+        "content": "<p>I wonder if there should be a rust-drm branch to collect this kind of work. With Nova, the Asahi driver, and rustgem, there is probably quite a bit of shared logic floating around</p>",
+        "id": 420781594,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707553100
+    },
+    {
+        "content": "<p>Yeah, we talked with <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> et al. about that -- we can definitely add a branch if there is someone from those efforts willing to drive it. Of course, it can also be several people and/or several branches, as needed.</p>",
+        "id": 420789470,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1707561334
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420781594\">said</a>:</p>\n<blockquote>\n<p>I wonder if there should be a rust-drm branch to collect this kind of work. With Nova, the Asahi driver, and rustgem, there is probably quite a bit of shared logic floating around</p>\n</blockquote>\n<p>I feel that Asahi Linux branches are kind of the gathering of most of what we need for DRM. We just need to start upstreaming to have a solid base on upstream for new drivers.</p>",
+        "id": 420791037,
+        "sender_full_name": "Maíra Canal",
+        "timestamp": 1707562900
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"587349\">@Trevor Gross</span> </p>\n<p>Yes, that's what I was proposing as well. Ultimately, I'd like to get to a common RfL branch that basically contains all staging Rust infrastructure required by drivers currently being in development.</p>\n<p>This doesn't mean we can't have branches like rust-pci, rust-drm, etc. as well, actually, I think it makes sense to have both.</p>\n<p><span class=\"user-mention\" data-user-id=\"585781\">@Maíra Canal</span> </p>\n<p>For DRM it's true that most of the infrastructure is in the Asahi tree. However, I'd like to avoid that we just wildy cherry-pick stuff from one driver tree to another and, instead, have a common baseline where we improve things collaboratively until we hit upstream.</p>\n<p>This way we avoid things diverging and getting scattered. Some drivers might extend improve things cherry-picked from somewhere else. Without a common baseline this will be very hard to handle. In the worst case we end up with every driver carrying it's own version of some piece of infrastructure.</p>\n<p>Plus it has the advantage that we only have to continuously rebase the common baseline against upstream instead of every driver rebasing the cherry-picked mess themselfes.</p>\n<p>I already contact <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> asking for her perspective on that. However, as she mentioned in the context of the last meeting, she seems to be enganged otherwise for a while.</p>\n<p>Hence, I planned to follow up on this either way in the coming week.</p>",
+        "id": 420808707,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1707579034
+    },
+    {
+        "content": "<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>",
+        "id": 420809385,
+        "sender_full_name": "Maíra Canal",
+        "timestamp": 1707579550
+    },
+    {
+        "content": "<p>That's why I'm working on the XArray patch and I plan to start working on \"rust: Add container_of and offset_of macros\"</p>",
+        "id": 420809652,
+        "sender_full_name": "Maíra Canal",
+        "timestamp": 1707579761
+    },
+    {
+        "content": "<blockquote>\n<p>Yes, that's what I was proposing as well. Ultimately, I'd like to get to a common RfL branch that basically contains all staging Rust infrastructure required by drivers currently being in development.</p>\n</blockquote>\n<p>If I understand correctly, you are asking for an integration branch. As I explained in the meeting, we already have (something like) that: the existing <a href=\"https://rust-for-linux.com/branches#rust-dev\"><code>rust-dev</code></a> or, if Boqun prefers to keep <code>rust-dev</code> for things that have already at least been sent to the mailing list,  a similar one for not-yet-in-LKML things.</p>\n<p>The branch could merge the topic branches (this is similar to what Boqun already does with <code>rust-dev</code>, e.g. he takes patches/branches that are going through other non-<code>rust-next</code> trees in the kernel).</p>\n<p>From the webpage:</p>\n<blockquote>\n<p><a href=\"https://github.com/Rust-for-Linux/linux/tree/rust-dev\"><code>rust-dev</code></a> is an experimental branch for integration purposes. It is a queue for patches that \"look good enough\".</p>\n<p>Its intended use cases are:</p>\n<p>- Finding merge/apply conflicts as early as possible.<br>\n  - Providing a common base for development that requires features that are not yet in mainline or <code>rust-next</code>, i.e. giving early access to features. This may include Rust-related changes from other subsystems.<br>\n  - Providing extra testing to patches by making them easily available to more developers.</p>\n<p>Note that this branch may be updated/rebased frequently and it might be gone in the future.</p>\n</blockquote>\n<p>How does that sound?</p>",
+        "id": 420809696,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1707579805
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"585781\">Maíra Canal</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809652\">said</a>:</p>\n<blockquote>\n<p>That's why I'm working on the XArray patch and I plan to start working on \"rust: Add container_of and offset_of macros\"</p>\n</blockquote>\n<p><code>container_of</code> was sent in the rbtree patch, and <code>offset_of</code> is now in std</p>",
+        "id": 420809878,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707579938
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"585781\">Maíra Canal</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809385\">said</a>:</p>\n<blockquote>\n<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>\n</blockquote>\n<p>I think Danilo is referring to things that are yet WIP (so not ready for upstreaming) or that will take some time to reach upstream (for other reasons). Is that correct Danilo?</p>\n<p>For things that are ready for submission (and that kernel maintainers are willing to take already), I agree we should just try to upstream as soon as possible, thus sending them through their relevant tree in the kernel (<code>rust-next</code> or others), as you are saying (Maíra).</p>\n<p>Am I understanding both of you right?</p>",
+        "id": 420810307,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1707580270
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420810307\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"585781\">Maíra Canal</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809385\">said</a>:</p>\n<blockquote>\n<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>\n</blockquote>\n<p>I think Danilo is referring to things that are yet WIP (so not ready for upstreaming) or that will take some time to reach upstream (for other reasons). Is that correct Danilo?</p>\n<p>For things that are ready for submission (and that kernel maintainers are willing to take already), I agree we should just try to upstream as soon as possible, thus sending them through their relevant tree in the kernel (<code>rust-next</code> or others), as you are saying (Maíra).</p>\n<p>Am I understanding both of you right?</p>\n</blockquote>\n<p>Absolutely agree! If it's ready to upstream and and folks are willing to take it, we should just do it! For everything else, topic branches plus an integration branch would be great. I'm also happy to take some efforts of that.</p>",
+        "id": 420812523,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1707581937
+    },
+    {
+        "content": "<p>We discussed whether to make this integration branch of the topic branches part of <code>rust-dev</code> or as a new branch: <code>rust-dev</code> will continue to be meant only for things already submitted to the LKML or present in upstream kernel subsystem trees (e.g. Boqun may merge trees from other maintainers sometimes when needed, but he is not expected to be merging our topic branches).</p>\n<p>So we can create a different integration branch for the topic branches -- essentially like a <code>linux-next</code> for the topic branches (a bit more relaxed in requirements) and like the old <code>rust</code> branch way. I would suggest we do that when we have at least 2 or 3 branches to integrate. Ideally one or more of the maintainers of the most active topic branches would maintain it, since those topic branches will be triggering most of the changes.</p>\n<p>By the way, the topic branches do not need to necessarily be in our repository: if an upstream maintainer is willing to have the development/topic branches in their own subsystem, that is ideal (and it is still possible to integrate those into the integration branch). Of course, this is meant for things that are not in <code>linux-next</code>, i.e. the point is not to recreate <code>linux-next</code>, so the usual branches that a subsystem already has there would not really be the target for this integration branch.</p>",
+        "id": 421431239,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1707912489
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/421431239\">said</a>:</p>\n<blockquote>\n<p>We discussed whether to make this integration branch of the topic branches part of <code>rust-dev</code> or as a new branch: <code>rust-dev</code> will continue to be meant only for things already submitted to the LKML or present in upstream kernel subsystem trees (e.g. Boqun may merge trees from other maintainers sometimes when needed, but he is not expected to be merging our topic branches).</p>\n<p>So we can create a different integration branch for the topic branches -- essentially like a <code>linux-next</code> for the topic branches (a bit more relaxed in requirements) and like the old <code>rust</code> branch way. I would suggest we do that when we have at least 2 or 3 branches to integrate. Ideally one or more of the maintainers of the most active topic branches would maintain it, since those topic branches will be triggering most of the changes.</p>\n<p>By the way, the topic branches do not need to necessarily be in our repository: if an upstream maintainer is willing to have the development/topic branches in their own subsystem, that is ideal (and it is still possible to integrate those into the integration branch). Of course, this is meant for things that are not in <code>linux-next</code>, i.e. the point is not to recreate <code>linux-next</code>, so the usual branches that a subsystem already has there would not really be the target for this integration branch.</p>\n</blockquote>\n<p>I agree, that sounds good.</p>\n<p>Speaking of that, there is already a second branch that I'd like to request in this context: rust-drm-dev. As the name implies, it'd contain basic DRM device bindings. I checked with <span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span>  and we'd create it as a topic branch in drm-misc.</p>\n<p>The idea is to upstream Nova as stub driver making use of the PCI and basic DRM device bindings only. We then want to continue to develop Nova upstream and keep upstreaming more Rust bindings on the way to break the chicken and egg problem we'd have otherwise.</p>\n<p>Once we got it in place, I'd be great if we could create the corresponding integration branch.</p>\n<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span>  is currently working on rvkms, hence we might also want to have a branch for more DRM bindings at some point.</p>",
+        "id": 421738616,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1708030364
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809878\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"585781\">Maíra Canal</span> <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809652\">said</a>:</p>\n<blockquote>\n<p>That's why I'm working on the XArray patch and I plan to start working on \"rust: Add container_of and offset_of macros\"</p>\n</blockquote>\n<p><code>container_of</code> was sent in the rbtree patch, and <code>offset_of</code> is now in std</p>\n</blockquote>\n<p>Could you take a look at the version of <code>container_of</code> that I sent today? I checked the rbtree version, but you need to use unsafe blocks for <code>container_of</code>. Lina's version doesn't have this dependency.</p>",
+        "id": 422021611,
+        "sender_full_name": "Maíra Canal",
+        "timestamp": 1708184279
+    }
+]

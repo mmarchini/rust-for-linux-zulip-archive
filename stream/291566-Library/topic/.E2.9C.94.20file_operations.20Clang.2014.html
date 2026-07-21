@@ -1,0 +1,201 @@
+<html>
+<head><meta charset="utf-8"><title>✔ file_operations Clang 14 · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html">✔ file_operations Clang 14</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="289799180"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289799180" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289799180">(Jul 16 2022 at 00:46)</a>:</h4>
+<p>When using Clang 14 with Bindgen (at least in Arch Linux) did you noticed that the <code>write</code> field from <code>file_operations</code> is using a <code>mut*</code> instead of a <code>const*</code>? Currently I have</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// snip</span>
+<span class="cp">#[repr(C)]</span><span class="w"></span>
+<span class="cp">#[derive(Copy, Clone)]</span><span class="w"></span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">file_operations</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">write</span>: ::<span class="n">core</span>::<span class="n">option</span>::<span class="nb">Option</span><span class="o">&lt;</span><span class="w"></span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg1</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">file</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg2</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">c_types</span>::<span class="n">c_char</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg3</span>: <span class="kt">usize</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg4</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">loff_t</span><span class="p">,</span><span class="w"></span>
+<span class="w">        </span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">isize</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="o">&gt;</span><span class="p">,</span><span class="w"></span>
+<span class="c1">// more code</span>
+</code></pre></div>
+<p>But instead we need</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">write</span>: ::<span class="n">core</span>::<span class="n">option</span>::<span class="nb">Option</span><span class="o">&lt;</span><span class="w"></span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg1</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">file</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg2</span>: <span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">c_types</span>::<span class="n">c_char</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg3</span>: <span class="kt">usize</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">arg4</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">loff_t</span><span class="p">,</span><span class="w"></span>
+<span class="w">        </span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">isize</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="o">&gt;</span><span class="w"></span>
+</code></pre></div>
+<p>And to make this work I needed to do some <code>sed</code> sorcery to change it into the same thing</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gd">--- a/rust/Makefile</span><span class="w"></span>
+<span class="gi">+++ b/rust/Makefile</span><span class="w"></span>
+<span class="gu">@@ -304,6 +304,8 @@ quiet_cmd_bindgen = BINDGEN $@</span><span class="w"></span>
+
+<span class="w"> </span>$(obj)/bindings_generated.rs: private bindgen_target_flags = \<span class="w"></span>
+<span class="w"> </span>    $(shell grep -v '^\#\|^$$' $(srctree)/$(src)/bindgen_parameters)<span class="w"></span>
+<span class="gi">+$(obj)/bindings_generated.rs: private bindgen_target_extra = ; \</span><span class="w"></span>
+<span class="gi">+    sed -Ei '/struct file_operations/,/arg2: \*/ s|(arg2: \*.*)|\1\n//m|' $@; sed -Ei '/^\/\/m/,/arg2/ s|(arg2: \*)mut|\1const|' $@</span><span class="w"></span>
+<span class="w"> </span>$(obj)/bindings_generated.rs: $(src)/kernel/bindings_helper.h \<span class="w"></span>
+<span class="w"> </span>    $(src)/bindgen_parameters FORCE<span class="w"></span>
+<span class="w"> </span>   $(call if_changed_dep,bindgen)<span class="w"></span>
+</code></pre></div>
+<p>Did this happen to someone?</p>
+
+
+
+<a name="289880724"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289880724" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289880724">(Jul 17 2022 at 12:03)</a>:</h4>
+<p>I can't reproduce it with Clang 14.0.1. Which is your exact Clang (in particular, <code>libclang</code>) and <code>bindgen</code> versions?</p>
+
+
+
+<a name="289881047"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289881047" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289881047">(Jul 17 2022 at 12:11)</a>:</h4>
+<p>I see Arch Linux has Clang 14.0.6 (not sure if patched)</p>
+
+
+
+<a name="289886475"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289886475" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289886475">(Jul 17 2022 at 13:59)</a>:</h4>
+<p>I was using Clang 14.0.6 and Bindgen 0.56.0, although I've reproduced the issue in 0.60.1. And by the way, what's the patch you've mentioned and which distro are you on?</p>
+
+
+
+<a name="289980037"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980037" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980037">(Jul 18 2022 at 15:17)</a>:</h4>
+<p>I tried with Clang 14.0.6 compiled from source, and I see the correct result (<code>arg2: *const c_types::c_char,</code>).</p>
+
+
+
+<a name="289980116"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980116" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980116">(Jul 18 2022 at 15:18)</a>:</h4>
+<p>By "patched" I meant that I don't know whether Arch Linux uses the vanilla upstream sources or whether they might apply patches on top.</p>
+
+
+
+<a name="289980412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980412">(Jul 18 2022 at 15:20)</a>:</h4>
+<p>I don't see in the struct definition anything that suggests the <code>const</code> is gated by a kernel config either, at least in v5.19-rc7: <a href="https://elixir.bootlin.com/linux/v5.19-rc7/source/include/linux/fs.h#L1968">https://elixir.bootlin.com/linux/v5.19-rc7/source/include/linux/fs.h#L1968</a></p>
+
+
+
+<a name="289980587"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980587" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980587">(Jul 18 2022 at 15:21)</a>:</h4>
+<p>But, just in case, could you try to reproduce it with one of the <code>.github/workflow</code> configs for instance?</p>
+
+
+
+<a name="289980745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980745">(Jul 18 2022 at 15:22)</a>:</h4>
+<p>Also, which kernel tree are you using? The <code>rust</code> branch based on <code>rc6</code>, or <code>rust-next</code>, or...?</p>
+
+
+
+<a name="289980872"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289980872" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289980872">(Jul 18 2022 at 15:23)</a>:</h4>
+<p>Finally, could you please post what is the output of <code>bindgen scripts/rust-is-available-bindgen-libclang.h</code>?</p>
+
+
+
+<a name="289981279"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/289981279" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#289981279">(Jul 18 2022 at 15:26)</a>:</h4>
+<p>Ah, and one more thing since you compiled a newer <code>bindgen</code>: could you please try <code>bindgen --version --verbose</code>? Since 0.60.0 it prints the <code>libclang</code> version being picked up (Emilio added it for us <a href="https://github.com/rust-lang/rust-bindgen/issues/2138">https://github.com/rust-lang/rust-bindgen/issues/2138</a>).</p>
+
+
+
+<a name="290009079"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009079" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009079">(Jul 18 2022 at 19:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980116">said</a>:</p>
+<blockquote>
+<p>By "patched" I meant that I don't know whether Arch Linux uses the vanilla upstream sources or whether they might apply patches on top.</p>
+</blockquote>
+<p>Arch only uses <a href="https://github.com/archlinux/svntogit-packages/tree/16c537b9f1a32e2c77d3381a48b3116cfe61eb87/trunk">two patches</a> (one for default strong ssp and another that fixes <code>clang-tidy</code>) but AFAICT there's nothing out of place.</p>
+
+
+
+<a name="290009100"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009100" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009100">(Jul 18 2022 at 19:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980587">said</a>:</p>
+<blockquote>
+<p>But, just in case, could you try to reproduce it with one of the <code>.github/workflow</code> configs for instance?</p>
+</blockquote>
+<p>With <code>kernel-x86_64-release.config</code> it doesn't fail to compile when I run <code>make rust LLVM=1</code>, but with my <code>.config</code> it seems that I have no luck <span aria-label="oh no" class="emoji emoji-1f615" role="img" title="oh no">:oh_no:</span></p>
+
+
+
+<a name="290009132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009132">(Jul 18 2022 at 19:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980745">said</a>:</p>
+<blockquote>
+<p>Also, which kernel tree are you using? The <code>rust</code> branch based on <code>rc6</code>, or <code>rust-next</code>, or...?</p>
+</blockquote>
+<p>Both <code>v5.18.12</code> with the 7th version of the patches and with <code>rust</code> from <code>Rust-for-Linux/linux</code> at <code>HEAD</code> (the current commit).</p>
+
+
+
+<a name="290009148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009148">(Jul 18 2022 at 19:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980872">said</a>:</p>
+<blockquote>
+<p>Finally, could you please post what is the output of <code>bindgen scripts/rust-is-available-bindgen-libclang.h</code>?</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>$ bindgen scripts/rust-is-available-bindgen-libclang.h
+scripts/rust-is-available-bindgen-libclang.h:2:9: warning: clang version 14.0.6
+  [-W#pragma-messages], err: false
+/* automatically generated by rust-bindgen 0.56.0 */
+</code></pre></div>
+
+
+
+<a name="290009163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009163">(Jul 18 2022 at 19:03)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289981279">said</a>:</p>
+<blockquote>
+<p>Ah, and one more thing since you compiled a newer <code>bindgen</code>: could you please try <code>bindgen --version --verbose</code>? Since 0.60.0 it prints the <code>libclang</code> version being picked up (Emilio added it for us <a href="https://github.com/rust-lang/rust-bindgen/issues/2138">https://github.com/rust-lang/rust-bindgen/issues/2138</a>).</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>$ bindgen --version --verbose
+bindgen 0.56.0
+
+$ bindgen --version --verbose
+bindgen 0.60.1
+Clang: clang version 14.0.6
+</code></pre></div>
+
+
+
+<a name="290009656"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290009656" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290009656">(Jul 18 2022 at 19:06)</a>:</h4>
+<p>Also here's my <code>.config</code> for the <code>5.18.12</code> kernel, though <code>make menuconfig</code> can update it easily. <a href="/user_uploads/35136/1-kkwK4EQx8BvYd7dexLvRXS/config">config</a></p>
+
+
+
+<a name="290624599"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290624599" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290624599">(Jul 23 2022 at 17:28)</a>:</h4>
+<p>Opened up Rust-for-Linux/linux#835 for reviews. Happens that when I was doing a BTF with pahole build it expanded a definition, namely <code>BTF_TYPE_TAG(value)</code>, to be <code>__attribute__((btf_type_tag(#value)))</code>, this confounds bindgen and makes it discard the const qualifier in attributed function parameters. That's why <code>write</code> got a <code>mut*</code> in the bindings.</p>
+
+
+
+<a name="290625655"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290625655" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290625655">(Jul 23 2022 at 17:53)</a>:</h4>
+<p>Thanks for taking a look at that!</p>
+
+
+
+<a name="290635130"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/%E2%9C%94%20file_operations%20Clang%2014/near/290635130" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/.E2.9C.94.20file_operations.20Clang.2014.html#290635130">(Jul 23 2022 at 21:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="485103">Martin Rodriguez Reboredo</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

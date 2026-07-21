@@ -1,0 +1,864 @@
+<html>
+<head><meta charset="utf-8"><title>warn_once/do_once_lite_if · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html">warn_once/do_once_lite_if</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="477514620"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477514620" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477514620">(Oct 17 2024 at 19:55)</a>:</h4>
+<p>Hi everyone!<br>
+Noticed that there is no support yet for WARN_ONCE, so I tested out an implementation that works exactly like the "lite" variant in the kernel using a static bool:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">do_once_lite_if</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="cp">$cond</span><span class="p">:</span><span class="w"> </span><span class="nc">expr</span><span class="p">,</span><span class="w"> </span><span class="cp">$e</span><span class="p">:</span><span class="w"> </span><span class="nc">expr</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="cp">#[link_section = </span><span class="s">".data.once"</span><span class="cp">]</span>
+<span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">__ALREADY_DONE</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">unlikely</span><span class="p">(</span><span class="cp">$cond</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">!</span><span class="n">__ALREADY_DONE</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">__ALREADY_DONE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">            </span><span class="cp">$e</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="fm">macro_rules!</span><span class="w"> </span><span class="n">warn_once</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="cp">$($arg</span><span class="p">:</span><span class="nc">tt</span><span class="p">)</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="n">do_once_lite_if</span><span class="o">!</span><span class="p">(</span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="k">crate</span><span class="p">::</span><span class="n">pr_warn</span><span class="o">!</span><span class="p">(</span><span class="cp">$($arg</span><span class="p">)</span><span class="o">*</span><span class="p">))</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This seems to work but I was wondering if this kind of <code>unsafe</code> usage is ok? Worst case would be that the do once part is done <code>nproc</code> times instead of once; but that's also true for the C version.</p>
+<p>2nd question: How do you replace <code>unlikely</code>? I've read that <code>#[cold]</code> can be used to achieve a similar effect, but I don't really see how?</p>
+
+
+
+<a name="477518348"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477518348" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477518348">(Oct 17 2024 at 20:21)</a>:</h4>
+<p>Using <code>#[cold]</code> requires a separate function. There's no direct equivalent to <code>unlikely</code> without unstable features.</p>
+
+
+
+<a name="477518527"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477518527" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477518527">(Oct 17 2024 at 20:23)</a>:</h4>
+<p>Your code doesn't guarantee that it runs exactly once. It could run twice if two threads hit it in parallel.</p>
+
+
+
+<a name="477519498"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477519498" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477519498">(Oct 17 2024 at 20:30)</a>:</h4>
+<p>I guess that's not so bad since the only consequence is a <code>WARN_ONCE</code> printing twice.</p>
+
+
+
+<a name="477519676"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477519676" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477519676">(Oct 17 2024 at 20:31)</a>:</h4>
+<p>And we shouldn't use it for anything but <code>WARN_ONCE</code> since anything in <code>.data.once</code> is affected by <code>clear_warn_once_set</code>.</p>
+
+
+
+<a name="477521117"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477521117" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477521117">(Oct 17 2024 at 20:41)</a>:</h4>
+<p>I would probably prefer to see this using atomic or at least volatile reads and writes.</p>
+
+
+
+<a name="477593747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477593747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477593747">(Oct 18 2024 at 07:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477518527">said</a>:</p>
+<blockquote>
+<p>Your code doesn't guarantee that it runs exactly once. It could run twice if two threads hit it in parallel.</p>
+</blockquote>
+<p>Or even more often in a pathological case. But as you wrote, it's "just" logging and I think it's the only way to approach the performance of the C version, which also suffers from this behavior. (see <a href="https://github.com/Rust-for-Linux/linux/blob/rust-next/include/linux/once_lite.h">once_lite.h</a> ).</p>
+
+
+
+<a name="477594515"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477594515" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477594515">(Oct 18 2024 at 07:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477514620">said</a>:</p>
+<blockquote>
+<p>This seems to work but I was wondering if this kind of <code>unsafe</code> usage is ok? Worst case would be that the do once part is done <code>nproc</code> times instead of once; but that's also true for the C version.</p>
+</blockquote>
+<p>the <code>unsafe</code> code is unsound, if two threads/cpus simultaneously enter the if statement, they will both write to <code>__ALREADY_DONE</code>, which is UB.</p>
+
+
+
+<a name="477594712"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477594712" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477594712">(Oct 18 2024 at 07:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477521117">said</a>:</p>
+<blockquote>
+<p>I would probably prefer to see this using atomic or at least volatile reads and writes.</p>
+</blockquote>
+<p>The "heavy" version uses static key patching, but I'm nowhere proficient enough to emulate that in Rust. <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span> Both volatile and atomic would have a prohibitive impact on performance, I think. Also, bool reads are atomic anyhow, are they not?</p>
+
+
+
+<a name="477595834"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477595834" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477595834">(Oct 18 2024 at 07:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p>Both volatile and atomic would have a prohibitive impact on performance, I think.</p>
+</blockquote>
+<p>Did you measure that? IIRC relaxed atomic accesses are just normal <code>mov</code> instructions on x86, so they should have the same performance as a normal access (except for compiler optimization probably).</p>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p>Also, bool reads are atomic anyhow, are they not?</p>
+</blockquote>
+<p>What do you mean? A normal boolean access is not atomic.</p>
+
+
+
+<a name="477597281"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477597281" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477597281">(Oct 18 2024 at 07:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477595834">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p>Both volatile and atomic would have a prohibitive impact on performance, I think.</p>
+</blockquote>
+<p>Did you measure that? IIRC relaxed atomic accesses are just normal <code>mov</code> instructions on x86, so they should have the same performance as a normal access (except for compiler optimization probably).</p>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p>Also, bool reads are atomic anyhow, are they not?</p>
+</blockquote>
+<p>What do you mean? A normal boolean access is not atomic.</p>
+</blockquote>
+<p>They are not? I thought C11 guarantees that a bool is always using the native bitwidth of the architecture, which makes reads atomic. Didn’t realize that isn’t true in the kernel.</p>
+
+
+
+<a name="477597424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477597424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477597424">(Oct 18 2024 at 07:54)</a>:</h4>
+<p>I am purely talking about Rust here</p>
+
+
+
+<a name="477597562"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477597562" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477597562">(Oct 18 2024 at 07:54)</a>:</h4>
+<p>it might be that in practice they are, but the code above still is considered UB when two threads concurrently write to the static</p>
+
+
+
+<a name="477597966"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477597966" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477597966">(Oct 18 2024 at 07:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594515">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477514620">said</a>:</p>
+<blockquote>
+<p>This seems to work but I was wondering if this kind of <code>unsafe</code> usage is ok? Worst case would be that the do once part is done <code>nproc</code> times instead of once; but that's also true for the C version.</p>
+</blockquote>
+<p>the <code>unsafe</code> code is unsound, if two threads/cpus simultaneously enter the if statement, they will both write to <code>__ALREADY_DONE</code>, which is UB.</p>
+</blockquote>
+<p>You are right. I would argue that it is a) the same as in the C version, b) preferable to any performance impact, and c) simultaneous writes would at least always agree on the value.</p>
+
+
+
+<a name="477598059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477598059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477598059">(Oct 18 2024 at 07:57)</a>:</h4>
+<p>it's still UB</p>
+
+
+
+<a name="477598085"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477598085" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477598085">(Oct 18 2024 at 07:57)</a>:</h4>
+<p>did you measure the performance impact?</p>
+
+
+
+<a name="477598805"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477598805" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477598805">(Oct 18 2024 at 08:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477598085">said</a>:</p>
+<blockquote>
+<p>did you measure the performance impact?</p>
+</blockquote>
+<p>Will do, I’m curious, too.</p>
+
+
+
+<a name="477599089"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477599089" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477599089">(Oct 18 2024 at 08:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477521117">said</a>:</p>
+<blockquote>
+<p>I would probably prefer to see this using atomic or at least volatile reads and writes.</p>
+</blockquote>
+<p>The "heavy" version uses static key patching, but I'm nowhere proficient enough to emulate that in Rust. <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span> Both volatile and atomic would have a prohibitive impact on performance, I think. Also, bool reads are atomic anyhow, are they not?</p>
+</blockquote>
+<p>Why do you think they would have a prohibitive impact? Both volatile and relaxed atomics compile down to ordinary mov instructions. The only difference is the compiler's ability to perform optimizations, and I don't see what optimization that would be. In fact, you mostly only lose optimizations that would be incorrect!</p>
+
+
+
+<a name="477599206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477599206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477599206">(Oct 18 2024 at 08:02)</a>:</h4>
+<p>(For relaxed atomics I'm only talking about loads and stores. If you do a cmpxchg of course that's a different story, but that's not what I'm suggesting.)</p>
+
+
+
+<a name="477599461"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477599461" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477599461">(Oct 18 2024 at 08:04)</a>:</h4>
+<p>As for emulating static key patching, I've already done it for you: <a href="https://lore.kernel.org/lkml/20241015-tracepoint-v11-0-cceb65820089@google.com/">[PATCH v11 0/5] Tracepoints and static branch in Rust</a></p>
+
+
+
+<a name="477619616"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477619616" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477619616">(Oct 18 2024 at 09:56)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477599089">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477594712">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477521117">said</a>:</p>
+<blockquote>
+<p>I would probably prefer to see this using atomic or at least volatile reads and writes.</p>
+</blockquote>
+<p>The "heavy" version uses static key patching, but I'm nowhere proficient enough to emulate that in Rust. <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span> Both volatile and atomic would have a prohibitive impact on performance, I think. Also, bool reads are atomic anyhow, are they not?</p>
+</blockquote>
+<p>Why do you think they would have a prohibitive impact? Both volatile and relaxed atomics compile down to ordinary mov instructions. The only difference is the compiler's ability to perform optimizations, and I don't see what optimization that would be. In fact, you mostly only lose optimizations that would be incorrect!</p>
+</blockquote>
+<p>Volatile means no cache - every read and every write has to be performed on actual memory, which is at least an order of magnitude slower.</p>
+<p>Whether or not atomics compile down to mov instructions depends entirely on the ISA. If there are no viable instructions to do it, the compiler will have to construct a sound alternative. I guess that would mean barriers/locking. This is not an issue on x86_64, but Linux runs on a lot of very different platforms.</p>
+
+
+
+<a name="477621210"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477621210" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477621210">(Oct 18 2024 at 10:05)</a>:</h4>
+<p>Volatile certainly does not skip CPU caches.</p>
+
+
+
+<a name="477621532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477621532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477621532">(Oct 18 2024 at 10:07)</a>:</h4>
+<p>As for atomics, other than 64-bit atomics loads on some 32-bit archs being made stronger to avoid tearing, I'm not aware of any such examples.</p>
+
+
+
+<a name="477622535"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477622535" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477622535">(Oct 18 2024 at 10:14)</a>:</h4>
+<p>I guess the bigger issue with atomics is that the kernel doesn't have boolean sized atomics</p>
+
+
+
+<a name="477625042"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477625042" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477625042">(Oct 18 2024 at 10:31)</a>:</h4>
+<blockquote>
+<p>I thought C11 guarantees that a bool is always using the native bitwidth of the architecture, which makes reads atomic.</p>
+</blockquote>
+<p>I am not sure what you mean by that, but C11's <code>_Bool</code> is typically 1 byte (not word size), can hold only 0 or 1, and reading it is not atomic (and something being word sized does not make anything atomic either).</p>
+
+
+
+<a name="477645913"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477645913" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477645913">(Oct 18 2024 at 12:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477621210">said</a>:</p>
+<blockquote>
+<p>Volatile certainly does not skip CPU caches.</p>
+</blockquote>
+<p>You're absolutely right, another thing I've learned today. <span aria-label="flushed" class="emoji emoji-1f633" role="img" title="flushed">:flushed:</span></p>
+
+
+
+<a name="477646147"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477646147" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477646147">(Oct 18 2024 at 12:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477622535">said</a>:</p>
+<blockquote>
+<p>I guess the bigger issue with atomics is that the kernel doesn't have boolean sized atomics</p>
+</blockquote>
+<p>Well, any int type will do, right? Or are you concerned about the size?</p>
+
+
+
+<a name="477647259"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477647259" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477647259">(Oct 18 2024 at 12:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477625042">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>I thought C11 guarantees that a bool is always using the native bitwidth of the architecture, which makes reads atomic.</p>
+</blockquote>
+<p>I am not sure what you mean by that, but C11's <code>_Bool</code> is typically 1 byte (not word size), can hold only 0 or 1, and reading it is not atomic (and something being word sized does not make anything atomic either).</p>
+</blockquote>
+<p>That's also true. I've wrongly assumed that true and false would be _Bool-sized, but apparently they are not?! <span aria-label="face with peeking eye" class="emoji emoji-1fae3" role="img" title="face with peeking eye">:face_with_peeking_eye:</span> But for my own sanity: word-sized reads and writes are always atomic, right?</p>
+
+
+
+<a name="477648607"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477648607" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477648607">(Oct 18 2024 at 12:50)</a>:</h4>
+<p>In assembly language, yes.</p>
+
+
+
+<a name="477650143"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477650143" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477650143">(Oct 18 2024 at 12:58)</a>:</h4>
+<p>But the C/Rust compiler is allowed to split a single write into two. It's also allowed to perform a read twice and generate code that is incorrect if the two reads return different values.</p>
+
+
+
+<a name="477658719"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477658719" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477658719">(Oct 18 2024 at 13:42)</a>:</h4>
+<p>Interesting, learned a lot already, thanks for your kind answers! I will play around a bit with different approaches and come back with some numbers.</p>
+
+
+
+<a name="477780908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477780908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dirk Behme <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477780908">(Oct 19 2024 at 07:05)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477650143">said</a>:</p>
+<blockquote>
+<p>But the C/Rust compiler is allowed to split a single write into two. It's also allowed to perform a read twice and generate code that is incorrect if the two reads return different values.</p>
+</blockquote>
+<p>Within one week two times the same explanation. With <a href="https://lore.kernel.org/rust-for-linux/CAH5fLgierGcZ7SycTspdOrFofWGmM_UOKHUmfNQ0VjSzMtMB5g@mail.gmail.com/">nearly the same wording</a> <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+<p>What would be a good place to document this?</p>
+
+
+
+<a name="477794234"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477794234" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477794234">(Oct 19 2024 at 10:25)</a>:</h4>
+<p>I think it is documented: <a href="https://docs.kernel.org/core-api/wrappers/memory-barriers.html">https://docs.kernel.org/core-api/wrappers/memory-barriers.html</a> (as well as others like <a href="https://docs.kernel.org/process/volatile-considered-harmful.html">https://docs.kernel.org/process/volatile-considered-harmful.html</a> and <a href="https://docs.kernel.org/core-api/wrappers/atomic_t.html">https://docs.kernel.org/core-api/wrappers/atomic_t.html</a>)</p>
+<p>Of course, sometimes it is hard to know what is documented.</p>
+
+
+
+<a name="477922484"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477922484" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477922484">(Oct 20 2024 at 20:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="546447">@Benno Lossin</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> Tried to setup a benchmark resembling the situation which evaluates:</p>
+<ol>
+<li>the initial UB mut bool approach,</li>
+<li>mut bool with read_volatile/write_volatile,</li>
+<li>AtomicBool with Ordering::Relaxed,</li>
+<li>AtomicBool with Ordering::SeqCst,</li>
+<li>RwLock (for good measure, it's clear it won't perform well here).</li>
+</ol>
+<p><a href="https://github.com/jkorinth/once_cmp">Code is on my github</a> - if you can find the time, pls check if it makes sense to you or if there are any mistakes which poison the results.</p>
+<p>Results on my machine (Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz):</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Benchmarking</span><span class="w"> </span><span class="n">mut_bool</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">mut_bool</span><span class="w">                </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">1.2260</span><span class="w"> </span><span class="n">ns</span><span class="w"> </span><span class="mf">1.2283</span><span class="w"> </span><span class="n">ns</span><span class="w"> </span><span class="mf">1.2312</span><span class="w"> </span><span class="n">ns</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.8516</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">0.1852</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.4157</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.59</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">17</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">17.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">17</span><span class="w"> </span><span class="p">(</span><span class="mf">17.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">mut_volatile_bool</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">mut_volatile_bool</span><span class="w">       </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">245.27</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">245.90</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.78</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.7416</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.1784</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">1.0277</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.71</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">21</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">21.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">3</span><span class="w"> </span><span class="p">(</span><span class="mf">3.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">18</span><span class="w"> </span><span class="p">(</span><span class="mf">18.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_relaxed</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_relaxed</span><span class="w">           </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">246.03</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.93</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">248.01</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.2734</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.3719</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.9428</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.28</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">14</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">14.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">2</span><span class="w"> </span><span class="p">(</span><span class="mf">2.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">12</span><span class="w"> </span><span class="p">(</span><span class="mf">12.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_seqcst</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_seqcst</span><span class="w">            </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">246.30</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.97</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">247.79</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">10.562</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">8.3117</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">6.3426</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.00</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">Performance</span><span class="w"> </span><span class="n">has</span><span class="w"> </span><span class="n">improved</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">13</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">13.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">3</span><span class="w"> </span><span class="p">(</span><span class="mf">3.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">10</span><span class="w"> </span><span class="p">(</span><span class="mf">10.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">rwlock</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">rwlock</span><span class="w">                  </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">11.777</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">11.790</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">11.805</span><span class="w"> </span><span class="n">ms</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">2.4501</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">1.9311</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">1.4223</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.00</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">Performance</span><span class="w"> </span><span class="n">has</span><span class="w"> </span><span class="n">improved</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">13</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">13.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">4</span><span class="w"> </span><span class="p">(</span><span class="mf">4.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">9</span><span class="w"> </span><span class="p">(</span><span class="mf">9.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+</code></pre></div>
+
+
+
+<a name="477923163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477923163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477923163">(Oct 20 2024 at 20:11)</a>:</h4>
+<p>With <code>mut_bool</code>, the loop gets optimized away.</p>
+
+
+
+<a name="477923499"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477923499" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477923499">(Oct 20 2024 at 20:17)</a>:</h4>
+<p>After the first iteration, the compiler knows that the boolean must be true. Either it started out true, or we just set it to true. And since you're using unsynchronized loads, the compiler knows that other threads can't modify the value in parallel, so there's no way it could have changed. Thus, reading the global must return true, skipping the loop. Same logic applies to iteration 3 and 4 and so on.</p>
+
+
+
+<a name="477924693"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477924693" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477924693">(Oct 20 2024 at 20:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477794234">said</a>:</p>
+<blockquote>
+<p>I think it is documented: <a href="https://docs.kernel.org/core-api/wrappers/memory-barriers.html">https://docs.kernel.org/core-api/wrappers/memory-barriers.html</a> (as well as others like <a href="https://docs.kernel.org/process/volatile-considered-harmful.html">https://docs.kernel.org/process/volatile-considered-harmful.html</a> and <a href="https://docs.kernel.org/core-api/wrappers/atomic_t.html">https://docs.kernel.org/core-api/wrappers/atomic_t.html</a>)</p>
+<p>Of course, sometimes it is hard to know what is documented.</p>
+</blockquote>
+<p>Another learning material is the Rust Atomics and Locks book, for example, <a href="https://marabos.nl/atomics/basics.html#borrowing-and-races">Borrowing and Data Races</a></p>
+
+
+
+<a name="477924789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477924789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477924789">(Oct 20 2024 at 20:36)</a>:</h4>
+<p>This should be a MUST-read book for developing kernel code in Rust.</p>
+
+
+
+<a name="477925890"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477925890" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477925890">(Oct 20 2024 at 20:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477923163">said</a>:</p>
+<blockquote>
+<p>With <code>mut_bool</code>, the loop gets optimized away.</p>
+</blockquote>
+<p>It could go away, yeah. For whatever reason, a trivial loop remains that spins decrementing the counter in a register and does not do anything else.</p>
+
+
+
+<a name="477925971"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477925971" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477925971">(Oct 20 2024 at 20:54)</a>:</h4>
+<p>Btw, the <code>DO_ONCE_LITE()</code> in C seems to be wrong/unsafe, because you could have two threads calling it at the same time, and both read <code>__already_done</code> as <code>false</code>, and then they would all call the function <code>func</code>, which makes it "do-it-twice".</p>
+
+
+
+<a name="477967038"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477967038" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477967038">(Oct 21 2024 at 06:05)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> Yes, the C code has the same problem. Could be more than twice, too, up to the number of processor cores, I think.</p>
+<p>I assumed that it was a conscious decision on the C side. Even the worst case is pretty benign, after all.</p>
+
+
+
+<a name="477970987"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477970987" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477970987">(Oct 21 2024 at 06:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477925890">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477923163">said</a>:</p>
+<blockquote>
+<p>With <code>mut_bool</code>, the loop gets optimized away.</p>
+</blockquote>
+<p>It could go away, yeah. For whatever reason, a trivial loop remains that spins decrementing the counter in a register and does not do anything else.</p>
+</blockquote>
+<p>Doesn’t that mean that the loop is still there and only the call is optimized away? Need to check the asm later. <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="477971077"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477971077" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477971077">(Oct 21 2024 at 06:34)</a>:</h4>
+<p>Sounds like a missed optimization <span aria-label="woman shrugging" class="emoji emoji-1f937-200d-2640" role="img" title="woman shrugging">:woman_shrugging:</span></p>
+
+
+
+<a name="477971808"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477971808" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477971808">(Oct 21 2024 at 06:39)</a>:</h4>
+<p>True. But I’m not sure if the compiler can really prove anything about static muts. In a language with pointers it doesn’t seem to be sound to assume there will be no other places mutating this var. Which would explain why the loop is still there. The call might be skipped by branch prediction.</p>
+
+
+
+<a name="477972002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972002">(Oct 21 2024 at 06:40)</a>:</h4>
+<p>Using unsynchronized reads and writes are a promise to the compiler that there are no other places mutating the var. The compiler <em>will</em> optimize under that assumption, and if you read the assembly, it <em>is</em> doing so in this case.</p>
+
+
+
+<a name="477972282"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972282" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972282">(Oct 21 2024 at 06:42)</a>:</h4>
+<p>The loop looks like this:</p>
+<div class="codehilite" data-code-language="GAS"><pre><span></span><code><span class="w">        </span><span class="nf">mov</span><span class="w">     </span><span class="no">eax</span><span class="p">,</span><span class="w"> </span><span class="mi">999999</span>
+<span class="nl">.LBB0_3:</span>
+<span class="w">        </span><span class="nf">dec</span><span class="w">     </span><span class="no">rax</span>
+<span class="w">        </span><span class="nf">jne</span><span class="w">     </span><span class="no">.LBB0_3</span>
+<span class="w">        </span><span class="nf">ret</span>
+</code></pre></div>
+
+
+
+<a name="477972305"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972305" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972305">(Oct 21 2024 at 06:42)</a>:</h4>
+<p>There's clearly not touching the static here.</p>
+
+
+
+<a name="477972387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972387">(Oct 21 2024 at 06:42)</a>:</h4>
+<p>I don't know why it's not optimized away completely, but it should be clear that the compiler doesn't think it is important to touch the static in that loop.</p>
+
+
+
+<a name="477972855"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972855" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972855">(Oct 21 2024 at 06:46)</a>:</h4>
+<p>could be that criteration use a blackbox for each iteration</p>
+
+
+
+<a name="477972962"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972962" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972962">(Oct 21 2024 at 06:46)</a>:</h4>
+<p>No, I compiled it in CE without criterion.</p>
+
+
+
+<a name="477972968"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477972968" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477972968">(Oct 21 2024 at 06:46)</a>:</h4>
+<p>It's literally just a <code>for _ in 0..ITERATIONS</code></p>
+
+
+
+<a name="477973018"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477973018" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477973018">(Oct 21 2024 at 06:46)</a>:</h4>
+<p>(And anyway criterion is outside the loop and there is no proc macro touching that etc.)</p>
+
+
+
+<a name="477973267"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477973267" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477973267">(Oct 21 2024 at 06:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477972968">said</a>:</p>
+<blockquote>
+<p>It's literally just a <code>for _ in 0..ITERATIONS</code></p>
+</blockquote>
+<p>you mean the criterion code? But in the loop body there is a blackbox, no?</p>
+
+
+
+<a name="477973282"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477973282" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477973282">(Oct 21 2024 at 06:48)</a>:</h4>
+<p>No.</p>
+
+
+
+<a name="477973416"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477973416" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477973416">(Oct 21 2024 at 06:49)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">const</span><span class="w"> </span><span class="n">ITERATIONS</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1000000</span><span class="p">;</span>
+
+<span class="cp">#[link_section = </span><span class="s">".data.once"</span><span class="cp">]</span>
+<span class="k">static</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ALREADY_DONE</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="cp">#[inline(never)]</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">println</span><span class="p">()</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">bench_mut_bool</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="mi">0</span><span class="o">..</span><span class="n">ITERATIONS</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">!</span><span class="n">ALREADY_DONE</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ALREADY_DONE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">            </span><span class="n">println</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="477973440"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477973440" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477973440">(Oct 21 2024 at 06:49)</a>:</h4>
+<div class="codehilite" data-code-language="GAS"><pre><span></span><code><span class="nl">example:</span><span class="err">:</span><span class="nl">bench_mut_bool:</span><span class="err">:</span><span class="nl">h0d67ad6433122450:</span>
+<span class="w">        </span><span class="nf">cmp</span><span class="w">     </span><span class="no">byte</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="p">[</span><span class="no">rip</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="no">example</span><span class="p">::</span><span class="no">ALREADY_DONE</span><span class="p">::</span><span class="no">h7b6dad1edb427cee</span><span class="p">],</span><span class="w"> </span><span class="mi">0</span>
+<span class="w">        </span><span class="nf">jne</span><span class="w">     </span><span class="no">.LBB0_2</span>
+<span class="w">        </span><span class="nf">mov</span><span class="w">     </span><span class="no">byte</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="p">[</span><span class="no">rip</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="no">example</span><span class="p">::</span><span class="no">ALREADY_DONE</span><span class="p">::</span><span class="no">h7b6dad1edb427cee</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span>
+<span class="nl">.LBB0_2:</span>
+<span class="w">        </span><span class="nf">mov</span><span class="w">     </span><span class="no">eax</span><span class="p">,</span><span class="w"> </span><span class="mi">999999</span>
+<span class="nl">.LBB0_3:</span>
+<span class="w">        </span><span class="nf">dec</span><span class="w">     </span><span class="no">rax</span>
+<span class="w">        </span><span class="nf">jne</span><span class="w">     </span><span class="no">.LBB0_3</span>
+<span class="w">        </span><span class="nf">ret</span>
+
+<span class="nl">example:</span><span class="err">:</span><span class="nl">ALREADY_DONE:</span><span class="err">:</span><span class="nl">h7b6dad1edb427cee:</span>
+<span class="w">        </span><span class="na">.byte</span><span class="w">   </span><span class="mi">0</span>
+</code></pre></div>
+
+
+
+<a name="477976974"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477976974" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477976974">(Oct 21 2024 at 07:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477922484">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> Tried to setup a benchmark resembling the situation which evaluates:</p>
+<ol>
+<li>the initial UB mut bool approach,</li>
+<li>mut bool with read_volatile/write_volatile,</li>
+<li>AtomicBool with Ordering::Relaxed,</li>
+<li>AtomicBool with Ordering::SeqCst,</li>
+<li>RwLock (for good measure, it's clear it won't perform well here).</li>
+</ol>
+<p><a href="https://github.com/jkorinth/once_cmp">Code is on my github</a> - if you can find the time, pls check if it makes sense to you or if there are any mistakes which poison the results.</p>
+<p>Results on my machine (Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz):</p>
+</blockquote>
+<p>Thanks for trying it out! IMHO, micro-benchmarks are often useless, since there are a lot of other factors when it comes to real-world applications. They might give you some insights into what is faster when designing for example a small algorithm. But they are often not precise and sometimes completely wrong when compared with benchmarks of a real application. One example of that is what was already discussed by Alice and Miguel, micro-benchmarks can often be optimized by the compiler into a trivial program.</p>
+<p>On our team, we have got <span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> who maintains the rust nvme driver as well as the rust block layer abstractions. He has a whole benchmark setup for the nvme driver to test the performance implications. Those results are far more reliable compared to any suite of mirco-benchmarks in my opinion.<br>
+If you (/your employer) have your own benchmark suite, it would be interesting to know how all of those solutions compare in your application.</p>
+
+
+
+<a name="477978168"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477978168" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477978168">(Oct 21 2024 at 07:18)</a>:</h4>
+<p>Also, you executed your benchmark suite on x86_64, I didn't really expect a big difference between the volatile and two atomic approaches, since (with my very limited knowledge) under x86 all of them will probably be a <code>mov</code> instruction. Since you mentioned above that there are other architectures where that is not the case and where atomics are expensive, it would be great if you did the benchmarks there.</p>
+<p>Finally, I am completely against any solution that uses UB (there are certain gray areas that I am willing to accept, but this is not one of them). We're trying to minimize the amount of memory bugs in the kernel using Rust. Relying on UB for performance, especially without real-world experience to back it up is not the right way. If you really, <em>really</em> need a more efficient way to set a global variable concurrently, I suggest you contact the Rust language developers. They might be able to add a new way to write to a variable that doesn't introduce UB, but is faster than any current way. Although you probably need very good motivation to get it in.</p>
+
+
+
+<a name="477978969"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477978969" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477978969">(Oct 21 2024 at 07:22)</a>:</h4>
+<p>I do think it's quite telling that most of the solutions have exactly the same speed. The only exceptions is the one that got optimized away, and the one that uses a lock.</p>
+
+
+
+<a name="477979786"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/477979786" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#477979786">(Oct 21 2024 at 07:27)</a>:</h4>
+<p>Yes, when I compiled all of them yesterday, those three in the middle compiled to essentially the same thing (the seqcst one with an extra <code>xchg</code>).</p>
+
+
+
+<a name="478142549"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478142549" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478142549">(Oct 21 2024 at 20:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477976974">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/477922484">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> Tried to setup a benchmark resembling the situation which evaluates:</p>
+<ol>
+<li>the initial UB mut bool approach,</li>
+<li>mut bool with read_volatile/write_volatile,</li>
+<li>AtomicBool with Ordering::Relaxed,</li>
+<li>AtomicBool with Ordering::SeqCst,</li>
+<li>RwLock (for good measure, it's clear it won't perform well here).</li>
+</ol>
+<p><a href="https://github.com/jkorinth/once_cmp">Code is on my github</a> - if you can find the time, pls check if it makes sense to you or if there are any mistakes which poison the results.</p>
+<p>Results on my machine (Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz):</p>
+</blockquote>
+<p>Thanks for trying it out! IMHO, micro-benchmarks are often useless, since there are a lot of other factors when it comes to real-world applications. They might give you some insights into what is faster when designing for example a small algorithm. But they are often not precise and sometimes completely wrong when compared with benchmarks of a real application. One example of that is what was already discussed by Alice and Miguel, micro-benchmarks can often be optimized by the compiler into a trivial program.</p>
+<p>On our team, we have got <span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> who maintains the rust nvme driver as well as the rust block layer abstractions. He has a whole benchmark setup for the nvme driver to test the performance implications. Those results are far more reliable compared to any suite of mirco-benchmarks in my opinion.<br>
+If you (/your employer) have your own benchmark suite, it would be interesting to know how all of those solutions compare in your application.</p>
+</blockquote>
+<p>What exactly would you consider the "real application" here? This functionality may be used anywhere in the kernel, what exactly should be measured instead? And how? We're talking about milli- and microseconds here in a completely artificial example; in any real world scenario, say insmodding a .ko or something, it seems extremely unlikely that the runtime contribution of this code could even be measured with any degree of confidence?</p>
+
+
+
+<a name="478142844"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478142844" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478142844">(Oct 21 2024 at 20:20)</a>:</h4>
+<p>For example the nvme driver. But it doesn't have to be that big to "count". As long as it is upstreamable, it qualifies.</p>
+
+
+
+<a name="478142876"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478142876" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478142876">(Oct 21 2024 at 20:20)</a>:</h4>
+<p>It seemed to me that you have a usage for <code>warn_once</code>, so I thought that you might be able to just benchmark that</p>
+
+
+
+<a name="478143044"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478143044" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478143044">(Oct 21 2024 at 20:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478142549">said</a>:</p>
+<blockquote>
+<p>We're talking about milli- and microseconds here in a completely artificial example; in any real world scenario, say insmodding a .ko or something, it seems extremely unlikely that the runtime contribution of this code could even be measured with any degree of confidence?</p>
+</blockquote>
+<p>If you can't even measure the difference, why do you even want to optimize this piece of code?</p>
+
+
+
+<a name="478144220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478144220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478144220">(Oct 21 2024 at 20:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478143044">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478142549">said</a>:</p>
+<blockquote>
+<p>We're talking about milli- and microseconds here in a completely artificial example; in any real world scenario, say insmodding a .ko or something, it seems extremely unlikely that the runtime contribution of this code could even be measured with any degree of confidence?</p>
+</blockquote>
+<p>If you can't even measure the difference, why do you even want to optimize this piece of code?</p>
+</blockquote>
+<p>Well, there's a difference between things you cannot measure, and things that do not have impact. If this piece of code is used freely in a million different places it will have an impact on runtime performance. But you won't be able to detect it by looking at any one driver in isolation, because its contribution to runtime will be too small compared to the rest of the code (signal/noise).</p>
+
+
+
+<a name="478144406"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478144406" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478144406">(Oct 21 2024 at 20:30)</a>:</h4>
+<p>I doubt that adding volatile will change the generated machine code in any real scenarios.</p>
+
+
+
+<a name="478144446"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478144446" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478144446">(Oct 21 2024 at 20:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478144220">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478143044">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478142549">said</a>:</p>
+<blockquote>
+<p>We're talking about milli- and microseconds here in a completely artificial example; in any real world scenario, say insmodding a .ko or something, it seems extremely unlikely that the runtime contribution of this code could even be measured with any degree of confidence?</p>
+</blockquote>
+<p>If you can't even measure the difference, why do you even want to optimize this piece of code?</p>
+</blockquote>
+<p>Well, there's a difference between things you cannot measure, and things that do not have impact. If this piece of code is used freely in a million different places it will have an impact on runtime performance. But you won't be able to detect it by looking at any one driver in isolation, because its contribution to runtime will be too small compared to the rest of the code (signal/noise).</p>
+</blockquote>
+<p>sure, but I would argue that we should definitely not use something with UB</p>
+
+
+
+<a name="478144681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478144681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478144681">(Oct 21 2024 at 20:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478144446">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478144220">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478143044">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478142549">said</a>:</p>
+<blockquote>
+<p>We're talking about milli- and microseconds here in a completely artificial example; in any real world scenario, say insmodding a .ko or something, it seems extremely unlikely that the runtime contribution of this code could even be measured with any degree of confidence?</p>
+</blockquote>
+<p>If you can't even measure the difference, why do you even want to optimize this piece of code?</p>
+</blockquote>
+<p>Well, there's a difference between things you cannot measure, and things that do not have impact. If this piece of code is used freely in a million different places it will have an impact on runtime performance. But you won't be able to detect it by looking at any one driver in isolation, because its contribution to runtime will be too small compared to the rest of the code (signal/noise).</p>
+</blockquote>
+<p>sure, but I would argue that we should definitely not use something with UB</p>
+</blockquote>
+<p>I agree. After all, we want to improve on the C code. :)</p>
+
+
+
+<a name="478145527"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478145527" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478145527">(Oct 21 2024 at 20:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478144406">said</a>:</p>
+<blockquote>
+<p>I doubt that adding volatile will change the generated machine code in any real scenarios.</p>
+</blockquote>
+<p>Yes, that is my impression, too. But I don't understand it well enough to be comfortable with any of the solutions. E.g., on my machine the AtomicBool versions now take ~450us, but the volatile only ~250us. No idea where that change came from.</p>
+<p>My preferred solution would be to use AtomicBool with swap, because it would also fix the do_once/twice/thrice issue and really only execute once. But that takes ~4ms on my machine and I don't really understand why yet.</p>
+
+
+
+<a name="478145653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478145653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478145653">(Oct 21 2024 at 20:39)</a>:</h4>
+<p>Using swap is definitely going to be more expensive since it introduces extra synchronization to avoid the do_twice case.</p>
+
+
+
+<a name="478145940"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478145940" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478145940">(Oct 21 2024 at 20:40)</a>:</h4>
+<p>Usually in parallel programming area, the code with bugs runs faster.</p>
+
+
+
+<a name="478146053"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146053" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146053">(Oct 21 2024 at 20:41)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> That's very true, as can be seen by my naive implementation of the C code in the benchmark. :)</p>
+
+
+
+<a name="478146056"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146056" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146056">(Oct 21 2024 at 20:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="768269">Jens Korinth</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478145527">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478144406">said</a>:</p>
+<blockquote>
+<p>I doubt that adding volatile will change the generated machine code in any real scenarios.</p>
+</blockquote>
+<p>Yes, that is my impression, too. But I don't understand it well enough to be comfortable with any of the solutions. E.g., on my machine the AtomicBool versions now take ~450us, but the volatile only ~250us. No idea where that change came from.</p>
+</blockquote>
+<p>I thought from the data you shared, AtomicBool version is also ~250us ish?</p>
+
+
+
+<a name="478146337"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146337" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146337">(Oct 21 2024 at 20:43)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_relaxed</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_relaxed</span><span class="w">           </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">246.03</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.93</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">248.01</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.2734</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.3719</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.9428</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.28</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+</code></pre></div>
+
+
+
+<a name="478146557"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146557" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146557">(Oct 21 2024 at 20:44)</a>:</h4>
+<p>or by "AtomicBool versions" you mean the one with swap?</p>
+
+
+
+<a name="478146601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146601">(Oct 21 2024 at 20:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/291565-Help/topic/warn_once.2Fdo_once_lite_if/near/478146337">said</a>:</p>
+<blockquote>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_relaxed</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_relaxed</span><span class="w">           </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">246.03</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.93</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">248.01</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.2734</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.3719</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.9428</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.28</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Yes - there were no changes in the code, but today it looks like this on my machine:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Gnuplot</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">found</span><span class="p">,</span><span class="w"> </span><span class="n">using</span><span class="w"> </span><span class="n">plotters</span><span class="w"> </span><span class="n">backend</span>
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">mut_bool</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">mut_bool</span><span class="w">                </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">1.7179</span><span class="w"> </span><span class="n">ns</span><span class="w"> </span><span class="mf">1.7215</span><span class="w"> </span><span class="n">ns</span><span class="w"> </span><span class="mf">1.7257</span><span class="w"> </span><span class="n">ns</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.6976</span><span class="o">%</span><span class="w"> </span><span class="o">-</span><span class="mf">0.0985</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.4649</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.75</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">14</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">14.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">2</span><span class="w"> </span><span class="p">(</span><span class="mf">2.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">12</span><span class="w"> </span><span class="p">(</span><span class="mf">12.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">mut_volatile_bool</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">mut_volatile_bool</span><span class="w">       </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">245.35</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.02</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">246.86</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.5293</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.0234</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.5897</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.94</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">16</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">16.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">4</span><span class="w"> </span><span class="p">(</span><span class="mf">4.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">12</span><span class="w"> </span><span class="p">(</span><span class="mf">12.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_relaxed</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_relaxed</span><span class="w">           </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">490.44</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">491.24</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">492.19</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">-</span><span class="mf">0.4391</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.0934</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.6318</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.75</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">No</span><span class="w"> </span><span class="n">change</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">performance</span><span class="w"> </span><span class="n">detected</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">22</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">22.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">5</span><span class="w"> </span><span class="p">(</span><span class="mf">5.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+<span class="w">  </span><span class="mi">17</span><span class="w"> </span><span class="p">(</span><span class="mf">17.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">severe</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_seqcst</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_seqcst</span><span class="w">            </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">537.82</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">540.28</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="w"> </span><span class="mf">542.19</span><span class="w"> </span><span class="err">µ</span><span class="n">s</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">+</span><span class="mf">5.6099</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">6.5861</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">7.5081</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.00</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">Performance</span><span class="w"> </span><span class="n">has</span><span class="w"> </span><span class="n">regressed</span><span class="p">.</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">rwlock</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">rwlock</span><span class="w">                  </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">12.362</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">12.385</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">12.408</span><span class="w"> </span><span class="n">ms</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">+</span><span class="mf">4.0081</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">4.3100</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">4.5974</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.00</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">Performance</span><span class="w"> </span><span class="n">has</span><span class="w"> </span><span class="n">regressed</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">2.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">2</span><span class="w"> </span><span class="p">(</span><span class="mf">2.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+
+<span class="n">Benchmarking</span><span class="w"> </span><span class="n">abool_swap</span><span class="p">:</span><span class="w"> </span><span class="nc">Warming</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="mf">3.0000</span><span class="w"> </span><span class="n">scomplex</span><span class="w"> </span><span class="mi">42</span><span class="w"> </span><span class="n">arguments</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">void</span>
+<span class="n">abool_swap</span><span class="w">              </span><span class="n">time</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mf">4.4846</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">4.5020</span><span class="w"> </span><span class="n">ms</span><span class="w"> </span><span class="mf">4.5202</span><span class="w"> </span><span class="n">ms</span><span class="p">]</span>
+<span class="w">                        </span><span class="n">change</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">+</span><span class="mf">0.4445</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">0.9097</span><span class="o">%</span><span class="w"> </span><span class="o">+</span><span class="mf">1.3984</span><span class="o">%</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.00</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.05</span><span class="p">)</span>
+<span class="w">                        </span><span class="n">Change</span><span class="w"> </span><span class="n">within</span><span class="w"> </span><span class="n">noise</span><span class="w"> </span><span class="n">threshold</span><span class="p">.</span>
+<span class="n">Found</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">outliers</span><span class="w"> </span><span class="n">among</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">measurements</span><span class="w"> </span><span class="p">(</span><span class="mf">1.00</span><span class="o">%</span><span class="p">)</span>
+<span class="w">  </span><span class="mi">1</span><span class="w"> </span><span class="p">(</span><span class="mf">1.00</span><span class="o">%</span><span class="p">)</span><span class="w"> </span><span class="n">high</span><span class="w"> </span><span class="n">mild</span>
+</code></pre></div>
+<p>I'm on battery rn, will check again later when plugged in.</p>
+
+
+
+<a name="478146967"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478146967" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jens Korinth <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478146967">(Oct 21 2024 at 20:47)</a>:</h4>
+<p>May be interesting to see what <code>cargo bench</code> reports on a different machines; I've pushed the commit with the swap to the git repo.</p>
+
+
+
+<a name="478155223"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478155223" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478155223">(Oct 21 2024 at 21:42)</a>:</h4>
+<p>FWIW, you can do this:</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/benches/once_cmp.rs b/benches/once_cmp.rs</span>
+<span class="gh">index 322e420..1bfc9cd 100644</span>
+<span class="gd">--- a/benches/once_cmp.rs</span>
+<span class="gi">+++ b/benches/once_cmp.rs</span>
+<span class="gu">@@ -124,7 +124,7 @@ macro_rules! do_once_lite_if_abool_swap {</span>
+<span class="w"> </span>    ($cond:expr, $e:expr) =&gt; {
+<span class="w"> </span>        #[link_section = ".data.once"]
+<span class="w"> </span>        static ALREADY_DONE: AtomicBool = AtomicBool::new(false);
+<span class="gd">-        if $cond &amp;&amp; !ALREADY_DONE.swap(true, Ordering::Relaxed) {</span>
+<span class="gi">+        if $cond &amp;&amp; !ALREADY_DONE.load(Ordering::Relaxed) &amp;&amp; !ALREADY_DONE.swap(true, Ordering::Relaxed) {</span>
+<span class="w"> </span>            $e;
+<span class="w"> </span>        }
+<span class="w"> </span>    }
+</code></pre></div>
+<p>to improve the hotpath, because you don't need to xchg() each time after you set the flag.</p>
+
+
+
+<a name="478155610"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/warn_once/do_once_lite_if/near/478155610" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/warn_once.2Fdo_once_lite_if.html#478155610">(Oct 21 2024 at 21:45)</a>:</h4>
+<p>And I didn't observe performance gap between <code>mut_volatile_bool</code> and <code>abool_relaxed</code> on my machines (x86 and arm64).</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,242 @@
+[
+    {
+        "content": "<p>Hello!<br>\nI was working on adding support for <a href=\"https://github.com/Rust-for-Linux/linux/issues/1162\"><code>unsafe_precondition_assert</code></a> and had couple of questions:</p>\n<p>1: This is the macro usage of <a href=\"https://doc.rust-lang.org/nightly/core/macro.assert_unsafe_precondition.html\"><code>core::assert_unsafe_precondition</code></a> [nightly-experimental] from <a href=\"https://github.com/rust-lang/rust/blob/master/library/core/src/str/traits.rs#L216-L236\">rust/library/core/src/str/traits.rs</a>:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[inline]</span>\n<span class=\"cp\">#[track_caller]</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">get_unchecked_mut</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"kt\">str</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">Output</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">];</span>\n\n<span class=\"w\">    </span><span class=\"n\">assert_unsafe_precondition</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"n\">check_library_ub</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"s\">\"str::get_unchecked_mut requires that the range is within the string slice\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"n\">start</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">start</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">end</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">end</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">len</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span>\n<span class=\"w\">        </span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">end</span><span class=\"w\"> </span><span class=\"o\">&gt;=</span><span class=\"w\"> </span><span class=\"n\">start</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">end</span><span class=\"w\"> </span><span class=\"o\">&lt;=</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: see comments for `get_unchecked`.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">new_len</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">unchecked_sub</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">end</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">start</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"n\">ptr</span><span class=\"p\">::</span><span class=\"n\">slice_from_raw_parts_mut</span><span class=\"p\">(</span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">().</span><span class=\"n\">add</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">start</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"n\">new_len</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"kt\">str</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>For the kernel side, I am considering two possible macro signatures:</p>\n<ol>\n<li>Multiple pre-conditions (for grouping multiple conditions under single message):</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">unsafe_precondition_assert</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"s\">\"Pointer must be valid. Length and content must match\"</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">[</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"o\">!</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_null</span><span class=\"p\">()),</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_aligned</span><span class=\"p\">()),</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"n\">string</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">!=</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()),</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"n\">string</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">String</span><span class=\"p\">::</span><span class=\"n\">from_utf8_lossy</span><span class=\"p\">(</span><span class=\"n\">slice</span><span class=\"p\">)),</span>\n<span class=\"w\">    </span><span class=\"p\">]</span>\n<span class=\"p\">);</span>\n</code></pre></div>\n<ol start=\"2\">\n<li>Single pre-condition (repeat multiple times for multiple checks or combine with <code>&amp;&amp;</code>):</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">unsafe_precondition_assert</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"Ptr must be valid\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">!</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_null</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_aligned</span><span class=\"p\">());</span>\n<span class=\"n\">unsafe_precondition_assert</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"Length must be equal\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">string</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">());</span>\n<span class=\"n\">unsafe_precondition_assert</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"Content must be same\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">string</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">String</span><span class=\"p\">::</span><span class=\"n\">from_utf8_lossy</span><span class=\"p\">(</span><span class=\"n\">slice</span><span class=\"p\">));</span>\n</code></pre></div>\n<p>Support both or something else? How'd you like to write them?</p>\n<p>2: Should this be placed in </p>\n<ul>\n<li>A new file (ex: <code>kernel/ub_checks.rs</code>, similar to how it's <a href=\"https://github.com/rust-lang/rust/blob/master/library/core/src/ub_checks.rs\">structured in core</a>), </li>\n<li>Existing <code>kernel/lib.rs</code> or something else?</li>\n</ul>\n<p>Open to suggestions :)<br>\nThanks!</p>",
+        "id": 528457452,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1752325777
+    },
+    {
+        "content": "<ol>\n<li>I would prefer multiple, but pair the message and the assert:</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">assert_unsafe_precondition</span><span class=\"o\">!</span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"o\">!</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_null</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_aligned</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"s\">\"`ptr` must be valid\"</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">string</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">string</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">String</span><span class=\"p\">::</span><span class=\"n\">from_until_lossy</span><span class=\"p\">(</span><span class=\"n\">slice</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"s\">\"Length and content of `string` and `slice` must match\"</span><span class=\"p\">,</span>\n<span class=\"p\">];</span>\n</code></pre></div>\n<ol start=\"2\">\n<li>Let's put it into <code>rust/kernel/safety.rs</code></li>\n</ol>",
+        "id": 528457971,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752326290
+    },
+    {
+        "content": "<p>maybe &lt;= instead of =&gt; ? Because for example, the precondition of “pointer must be valid” is its necessary but not sufficient condition</p>",
+        "id": 528458605,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752326917
+    },
+    {
+        "content": "<p>What is the advantage of the <code>=&gt;</code> syntax? i.e. this would differ from other asserts.</p>",
+        "id": 528458606,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752326921
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> I assume the <code>=&gt;</code> comes from similarity with things like a JS arrow function expression, not logic.</p>",
+        "id": 528458673,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752326987
+    },
+    {
+        "content": "<p>yeah, but it can be read as logic implication</p>",
+        "id": 528458807,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752327121
+    },
+    {
+        "content": "<p>Also, what is the advantage of grouping all into a single call in our case? I think the stdlib one has that <code>(...) =&gt; ...</code> thing to be able to set some variables inside the call rather than outside due to how it works: <a href=\"https://doc.rust-lang.org/core/macro.assert_unsafe_precondition.html\">https://doc.rust-lang.org/core/macro.assert_unsafe_precondition.html</a></p>",
+        "id": 528458826,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752327130
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528458807\">said</a>:</p>\n<blockquote>\n<p>yeah, but it can be read as logic implication</p>\n</blockquote>\n<p>so getting the direction correct makes some sense</p>",
+        "id": 528458918,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752327198
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528458807\">said</a>:</p>\n<blockquote>\n<p>yeah, but it can be read as logic implication</p>\n</blockquote>\n<p>Yeah (i.e. I meant just to make a note on what they may want it to mean)</p>",
+        "id": 528458941,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752327212
+    },
+    {
+        "content": "<p>we don’t want to make people believe “oh my pointer is not null and it’s aligned, so it is valid”</p>",
+        "id": 528459085,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752327331
+    },
+    {
+        "content": "<p>Personally, I would just have the same syntax as other <code>assert!</code>s, unless there is a reason we should not do that that I may be missing.</p>",
+        "id": 528459131,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752327358
+    },
+    {
+        "content": "<p>yeah, not having that arrow may be a good idea</p>",
+        "id": 528459188,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752327404
+    },
+    {
+        "content": "<p>(e.g. if they intend to stabilize a macro like that in the stdlib, then we could consider doing something similar)</p>",
+        "id": 528459243,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752327457
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528459085\">said</a>:</p>\n<blockquote>\n<p>we don’t want to make people believe “oh my pointer is not null and it’s aligned, so it is valid”</p>\n</blockquote>\n<p>Whoops! That was just a quick example, not meant to imply it's sufficient for pointer validity :)<br>\nI'll be more precise next time onwards :)</p>",
+        "id": 528465935,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1752333882
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528458605\">said</a>:</p>\n<blockquote>\n<p>maybe &lt;= instead of =&gt; ? Because for example, the precondition of “pointer must be valid” is its necessary but not sufficient condition</p>\n</blockquote>\n<p><code>&lt;=</code> is not allowed to appear after arbitrary expressions in macro parsing</p>\n<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528458606\">said</a>:</p>\n<blockquote>\n<p>What is the advantage of the <code>=&gt;</code> syntax? i.e. this would differ from other asserts.</p>\n</blockquote>\n<p>I just made some random syntax up, we can also just use tuples, so </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">assert_unsafe_precondition</span><span class=\"o\">!</span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"o\">!</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_null</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">is_aligned</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"s\">\"`ptr` must be valid\"</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"n\">string</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">slice</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">string</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"nb\">String</span><span class=\"p\">::</span><span class=\"n\">from_until_lossy</span><span class=\"p\">(</span><span class=\"n\">slice</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"s\">\"Length and content of `string` and `slice` must match\"</span><span class=\"p\">),</span>\n<span class=\"p\">];</span>\n</code></pre></div>\n<p>or directly interleave the message &amp; the condition, but that might not format nicely</p>",
+        "id": 528474318,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752342704
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528459131\">said</a>:</p>\n<blockquote>\n<p>Personally, I would just have the same syntax as other <code>assert!</code>s, unless there is a reason we should not do that that I may be missing.</p>\n</blockquote>\n<p>yeah, that's true, I used it, because I didn't want to introduce additional parenthesis when specifying multiple values</p>",
+        "id": 528474518,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752342961
+    },
+    {
+        "content": "<p>ideally, in the future we could put this into an attribute and have it check the preconditions of the function before any code is executed &amp; auto-generate the safety section</p>",
+        "id": 528474573,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752343027
+    },
+    {
+        "content": "<p>which is why I think it would be a good idea to support multiple checks with different messages</p>",
+        "id": 528474584,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752343044
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528474573\">said</a>:</p>\n<blockquote>\n<p>ideally, in the future we could put this into an attribute and have it check the preconditions of the function before any code is executed &amp; auto-generate the safety section</p>\n</blockquote>\n<p>Yeah, ideally it would not be even an attribute. I would like to write it just like <code>where</code>, e.g.:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">f</span><span class=\"p\">(</span><span class=\"n\">v</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">i32</span>\n<span class=\"nc\">pre</span>\n<span class=\"w\">    </span><span class=\"n\">v</span><span class=\"w\"> </span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">v</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 528475557,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344065
+    },
+    {
+        "content": "<p>yeah, but that needs a language feature and we can just have a macro until it's matured enough</p>",
+        "id": 528475616,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752344131
+    },
+    {
+        "content": "<p>like <code>pin-init</code> at the moment :)</p>",
+        "id": 528475627,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752344140
+    },
+    {
+        "content": "<p>Of course</p>",
+        "id": 528475630,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344146
+    },
+    {
+        "content": "<p>i.e. I meant in the language itself. I guess we could parse that with a macro, without having to put things into the attribute as arguments.</p>",
+        "id": 528475669,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344188
+    },
+    {
+        "content": "<p>Sadly IIRC they are using attributes even in the experimental version of contracts upstream</p>",
+        "id": 528475683,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344205
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/528475669\">said</a>:</p>\n<blockquote>\n<p>i.e. I meant in the language itself. I guess we could parse that with an attribute, without having to put things into the attribute as arguments.</p>\n</blockquote>\n<p>I don't understand, what do you mean?</p>",
+        "id": 528475692,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752344216
+    },
+    {
+        "content": "<p>I mean something like Verus does, where they write custom syntax by wrapping everything into a macro. It isn't great, though, and I am not sure what are the limitations.</p>",
+        "id": 528475724,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344266
+    },
+    {
+        "content": "<p>I should have said \"macro\" above, not \"attribute\".</p>",
+        "id": 528475798,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344349
+    },
+    {
+        "content": "<p>Or just preprocess the file.</p>",
+        "id": 528475806,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752344361
+    },
+    {
+        "content": "<p>ahhh right yeah</p>",
+        "id": 528476110,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752344699
+    },
+    {
+        "content": "<p>I think that something like</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pre(</span>\n<span class=\"cp\">    (r_valid(ptr), </span><span class=\"s\">\"`ptr` must be valid for reads\"</span><span class=\"cp\">),</span>\n<span class=\"cp\">    (w_valid(out), </span><span class=\"s\">\"`out` must be valid for writes\"</span><span class=\"cp\">),</span>\n<span class=\"cp\">)]</span>\n<span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">set</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">out</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">out</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>would look fine for the beginning</p>",
+        "id": 528476197,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1752344801
+    },
+    {
+        "content": "<p>Thanks for you inputs :)</p>\n<p>So, we have quite a lot of ways!<br>\nHowever, based on the language/tooling limitations, we cannot currently go for (as discussed):</p>\n<ol>\n<li><code>&lt;=</code> in macro syntax [matcher doesn't understand]</li>\n<li>Contracts [<a href=\"https://hackmd.io/w8AS2N09R76aXDFK9ogHBQ?view\">1</a>, <a href=\"https://github.com/rust-lang/lang-team/issues/181\">2</a>]</li>\n<li>Versus-like macros [<a href=\"https://deepwiki.com/verus-lang/verus/3.1-syntax-and-macros\">1</a>, <a href=\"https://github.com/verus-lang/verus/discussions/1758\">2</a>]</li>\n<li><code>#[pre()]</code> proc-macro [afaik, tooling doesn't support <code>syn</code> yet]</li>\n</ol>\n<p>So, as of now, should we use assert-like syntax (map the <code>unsafe_precondition_assert</code> to <code>assert</code>)?</p>",
+        "id": 528652945,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1752496863
+    },
+    {
+        "content": "<p>Ah, to clarify, all those other alternative syntax discussions (2-4) were just a long-term thing, not something we are considering for now.</p>\n<blockquote>\n<p>should we use assert-like syntax</p>\n</blockquote>\n<p>Yeah, the only question is which syntax in particular. Is there an advantage to having all in a single call? Otherwise, even individual ones are OK.</p>",
+        "id": 528698839,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1752510137
+    },
+    {
+        "content": "<p>Yeah! got it :)<br>\nI was summing up, just in case someone refers back to this later.</p>\n<p>Grouping all in single call is mostly syntactic sugar<br>\n(rather than calling macro repeatedly for multiple pre-conditions)</p>\n<p>Maybe we can use individual ones, it can be extended later if needed.</p>",
+        "id": 528846729,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1752581897
+    },
+    {
+        "content": "<ol>\n<li><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span>  Can you suggest module level doc? <br>\nI came up with (but too specific):</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"o\">+</span><span class=\"sd\">//! This module contains the kernel APIs for verifying invariants</span>\n<span class=\"o\">+</span><span class=\"sd\">//! required by the unsafe code.</span>\n</code></pre></div>\n<ol start=\"2\">\n<li>Will this macro be used within unsafe blocks, unsafe fn (like rust core lib) or both?</li>\n</ol>\n<p>Thanks :)<br>\n<a href=\"https://lore.kernel.org/rust-for-linux/CANiq72kQGjWedd-tbQd-tLoXMofHs2VF0+A_qcZjXFi3GwWj9A@mail.gmail.com/T/#t\">[Old Patch]</a></p>",
+        "id": 530381620,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1753286276
+    },
+    {
+        "content": "<p>sorry, I have been very busy the last few months, I'll reply on the mailing list in a couple days</p>",
+        "id": 539902777,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1758061873
+    },
+    {
+        "content": "<p>Sure, No worries! Thanks for your time :D</p>",
+        "id": 540247650,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1758205539
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"937170\">Ritvik Gupta</span> has marked this topic as resolved.</p>",
+        "id": 565771344,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1767090791
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"937170\">Ritvik Gupta</span> has marked this topic as unresolved.</p>",
+        "id": 600913221,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1780784598
+    },
+    {
+        "content": "<p>Hi everyone :)<br>\nRegarding <code>unsafe_precondition_assert</code> usage(s), should we keep message or not? What do you prefer?<br>\nPATCH: <a href=\"https://lore.kernel.org/rust-for-linux/20260518230125.476165-3-ritvikfoss@gmail.com/\">https://lore.kernel.org/rust-for-linux/20260518230125.476165-3-ritvikfoss@gmail.com/</a></p>",
+        "id": 600913264,
+        "sender_full_name": "Ritvik Gupta",
+        "timestamp": 1780784606
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"937170\">Ritvik Gupta</span> <a href=\"#narrow/channel/291566-Library/topic/.60unsafe_precondition_assert.60.20macro/near/600913264\">said</a>:</p>\n<blockquote>\n<p>Hi everyone :)<br>\nRegarding <code>unsafe_precondition_assert</code> usage(s), should we keep message or not? What do you prefer?<br>\nPATCH: <a href=\"https://lore.kernel.org/rust-for-linux/20260518230125.476165-3-ritvikfoss@gmail.com/\">https://lore.kernel.org/rust-for-linux/20260518230125.476165-3-ritvikfoss@gmail.com/</a></p>\n</blockquote>\n<p>Personally, I think the message is not necessary, keep it simple rather repeate serveral message which don't really add more information. ;)</p>",
+        "id": 607772640,
+        "sender_full_name": "Mengmeng Zhao",
+        "timestamp": 1782977099
+    }
+]

@@ -1,0 +1,249 @@
+<html>
+<head><meta charset="utf-8"><title>global mutable variable in kernel module · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html">global mutable variable in kernel module</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="526841392"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526841392" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526841392">(Jul 02 2025 at 16:34)</a>:</h4>
+<p>Hello guys.<br>
+If I define raw kernel module with kernel::prelude::module! and implement method init in kernel::Module for SampleDriver, how can I create pinned variable on heap using KBox maybe, so it will not be destroyed when init is done. I would like to delete it manually in drop() for this SampleDriver.</p>
+
+
+
+<a name="526850994"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526850994" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526850994">(Jul 02 2025 at 17:38)</a>:</h4>
+<p>When you said "global", you meant "global" to your module, right? I.e the variable should only be accessible within the module. If so I think you can put it in your module struct:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MyModule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">Foo</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// ^ usually it's a `driver::Registration&lt;&gt;` so that all the driver</span>
+<span class="w">    </span><span class="c1">// callbacks of the same driver can access it.</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">InPlaceModule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyModule</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="526961745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526961745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526961745">(Jul 03 2025 at 10:07)</a>:</h4>
+<p>I just need to save ARef&lt;i2c::DeviceOwned&gt; object that I created in init(). The code:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">DriverModule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="nc">ARef</span><span class="o">&lt;</span><span class="n">i2c</span><span class="p">::</span><span class="n">DeviceOwned</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">const</span><span class="w"> </span><span class="n">BOARD_INFO</span><span class="p">:</span><span class="w"> </span><span class="nc">i2c</span><span class="p">::</span><span class="n">I2cBoardInfo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i2c</span><span class="p">::</span><span class="n">I2cBoardInfo</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">c_str</span><span class="o">!</span><span class="p">(</span><span class="s">"rust_device_i2c"</span><span class="p">),</span><span class="w"> </span><span class="mh">0x30</span><span class="p">);</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">Module</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">DriverModule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">init</span><span class="p">(</span><span class="n">_module</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span><span class="w"> </span><span class="nc">ThisModule</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">pr_info</span><span class="o">!</span><span class="p">(</span><span class="s">"DriverModule on</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">adapter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i2c</span><span class="p">::</span><span class="n">I2cAdapter</span><span class="p">::</span><span class="n">get</span><span class="p">(</span><span class="mi">1</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">EINVAL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i2c</span><span class="p">::</span><span class="n">DeviceOwned</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">adapter</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">BOARD_INFO</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">EINVAL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">deviceowned</span><span class="p">:</span><span class="w"> </span><span class="nc">ARef</span><span class="o">&lt;</span><span class="n">i2c</span><span class="p">::</span><span class="n">DeviceOwned</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="o">&amp;</span><span class="n">device</span><span class="p">).</span><span class="n">into</span><span class="p">();</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">mem</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">deviceowned</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">Self</span><span class="p">{</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="nb">Box</span><span class="p">::</span><span class="o">&lt;</span><span class="n">_</span><span class="p">,</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">alloc</span><span class="p">::</span><span class="n">allocator</span><span class="p">::</span><span class="n">Kmalloc</span><span class="o">&gt;</span><span class="p">::</span><span class="n">into_inner</span><span class="p">(</span><span class="n">mem</span><span class="p">)})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">DriverModule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">pr_info</span><span class="o">!</span><span class="p">(</span><span class="s">"DriverModule off</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">kernel</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="n">module</span><span class="o">!</span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="p">:</span><span class="nc">DriverModule</span><span class="p">,</span>
+<span class="w">    </span><span class="n">name</span><span class="p">:</span><span class="s">"rust_test"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">authors</span><span class="p">:[</span><span class="s">"Igor Korotin"</span><span class="p">],</span>
+<span class="w">    </span><span class="n">description</span><span class="p">:</span><span class="s">"Rust test"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">license</span><span class="p">:</span><span class="s">"GPL v2"</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>when running this code I get the following:<br>
+[   14.998432] rust_test: DriverModule on<br>
+[   15.000436] rust_kernel: inc_ref  <br>
+[   15.001943] rust_kernel: as_ref<br>
+[   15.003607] rust_kernel: drop DeviceOwned                <strong>&lt;&lt; but after init ends, I see that my object is destroyed</strong> <br>
+[   15.005097] rust_kernel: as_raw_client</p>
+<p>What am I missing?</p>
+
+
+
+<a name="526962002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962002">(Jul 03 2025 at 10:09)</a>:</h4>
+<p>You need to box it?</p>
+
+
+
+<a name="526962167"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962167" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962167">(Jul 03 2025 at 10:10)</a>:</h4>
+<p>The goal is to save ARef&lt;DeviceOwned&gt; while the module is loaded. I just don't get how to do that to be honest</p>
+
+
+
+<a name="526962407"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962407" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962407">(Jul 03 2025 at 10:11)</a>:</h4>
+<p>Okay, so I would think that can't change. Have you looked at pin-init?</p>
+
+
+
+<a name="526962503"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962503" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962503">(Jul 03 2025 at 10:12)</a>:</h4>
+<p><a href="https://rust-for-linux.com/pin-init">https://rust-for-linux.com/pin-init</a></p>
+
+
+
+<a name="526962575"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962575" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962575">(Jul 03 2025 at 10:12)</a>:</h4>
+<p>No, I'll dig into pin-init then, thanks</p>
+
+
+
+<a name="526962590"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962590" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962590">(Jul 03 2025 at 10:12)</a>:</h4>
+<p>The value can change. The location change change.</p>
+
+
+
+<a name="526962648"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962648" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962648">(Jul 03 2025 at 10:13)</a>:</h4>
+<p>I'm not typing well. The location cannot change.</p>
+
+
+
+<a name="526962838"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526962838" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526962838">(Jul 03 2025 at 10:14)</a>:</h4>
+<p>Look at the rnull_mod device for an example.</p>
+
+
+
+<a name="526963030"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/526963030" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wren T <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#526963030">(Jul 03 2025 at 10:14)</a>:</h4>
+<p>You will also need to use InPlaceModule instead of Module.</p>
+
+
+
+<a name="527065355"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527065355" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527065355">(Jul 03 2025 at 20:01)</a>:</h4>
+<p>Note that <code>ARef&lt;_&gt;</code> is already a pointer to an object, and the object is already pinned.</p>
+
+
+
+<a name="527065559"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527065559" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527065559">(Jul 03 2025 at 20:02)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i2c</span><span class="p">::</span><span class="n">DeviceOwned</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">adapter</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">BOARD_INFO</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">EINVAL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</code></pre></div>
+<p>What does the <code>new()</code> function do? Seems you create a <code>DeviceOwned</code> on the stack.</p>
+
+
+
+<a name="527066261"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527066261" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527066261">(Jul 03 2025 at 20:08)</a>:</h4>
+<p>and when <code>init()</code> returns, the <code>device</code> goes out of scope and <code>i2c::DeviceOwned</code> gets dropped. Most likely you should not implement the <code>new()</code> to directly return a <code>DeviceOwned</code>.</p>
+
+
+
+<a name="527066336"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527066336" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527066336">(Jul 03 2025 at 20:09)</a>:</h4>
+<p>It's easier if you could share all the code.</p>
+
+
+
+<a name="527067760"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527067760" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527067760">(Jul 03 2025 at 20:21)</a>:</h4>
+<p>I assume you're using <code>i2c_new_client_device()</code> to implement <code>new()</code>? If so the returned pointer for <code>i2c_new_client_device()</code> already carries one refcount, you can just convert that into a <code>ARef&lt;DeviceOwned&gt;</code> (via <code>ARef::from_raw()</code>), and return (your <code>new()</code> should return a <code>Result&lt;ARef&lt;_&gt;&gt;</code>)</p>
+
+
+
+<a name="527131537"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527131537" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527131537">(Jul 04 2025 at 08:26)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> I'm currently implementing I2C subsystem including creation of new I2C device via i2c_new_client_device as you have noticed correctly. The problem was with the correct implementation of DeviceOwned that suppose to carry i2c_client created by i2c_new_client_device and drop it automatically when it leaves the scope. After some additional investigation I think I have implemented the correct behavior of DeviceOwned. <br>
+The problem was that when I return this DeviceOwned which was (NonNull&lt;i2c::Device&lt;Ctx: device::DeviceContext, state::Owned&gt;&gt;) from new into my module, it was automatically dropped after init because I couldn't save it correctly and was not sure how to do that.</p>
+
+
+
+<a name="527131659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527131659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527131659">(Jul 04 2025 at 08:27)</a>:</h4>
+<p>In general I think the problem is solved and this thread can be closed.</p>
+
+
+
+<a name="527204275"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527204275" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527204275">(Jul 04 2025 at 16:02)</a>:</h4>
+<p>So your <code>DeviceOwned</code> is another smart pointer that you want it to own a <code>i2c::Device</code>?</p>
+
+
+
+<a name="527204361"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527204361" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527204361">(Jul 04 2025 at 16:03)</a>:</h4>
+<p>Generally, that's not a good idea, you should just use <code>ARef&lt;i2c::Device&lt;..&gt;&gt;</code></p>
+
+
+
+<a name="527204457"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527204457" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527204457">(Jul 04 2025 at 16:04)</a>:</h4>
+<p>but maybe you have special requirement in your driver?</p>
+
+
+
+<a name="527204471"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527204471" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527204471">(Jul 04 2025 at 16:04)</a>:</h4>
+<p>You're in cc to the patch series<br>
+<a href="https://lore.kernel.org/rust-for-linux/20250704153332.1193214-1-igor.korotin.linux@gmail.com/T/#t">https://lore.kernel.org/rust-for-linux/20250704153332.1193214-1-igor.korotin.linux@gmail.com/T/#t</a></p>
+
+
+
+<a name="527204735"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527204735" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Igor Korotin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527204735">(Jul 04 2025 at 16:06)</a>:</h4>
+<p>Maybe I have implemented that incorrectly, but the idea was basically to automatically delete i2c device that is created by i2c_new_client_device and also to protect "non-user" created  devices from deregistration.</p>
+
+
+
+<a name="527205120"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527205120" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527205120">(Jul 04 2025 at 16:09)</a>:</h4>
+<p>You have the "automatically deletion" via device refcount, no? That is if the <code>put_device()</code>, it'll unregister and free the device.</p>
+
+
+
+<a name="527205268"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527205268" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527205268">(Jul 04 2025 at 16:10)</a>:</h4>
+<p>Hmm.. but it seems i2c_client does something special.</p>
+
+
+
+<a name="527206171"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527206171" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527206171">(Jul 04 2025 at 16:15)</a>:</h4>
+<p>I think the implementation of <code>DeviceOwned</code> is still incorrect, after we call <code>i2c_new_client_device()</code>, the refcount of the device is 1, and in the drop function of <code>DeviceOwned</code> which would call <code>put_device()</code>, that reduces the refcount to 0, and then after <code>DeviceOwned::drop()</code> returns <code>ARef::drop()</code> will be called, that would access the device, but the device should be gone already.</p>
+
+
+
+<a name="527207840"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527207840" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527207840">(Jul 04 2025 at 16:25)</a>:</h4>
+<p>Ah, ok, you used <code>.into()</code> in <code>DeviceOwned::new()</code>, and that will make the returned i2c device has refcount=2, so the above case cannot happen.</p>
+
+
+
+<a name="527211428"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/global%20mutable%20variable%20in%20kernel%20module/near/527211428" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module.html#527211428">(Jul 04 2025 at 16:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="934292">Igor Korotin</span> <a href="#narrow/channel/291565-Help/topic/global.20mutable.20variable.20in.20kernel.20module/near/527204735">said</a>:</p>
+<blockquote>
+<p>Maybe I have implemented that incorrectly, but the idea was basically to automatically delete i2c device that is created by i2c_new_client_device and also to protect "non-user" created  devices from deregistration.</p>
+</blockquote>
+<p>So essientially <code>DeviceOwned</code> is a special refcount that controls <code>i2c_unregister_device()</code> behavior, and it works with other refcounts of the device, and that's good ;-)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

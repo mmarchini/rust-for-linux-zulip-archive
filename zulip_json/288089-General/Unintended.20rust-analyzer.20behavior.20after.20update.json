@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>After the commit <a href=\"https://github.com/rust-lang/rust-analyzer/commit/50384460c68f\">50384460c68f</a> (\"Rewrite method resolution to follow rustc more closely\") to rust-analyzer (included in <a href=\"https://github.com/rust-lang/rust-analyzer/releases/tag/2025-11-24\">release 2025-11-24</a> (v0.3.2693)), our current <code>rust-project.json</code> setup does not provide proper IDE support for inherent methods of primitive types:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">foo</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// rust-analyzer does not provide LSP features like autocomplete,</span>\n<span class=\"w\">    </span><span class=\"c1\">// go-to-definition, etc. on `rotate_left`.</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0_</span><span class=\"k\">i32</span><span class=\"p\">.</span><span class=\"n\">rotate_left</span><span class=\"p\">(</span><span class=\"mi\">0</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This is because the method resolution logic has changed. A detailed description of the root cause can be found in this thread [1].</p>\n<p>To fix this issue without touching the rust-analyzer side, I think the following steps are needed:</p>\n<ol>\n<li>Re-enable <code>sysroot_src</code> in rust-project.json.</li>\n<li>Remove <code>-Zcrate-attr=no_std</code> from <code>scripts/Makefile.build</code>.</li>\n<li>Explicitly add <code>#![no_std]</code> to all kernel modules.</li>\n</ol>\n<p><del>... or simply downgrade rust-analyzer.</del></p>\n<p>Appreciate any thoughts on this issue. Specifically, I'm curious about why the unstable <code>-Zcrate-attr=no_std</code> is used instead of <code>#![no_std]</code>.</p>\n<p>[1] <a href=\"https://rust-lang.zulipchat.com/#narrow/channel/185405-t-compiler.2Frust-analyzer/topic/Primitive.20type.20inherent.20method.20lookup.20fails/with/561607963\">https://rust-lang.zulipchat.com/#narrow/channel/185405-t-compiler.2Frust-analyzer/topic/Primitive.20type.20inherent.20method.20lookup.20fails/with/561607963</a></p>",
+        "id": 561607753,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1764757127
+    },
+    {
+        "content": "<p>I replied on the other zulip.</p>",
+        "id": 561611498,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764758184
+    },
+    {
+        "content": "<p>Thanks Jesung, very appreciated that you took a good look at this.</p>\n<blockquote>\n<p>To fix this issue without touching the rust-analyzer side, I think the following steps are needed:</p>\n</blockquote>\n<p>Yeah, we cannot really do that (I mean, everything is possible, but it would be a major shift), and <code>-Zcrate-attr</code> will likely be stabilized anyway.</p>",
+        "id": 561668361,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1764772642
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/288089-General/topic/Unintended.20rust-analyzer.20behavior.20after.20update/near/561668361\">said</a>:</p>\n<blockquote>\n<p>Yeah, we cannot really do that (I mean, everything is possible, but it would be a major shift), and <code>-Zcrate-attr</code> will likely be stabilized anyway.</p>\n</blockquote>\n<p>I see. Since we're moving toward supporting <code>-Zcrate-attr</code> on the rust-analyzer side, I think the only change we need here is explicitly setting <code>sysroot_src</code>.</p>",
+        "id": 561675635,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1764774225
+    },
+    {
+        "content": "<p>If there's going to be a new option in the json for <code>-Zcrate-attr</code>, we probably need to add those too.</p>",
+        "id": 561676614,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1764774438
+    },
+    {
+        "content": "<p>Oh, I missed that one. Thanks for pointing it out.</p>",
+        "id": 561677342,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1764774548
+    },
+    {
+        "content": "<p>Possibly unrelated but I just noticed that resolving <code>.iter()</code> on types where that method is <em>not</em> inherent no longer works for me (and still doesn't after applying <a href=\"https://lore.kernel.org/rust-for-linux/6dbdf6e1c1639ae381ca9ab7041f84728ffa2267.1764062688.git.y.j3ms.n@gmail.com/\">https://lore.kernel.org/rust-for-linux/6dbdf6e1c1639ae381ca9ab7041f84728ffa2267.1764062688.git.y.j3ms.n@gmail.com/</a>.</p>\n<p>Do you folks see that as well?</p>",
+        "id": 566325271,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1767610717
+    },
+    {
+        "content": "<p>IIRC, there's no <code>.iter()</code> trait method in <code>std</code> or <code>syn</code>. Could you provide an example?</p>",
+        "id": 566339292,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1767615195
+    },
+    {
+        "content": "<p>You're right, It's not a trait method, it is an inherent method on <code>&amp;[T]</code></p>",
+        "id": 566384333,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1767628007
+    },
+    {
+        "content": "<p>In fact it didn't work for me even when I did the deref from Vec to slice manually. So it seems to be an issue with inherent slice methods?</p>",
+        "id": 566384440,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1767628036
+    },
+    {
+        "content": "<p>I think it is, since slice is also a primitive type.</p>",
+        "id": 566384713,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1767628116
+    },
+    {
+        "content": "<p>Right, but the patch above did <em>not</em> fix it for me. Does it fix it for you?</p>",
+        "id": 566401305,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1767632639
+    },
+    {
+        "content": "<p>The fix for inherent method resolution was sent as a different patch: <a href=\"https://lore.kernel.org/rust-for-linux/20260101-ra-fix-primitive-v1-1-def809357b4e@gmail.com/\">https://lore.kernel.org/rust-for-linux/20260101-ra-fix-primitive-v1-1-def809357b4e@gmail.com/</a></p>\n<p><span class=\"user-mention silent\" data-user-id=\"761630\">Tamir Duberstein</span> <a href=\"#narrow/channel/288089-General/topic/Unintended.20rust-analyzer.20behavior.20after.20update/near/566401305\">said</a>:</p>\n<blockquote>\n<p>Right, but the patch above did <em>not</em> fix it for me.</p>\n</blockquote>\n<p>Yeah, this is the exact reason why I started this thread :)</p>",
+        "id": 566446970,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1767651297
+    },
+    {
+        "content": "<p>FWIW, I believe we're moving toward supporting multiple rust-analyzer versions [1]. Since the fix requires a quite recent rust-analyzer release (2025-12-22, v0.3.2727), we likely need to account for that multi-version support first.</p>\n<p>[1] <a href=\"https://lore.kernel.org/rust-for-linux/CA+tqQ4+SVQfDmtg5nE0E-staohkHaiZ9en7YK7tJ=S=AkF6=fQ@mail.gmail.com/\">https://lore.kernel.org/rust-for-linux/CA+tqQ4+SVQfDmtg5nE0E-staohkHaiZ9en7YK7tJ=S=AkF6=fQ@mail.gmail.com/</a></p>",
+        "id": 566448645,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1767652177
+    }
+]

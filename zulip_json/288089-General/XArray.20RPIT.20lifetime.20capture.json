@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>In <a href=\"https://github.com/Rust-for-Linux/linux/blob/0303584766b7bdb6564c7e8f13e0b59b6ef44984/rust/kernel/xarray.rs#L104-L118\"><code>xarray</code>'s <code>iter</code> implementation</a>:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">iter</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">Iterator</span><span class=\"o\">&lt;</span><span class=\"n\">Item</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NonNull</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">PointedTo</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">_</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: self.xa is always valid by the type invariant.</span>\n<span class=\"w\">    </span><span class=\"n\">iter</span><span class=\"p\">::</span><span class=\"n\">once</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">xa_find</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">xa</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">::</span><span class=\"n\">MAX</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">XA_PRESENT</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">.</span><span class=\"n\">chain</span><span class=\"p\">(</span><span class=\"n\">iter</span><span class=\"p\">::</span><span class=\"n\">from_fn</span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: self.xa is always valid by the type invariant.</span>\n<span class=\"w\">        </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">xa_find_after</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">xa</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">::</span><span class=\"n\">MAX</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">XA_PRESENT</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}))</span>\n<span class=\"w\">    </span><span class=\"p\">.</span><span class=\"n\">map_while</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">ptr</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">NonNull</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">cast</span><span class=\"p\">()))</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The current return type uses <code>+ '_</code>, which promises that the RPIT (return-position impl Trait) opaque type outlives the lifetime of <code>&amp;self</code>. However, I believe what we actually want here is the opposite: the lifetime of <code>&amp;self</code> outlives the lifetime of the opaque type.</p>\n<p>This would be correctly expressed as:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">iter</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"nb\">Iterator</span><span class=\"o\">&lt;</span><span class=\"n\">Item</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NonNull</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">PointedTo</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"k\">use</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n</code></pre></div>\n<p>Unfortunately, <code>use</code> bounds are not available in Rust 1.78.0, which is the current MSRV for Rust-for-Linux. IIUC, we might want to at least leave a TODO comment to indicate this mismatch and document the intended future improvement.</p>\n<p>Any thoughts?</p>\n<p>Reference: <a href=\"https://rust-lang.github.io/rfcs/3498-lifetime-capture-rules-2024.html#the-outlives-trick\">https://rust-lang.github.io/rfcs/3498-lifetime-capture-rules-2024.html#the-outlives-trick</a></p>",
+        "id": 525476424,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750757024
+    },
+    {
+        "content": "<p>to quote from your link:</p>\n<blockquote>\n<p>It works anyway in this specific case only because the lifetime of the returned opaque type is <em>exactly</em> equal to the lifetime <code>'a</code>. Because equality is symmetric, the fact that our promise is the wrong way around doesn’t matter.</p>\n</blockquote>\n<p>I think this also applies here, the returned iterator lives exactly for <code>'_</code>.</p>\n<p>Now if we could use <code>use&lt;&gt;</code>, then it might make sense to change it, but I don't think that we need a comment, since there are a lot of other places that could make use of this change as well, so I don't think we should single this one out</p>",
+        "id": 525479292,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1750758086
+    },
+    {
+        "content": "<p>Thanks, that makes sense. I was mostly thinking about it from an accuracy perspective, but agreed that it's not critical to call it out in this context.</p>",
+        "id": 525482945,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750759392
+    },
+    {
+        "content": "<p>It doesn't sound like a bad idea to list the ones we know we could eventually change in an issue or similar if someone wants to go through them. It can also serve as a guide for others looking into <code>use&lt;&gt;</code> later on.</p>",
+        "id": 525489922,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750762172
+    },
+    {
+        "content": "<p>If it eventually turns out to be useful, I'm happy to send a patch.</p>",
+        "id": 525527589,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750774126
+    },
+    {
+        "content": "<p>I think having it in an issue would be definitely useful.</p>\n<p>As for a patch, i.e. as a comment, that sounds OK to me too, but <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> mentioned there would be many cases. I only see a few <code>-&gt; impl ... + '...</code> instances at the moment from a quick grep, though.</p>",
+        "id": 525690960,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750850898
+    },
+    {
+        "content": "<p>(It is true that, if we keep adding more, it may not be great to have a comment for each.)</p>",
+        "id": 525691485,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750851091
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/288089-General/topic/XArray.20RPIT.20lifetime.20capture/near/525690960\">said</a>:</p>\n<blockquote>\n<p>I think having it in an issue would be definitely useful.</p>\n<p>As for a patch, i.e. as a comment, that sounds OK to me too, but <span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> mentioned there would be many cases. I only see a few <code>-&gt; impl ... + '...</code> instances at the moment from a quick grep, though.</p>\n</blockquote>\n<p>I didn't actually check how many instances we had <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> but since it comes up a lot when working with borrowing iterators, I thought we might have several...</p>",
+        "id": 525692053,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1750851315
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/288089-General/topic/XArray.20RPIT.20lifetime.20capture/near/525691485\">said</a>:</p>\n<blockquote>\n<p>(It is true that, if we keep adding more, it may not be great to have a comment for each.)</p>\n</blockquote>\n<p>yeah, I think having an issue is a good idea</p>",
+        "id": 525692104,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1750851335
+    },
+    {
+        "content": "<p>Then I'll file an issue with the <code>-&gt; impl ... + '...</code> instances I can find for now. Thanks for the discussion!</p>",
+        "id": 525716247,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750859046
+    }
+]

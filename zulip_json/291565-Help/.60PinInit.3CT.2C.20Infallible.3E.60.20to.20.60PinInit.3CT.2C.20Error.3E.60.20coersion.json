@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> I have an issue with <code>pin_init</code> that I cannot figure out. I have this code:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">configfs</span><span class=\"p\">::</span><span class=\"n\">Group</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"n\">name</span><span class=\"p\">.</span><span class=\"n\">try_into</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">item_type</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"c1\">// TODO: cannot coerce new_mutex!() to impl PinInit&lt;_, Error&gt;, so put mutex inside</span>\n<span class=\"w\">            </span><span class=\"n\">try_pin_init</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"w\"> </span><span class=\"n\">DeviceConfig</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"n\">new_mutex</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"w\"> </span><span class=\"n\">DeviceConfigInner</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">powered</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">false</span><span class=\"p\">,</span>\n<span class=\"w\">                    </span><span class=\"n\">disk</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">None</span><span class=\"p\">,</span>\n<span class=\"w\">                    </span><span class=\"n\">name</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">name</span><span class=\"p\">.</span><span class=\"n\">try_into</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"p\">}),</span>\n<span class=\"w\">            </span><span class=\"p\">}),</span>\n<span class=\"w\">        </span><span class=\"p\">))</span>\n</code></pre></div>\n<p><code>DeviceConfig</code> implements <code>PinInit</code>. I would like to get rid of <code>DeviceConfig</code> and just use a <code>Mutex&lt;DeviceConfigInner&gt;</code>. But I cannot pass the result of <code>new_mutex!(...)</code> as a function argument of type <code>impl PinInit&lt;_, Error&gt;</code>, because <code>new_mutex!(...)</code> returns an <code>impl PinInit&lt;_, Infallible&gt;</code>. Is there some kind of trick to do a conversion here?</p>",
+        "id": 496775881,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738243482
+    },
+    {
+        "content": "<p>Code in context is <a href=\"https://github.com/metaspace/linux/blob/b8d4a770d75bd8365c728089d41b83aa56fa9d15/drivers/block/rnull.rs#L91\">here</a></p>",
+        "id": 496775965,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738243510
+    },
+    {
+        "content": "<p>you could try <code>Ok(new_mutex!()?)</code> though that is somewhat ugly</p>",
+        "id": 496776600,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1738243720
+    },
+    {
+        "content": "<p>ah this is annoying...</p>",
+        "id": 496776643,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243733
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Fiona Behrens</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496776600\">said</a>:</p>\n<blockquote>\n<p>you could try <code>Ok(new_mutex!()?)</code> though that is somewhat ugly</p>\n</blockquote>\n<p>that won't work, since <code>new_mutex</code> is of type <code>impl PinInit&lt;_, Infallible&gt;</code> and not of <code>Result&lt;_, Error&gt;</code></p>",
+        "id": 496776733,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243760
+    },
+    {
+        "content": "<p>I don't think that there is a conversion function, but it should be rather easy to implement...</p>",
+        "id": 496776792,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243783
+    },
+    {
+        "content": "<p>bit confused by the code. does the <code>new_mutex</code> bubble up the error from <code>name.try_into()?</code>? or is that getting lost somewhere</p>",
+        "id": 496776800,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1738243786
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Fiona Behrens</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496776800\">said</a>:</p>\n<blockquote>\n<p>bit confused by the code. does the <code>new_mutex</code> bubble up the error from <code>name.try_into()?</code>? or is that getting lost somewhere</p>\n</blockquote>\n<p>that gets bubbled up, but the error is delayed until the initializer is used</p>",
+        "id": 496776950,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243813
+    },
+    {
+        "content": "<p>no wait, I was confused, that gets bubbled up immediately</p>",
+        "id": 496777066,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243849
+    },
+    {
+        "content": "<p>nope wait, got confused again... the first <code>name.try_into()?</code> gets bubbled up directly inside of the function. The second <code>name.try_into()?</code> is inside of the <code>try_pin_init!</code> macro, which keeps the error until the initializer is run</p>",
+        "id": 496777461,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738243979
+    },
+    {
+        "content": "<p>so essentially <code>name.try_into()?</code> is delayed until the initializer is run</p>",
+        "id": 496777801,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738244063
+    },
+    {
+        "content": "<p>but to get back to the issue, I can add a conversion function, or see if it's possible to implement <code>PinInit&lt;T, E&gt; for I</code> where <code>I: PinInit&lt;T, Infallible&gt;</code> (though that's probably not possible due to orphan rules)</p>",
+        "id": 496777943,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738244114
+    },
+    {
+        "content": "<p>alternatively, we could have a <code>try_new_mutex!</code> macro that returns an <code>impl PinInit&lt;Mutex&lt;T&gt;, E&gt;</code></p>",
+        "id": 496778115,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738244164
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496777943\">said</a>:</p>\n<blockquote>\n<p>but to get back to the issue, I can add a conversion function, or see if it's possible to implement <code>PinInit&lt;T, E&gt; for I</code> where <code>I: PinInit&lt;T, Infallible&gt;</code> (though that's probably not possible due to orphan rules)</p>\n</blockquote>\n<p>This seems like the best solution to me. Isn't there some option that would allow us to bypass the orphan rule?</p>",
+        "id": 496975323,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738319445
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496778115\">said</a>:</p>\n<blockquote>\n<p>alternatively, we could have a <code>try_new_mutex!</code> macro that returns an <code>impl PinInit&lt;Mutex&lt;T&gt;, E&gt;</code></p>\n</blockquote>\n<p>This would cascade to any type that has a <code>new_.*!</code> initializer. Not sure how many that is.</p>",
+        "id": 496975465,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738319485
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496975323\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496777943\">said</a>:</p>\n<blockquote>\n<p>but to get back to the issue, I can add a conversion function, or see if it's possible to implement <code>PinInit&lt;T, E&gt; for I</code> where <code>I: PinInit&lt;T, Infallible&gt;</code> (though that's probably not possible due to orphan rules)</p>\n</blockquote>\n<p>This seems like the best solution to me. Isn't there some option that would allow us to bypass the orphan rule?</p>\n</blockquote>\n<p>I actually don't think it's the orphan rule that's biting us here. The impl just overlaps, since <code>E</code> can be instantiated as <code>Infallible</code>...</p>",
+        "id": 496989592,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738324152
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496989592\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496975323\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496777943\">said</a>:</p>\n<blockquote>\n<p>but to get back to the issue, I can add a conversion function, or see if it's possible to implement <code>PinInit&lt;T, E&gt; for I</code> where <code>I: PinInit&lt;T, Infallible&gt;</code> (though that's probably not possible due to orphan rules)</p>\n</blockquote>\n<p>This seems like the best solution to me. Isn't there some option that would allow us to bypass the orphan rule?</p>\n</blockquote>\n<p>I actually don't think it's the orphan rule that's biting us here. The impl just overlaps, since <code>E</code> can be instantiated as <code>Infallible</code>...</p>\n</blockquote>\n<p>Could it be done for <code>PinInit&lt;T, Error&gt;</code> ? Not as generic, but better than nothing.</p>",
+        "id": 496989813,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738324227
+    },
+    {
+        "content": "<p>hmm I'll check, that might be possible</p>",
+        "id": 496989917,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738324271
+    },
+    {
+        "content": "<p>There should already be a <code>From</code> impl for <code>Error</code> form <code>Infallible</code>, right?</p>",
+        "id": 496989979,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738324297
+    },
+    {
+        "content": "<p>yes, but since <code>Infallible</code> is uninhabited, you create any value from it</p>",
+        "id": 496990057,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738324325
+    },
+    {
+        "content": "<p>so you don't need the <code>From</code> impl</p>",
+        "id": 496990083,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738324337
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/.60PinInit.3CT.2C.20Infallible.3E.60.20to.20.60PinInit.3CT.2C.20Error.3E.60.20coersion/near/496989813\">said</a>:</p>\n<blockquote>\n<p>Could it be done for <code>PinInit&lt;T, Error&gt;</code> ? Not as generic, but better than nothing.</p>\n</blockquote>\n<p>that also overlaps with another impl...</p>",
+        "id": 496990732,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1738324566
+    }
+]

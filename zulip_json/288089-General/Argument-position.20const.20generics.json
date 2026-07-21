@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p>I am currently advocating argument-position const generics (<a href=\"https://rust-lang.zulipchat.com/#narrow/stream/219381-t-libs/topic/atomic.3A.3AOrdering.20as.20a.20const.20generic\">https://rust-lang.zulipchat.com/#narrow/stream/219381-t-libs/topic/atomic.3A.3AOrdering.20as.20a.20const.20generic</a>), and I'd like to know about your thoughts.</p>\n<p>For <code>IoMem</code> currently we just take a supposed-to-be-const-but-not-marked-as-such parameter and use <code>build_assert!</code> to check that it's within bound. We could alternatively change that into a const parameter but that'll look like <code>base.readb::&lt;GPIODIR&gt;</code> instead of <code>base.readb(GPIODIR)</code>. I am purposing that Rust could add argument-position const generics so we can write the latter but behaves as the former.</p>\n<p>I am personally not fond of <code>base.readb::&lt;GPIODIR&gt;</code>, what's your feel towards that syntax?</p>",
+        "id": 303265035,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665410222
+    },
+    {
+        "content": "<p>Not sure if this is something you already had in mind, but as an aside: with more complex hardware, it is very common to have to compute register offsets at runtime (e.g. indexing into an array of registers, or reading register indices from hardware variant descriptions), so in those cases they can't be const.</p>",
+        "id": 303691133,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665597153
+    },
+    {
+        "content": "<p>I think we already have (and probably will continue to have) runtime checked methods.</p>",
+        "id": 303691430,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1665597246
+    },
+    {
+        "content": "<p>it is also probably noteworthy that the status quo is <code>base.read(GPIODIR)</code>: <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/io_mem.rs#L71\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/io_mem.rs#L71</a></p>",
+        "id": 303692306,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1665597528
+    },
+    {
+        "content": "<p>Currently <code>base.read(runtime_value)</code> will compile only if the optimiser can determine <code>runtime_value</code>is within the bound.</p>",
+        "id": 303700526,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665600402
+    },
+    {
+        "content": "<p>You can always use <code>base.try_read(runtime_value).unwrap_or(|| build_error!())</code> to have the same behaviour as the current state</p>",
+        "id": 303700663,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665600460
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Argument-position.20const.20generics/near/303265035\">said</a>:</p>\n<blockquote>\n<p>I am currently advocating argument-position const generics (<a href=\"https://rust-lang.zulipchat.com/#narrow/stream/219381-t-libs/topic/atomic.3A.3AOrdering.20as.20a.20const.20generic\">https://rust-lang.zulipchat.com/#narrow/stream/219381-t-libs/topic/atomic.3A.3AOrdering.20as.20a.20const.20generic</a>), and I'd like to know about your thoughts.</p>\n</blockquote>\n<p>My thoughts are that we experimented with it before and it's largely a misfeature. It provides confusing errors, the only existing implementation is unforgivably hacky, and the syntactic distinction revealing that you are using a const generic argument helps visually distinguish such arguments, since they have special requirements on them.</p>",
+        "id": 303734671,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665615969
+    },
+    {
+        "content": "<p>If you want consistent const prop on a const argument then just add <code>#[inline]</code> as a hint on the function.</p>",
+        "id": 303734945,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665616175
+    },
+    {
+        "content": "<p>That's what we are already doing. I would prefer compile-time check to optimiser-and-link-time check, however.</p>",
+        "id": 303735341,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665616396
+    },
+    {
+        "content": "<p>Hm. Would you prefer to not be able to distinguish such a compile-time check on sight, though?</p>",
+        "id": 303735546,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665616506
+    },
+    {
+        "content": "<p>I don't see much value in that distinguishment. Reader wouldn't care, and writer would have to know what's the correct method signature anyway.</p>",
+        "id": 303735752,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665616626
+    },
+    {
+        "content": "<p>Consider if we have ADT const generics and have the atomic API that uses that. Then we would have also something <code>atomic.fetch_add::&lt;Ordering::Relaxed&gt;(1)</code> which requires turbofish.</p>",
+        "id": 303736034,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665616779
+    },
+    {
+        "content": "<p>Rewriter cares: it means you can't rewrite</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">argpos_const_fn</span><span class=\"p\">(</span><span class=\"mi\">5</span><span class=\"p\">)</span><span class=\"w\"></span>\n</code></pre></div>\n<p>as</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">5</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"n\">argpos_const_fn</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">)</span><span class=\"w\"></span>\n</code></pre></div>\n<p>UNLESS you are entirely in a const context and that just gets confusing, I would think.</p>",
+        "id": 303736047,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665616784
+    },
+    {
+        "content": "<p>The turbofish is cute. <em>nods</em></p>",
+        "id": 303736149,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665616840
+    },
+    {
+        "content": "<p>Turbofish is not easy to type</p>",
+        "id": 303736191,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665616868
+    },
+    {
+        "content": "<p>I personally don't care much TBH, I guess we could just send a patch to change existing <code>.readb(offset)</code> to <code>.readb::&lt;OFFSET&gt;()</code> and see how other kernel devs react.</p>",
+        "id": 303736326,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665616932
+    },
+    {
+        "content": "<p>Hmm. In terms of typing difficulty, most brackets kinda suck: only [] are accessible without shift on conventional keyboard layouts, yet they are the least used brackets.</p>",
+        "id": 303736621,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665617140
+    },
+    {
+        "content": "<p>All of the <code>::&lt;&gt;()</code> requires shift and I tend to use the right shift button only, so it's quite uncomfortable for me :(</p>",
+        "id": 303736969,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1665617336
+    },
+    {
+        "content": "<p>Ohh, I am a left-shift-only person. That sucks, yeah.</p>",
+        "id": 303737028,
+        "sender_full_name": "Jubilee",
+        "timestamp": 1665617372
+    },
+    {
+        "content": "<p>In the Spanish one <code>[]{}</code> require AltGr,  <code>():;&gt;</code> require Shift.</p>",
+        "id": 303738593,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1665618367
+    },
+    {
+        "content": "<p>At least <code>&lt;</code> doesn't require anything :P</p>",
+        "id": 303738654,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1665618427
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Argument-position.20const.20generics/near/303736969\">said</a>:</p>\n<blockquote>\n<p>All of the <code>::&lt;&gt;()</code> requires shift and I tend to use the right shift button only, so it's quite uncomfortable for me :(</p>\n</blockquote>\n<p>No characters should be difficult to type for a person who is writing code. I can recommend getting into custom keyboard layouts designed for programming. There are many options. I use this one myself <a href=\"/user_uploads/35136/EepapRmI43372ntYMIASoSHA/QMK-Configurator.pdf\">QMK-Configurator.pdf</a>. It takes a while to rewire the brain at first, but it is totally worth it after.</p>",
+        "id": 307271622,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1667293930
+    }
+]

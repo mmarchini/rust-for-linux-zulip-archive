@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>Currently we have a proliferation of macros due to the need of lock class keys.</p>\n<p>I have a quite hacky POC that uses inline assembly to attach unique data per call site: <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=release&amp;edition=2024&amp;gist=059879a9f9d629d62f7fd207cc0b1b22\">https://play.rust-lang.org/?version=stable&amp;mode=release&amp;edition=2024&amp;gist=059879a9f9d629d62f7fd207cc0b1b22</a>.</p>\n<p>I think this is too hacky to actually use in the kernel, but I'm throwing it here to invite ideas that would improve the ergnomics when initialization requires lock classes.</p>",
+        "id": 572430773,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770398846
+    },
+    {
+        "content": "<p>I'm guessing this is the idea I mentioned before?</p>",
+        "id": 572430894,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770398886
+    },
+    {
+        "content": "<p>Yes, this is the idea that we've discussed long time ago</p>",
+        "id": 572430937,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770398904
+    },
+    {
+        "content": "<p>This deduplicatoin stuff seems interesting. Can you say more?</p>",
+        "id": 572431287,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399022
+    },
+    {
+        "content": "<p>I think we previously discussed if const ptr can improve this? I ended up not using const ptr as <code>Location::caller()</code> from const context is not the actual caller.</p>",
+        "id": 572431290,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770399023
+    },
+    {
+        "content": "<p>The deduplication thing is basically to ensure that if a function gets instantiated twice (e.g. into two crates because it's inlinable), the same instance is provided. If we just use the data without deduplication, then we have  2 lock class keys where we want one.</p>",
+        "id": 572431471,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770399087
+    },
+    {
+        "content": "<p>I think we might want a version that creates two callsites in that case</p>",
+        "id": 572431599,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399137
+    },
+    {
+        "content": "<p>maybe</p>",
+        "id": 572431604,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399141
+    },
+    {
+        "content": "<p>that was the behavior I intended when I suggested it at least</p>",
+        "id": 572431636,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399155
+    },
+    {
+        "content": "<p>I guess for the lockdep use case it won't hurt to have duplicates, it just makes lockdep less efficient as it needs to track more classes</p>",
+        "id": 572431801,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770399208
+    },
+    {
+        "content": "<p>the other use-case I saw was kmalloc, which has some profiling feature per kmalloc callsite</p>",
+        "id": 572432417,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399429
+    },
+    {
+        "content": "<p>the deduplication also seems unnecessary there</p>",
+        "id": 572432436,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399435
+    },
+    {
+        "content": "<p>cool that you can merge them tho</p>",
+        "id": 572432522,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770399463
+    },
+    {
+        "content": "<p>Okay, perhaps we should introduce a version that doesn't dedup and place some caveat warnings there</p>",
+        "id": 572432549,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770399472
+    },
+    {
+        "content": "<p>Lina wrote <a href=\"https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a\">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>",
+        "id": 572461023,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1770411003
+    },
+    {
+        "content": "<p>There is a remap-path-prefix, although somehow in the build system we only have code to strip it, but nothing that adds it? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 572465140,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770412989
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671509\">Janne Grunau</span> <a href=\"#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572461023\">said</a>:</p>\n<blockquote>\n<p>Lina wrote <a href=\"https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a\">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>\n</blockquote>\n<p>This was discussed very early on. The vibe at the time is that this is too expensive as it needs to perform a lookup and allocation every time (even it's only used with lockdep enabled). With inline asm trick it'll be cheaper.</p>",
+        "id": 572465327,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770413064
+    },
+    {
+        "content": "<p>it passes absolute paths to the compiler <a href=\"https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9\">https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9</a></p>",
+        "id": 572466559,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1770413713
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671509\">Janne Grunau</span> <a href=\"#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572461023\">said</a>:</p>\n<blockquote>\n<p>Lina wrote <a href=\"https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a\">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>\n</blockquote>\n<p>I think one issue of that is using <code>Box</code> to allocate lock keys dynamically (and automatically). In general we want to avoid calling allocation inside lockdep (the automatic lock keys is considered as an extension to lockdep).</p>",
+        "id": 572467884,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1770414427
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671509\">Janne Grunau</span> <a href=\"#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572466559\">said</a>:</p>\n<blockquote>\n<p>it passes absolute paths to the compiler <a href=\"https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9\">https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9</a></p>\n</blockquote>\n<p>That fixes the issue wrong way around, it should be like this:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/Makefile b/rust/Makefile</span>\n<span class=\"gh\">index 629b3bdd2b20..d87e3dd254bc 100644</span>\n<span class=\"gd\">--- a/rust/Makefile</span>\n<span class=\"gi\">+++ b/rust/Makefile</span>\n<span class=\"gu\">@@ -579,6 +579,7 @@ quiet_cmd_rustc_library = $(if $(skip_clippy),RUSTC,$(RUSTC_OR_CLIPPY_QUIET)) L</span>\n<span class=\"w\"> </span>       $(filter-out $(skip_flags),$(rust_flags)) $(rustc_target_flags) \\\n<span class=\"w\"> </span>       --emit=dep-info=$(depfile) --emit=obj=$@ \\\n<span class=\"w\"> </span>       --emit=metadata=$(dir $@)$(patsubst %.o,lib%.rmeta,$(notdir $@)) \\\n<span class=\"gi\">+       --remap-path-prefix=$(abspath $(srctree))= \\</span>\n<span class=\"w\"> </span>       --crate-type rlib -L$(objtree)/$(obj) \\\n<span class=\"w\"> </span>       --crate-name $(patsubst %.o,%,$(notdir $@)) $&lt; \\\n<span class=\"w\"> </span>       --sysroot=/dev/null \\\n<span class=\"gh\">diff --git a/scripts/Makefile.build b/scripts/Makefile.build</span>\n<span class=\"gh\">index 204e58dd1bb0..336f0670299f 100644</span>\n<span class=\"gd\">--- a/scripts/Makefile.build</span>\n<span class=\"gi\">+++ b/scripts/Makefile.build</span>\n<span class=\"gu\">@@ -330,6 +330,7 @@ rust_common_cmd = \\</span>\n<span class=\"w\"> </span>   -Zcrate-attr=no_std \\\n<span class=\"w\"> </span>   -Zcrate-attr='feature($(rust_allowed_features))' \\\n<span class=\"w\"> </span>   -Zunstable-options --extern pin_init --extern kernel \\\n<span class=\"gi\">+   --remap-path-prefix=$(abspath $(srctree))= \\</span>\n<span class=\"w\"> </span>   --crate-type rlib -L $(objtree)/rust/ \\\n<span class=\"w\"> </span>   --crate-name $(basename $(notdir $@)) \\\n<span class=\"w\"> </span>   --sysroot=/dev/null \\\n</code></pre></div>",
+        "id": 572468213,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770414623
+    }
+]

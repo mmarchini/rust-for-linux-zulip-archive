@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>Hi all,<br>\nI previously worked on a pointer formatting patch for the kernel <code>fmt</code> module (last submitted version: <a href=\"https://lore.kernel.org/rust-for-linux/20260311-hashedptr-v11-1-dd1b8e8b0fb0@kylinos.cn/\">https://lore.kernel.org/rust-for-linux/20260311-hashedptr-v11-1-dd1b8e8b0fb0@kylinos.cn/</a>).</p>\n<p>I learned a lot from all the valuable feedback everyone gave on earlier versions. I've made another round of improvements recently, and I'd like to get some early review suggestions before submitting the next formal version.</p>\n<p>The latest version ready for review is at:<br>\n<a href=\"https://github.com/alvinsun039/linux-torvalds/commit/eee0c7e107042a98914b47a6f0d99fd05145f5ac\">https://github.com/alvinsun039/linux-torvalds/commit/eee0c7e107042a98914b47a6f0d99fd05145f5ac</a></p>\n<h3>Key changes:</h3>\n<ul>\n<li>Add <code>T: ?Sized</code> bound to all <code>Pointer</code> trait implementations, combined with standard <code>cast::&lt;()&gt;()</code> type conversion in <code>HashedPtr</code> to uniformly extract pointer data address and automatically discard metadata, adding support for <code>{:p}</code> formatting of all fat pointer types</li>\n<li>Add <code>Pointer</code> trait implementation for mutable references</li>\n<li>Add zero-padding format support</li>\n<li>Refactor test suite: add RAII state guard, split into independent test cases, add fat pointer equality validation tests<br>\nAny comments, suggestions or review feedback are highly appreciated!</li>\n</ul>\n<p>Thanks,<br>\nAlvin Sun</p>",
+        "id": 579721464,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773671471
+    },
+    {
+        "content": "<p>I think this would be a lot easier to read if you could expand the uses of <code>Pointer::fmt</code> into <code>&lt;YourTypeGoesHere as Pointer&gt;::fmt</code></p>",
+        "id": 579724137,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773672087
+    },
+    {
+        "content": "<p>Great call, thanks! The code reads much clearer now. Any thoughts on the implementation?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Pointer.20formatting.20patch.20review/near/579724137\">said</a>:</p>\n<blockquote>\n<p>I think this would be a lot easier to read if you could expand the uses of <code>Pointer::fmt</code> into <code>&lt;YourTypeGoesHere as Pointer&gt;::fmt</code></p>\n</blockquote>",
+        "id": 579729533,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773673383
+    },
+    {
+        "content": "<p>What I'd want to see is the compiler errors that result from various methods of printing a pointer.</p>",
+        "id": 579742956,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773676556
+    },
+    {
+        "content": "<p>I cannot really judge what they will be from the implementation.</p>",
+        "id": 579743004,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773676570
+    },
+    {
+        "content": "<p>What you mean is that you don't want printing pointers in the kernel, even if it's just the hash of the pointer?</p>",
+        "id": 580355614,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773906462
+    },
+    {
+        "content": "<p>Let's say I do <code>pr_warn(\"{:?}\", my_raw_ptr)</code>, then what happens?</p>",
+        "id": 580357188,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773906934
+    },
+    {
+        "content": "<p>You only implemented <code>{:p}</code> formatting, not Debuig</p>",
+        "id": 580357243,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773906942
+    },
+    {
+        "content": "<p>It's pretty hard to get rid of that debug impl</p>",
+        "id": 580393848,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773917182
+    },
+    {
+        "content": "<p>(I personally also don't think having Debug printing the raw pointer being too big of a problem)</p>",
+        "id": 580394246,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773917293
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>  Do you think we need to consider fat pointers, or is it sufficient to only handle thin pointers?</p>",
+        "id": 580408326,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773921745
+    },
+    {
+        "content": "<p>The original motivation for submitting this patch was to address the issue where <code>impl_fmt_adapter_forward!</code> forwarding was printing the stack address of the pointer variable itself, rather than the value of the pointer.</p>",
+        "id": 580408571,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773921800
+    },
+    {
+        "content": "<p>For that motivation, this would be the most straightforward fix?</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/fmt.rs b/rust/kernel/fmt.rs</span>\n<span class=\"gh\">index 1e8725eb44ed..61542a0e3341 100644</span>\n<span class=\"gd\">--- a/rust/kernel/fmt.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/fmt.rs</span>\n<span class=\"gu\">@@ -17,10 +17,9 @@</span>\n<span class=\"w\"> </span>macro_rules! impl_fmt_adapter_forward {\n<span class=\"w\"> </span>    ($($trait:ident),* $(,)?) =&gt; {\n<span class=\"w\"> </span>        $(\n<span class=\"gd\">-            impl&lt;T: $trait&gt; $trait for Adapter&lt;T&gt; {</span>\n<span class=\"gi\">+            impl&lt;T: $trait&gt; $trait for Adapter&lt;&amp;T&gt; {</span>\n<span class=\"w\"> </span>                fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; Result {\n<span class=\"gd\">-                    let Self(t) = self;</span>\n<span class=\"gd\">-                    $trait::fmt(t, f)</span>\n<span class=\"gi\">+                    &lt;T as $trait&gt;::fmt(self.0, f)</span>\n<span class=\"w\"> </span>                }\n<span class=\"w\"> </span>            }\n<span class=\"w\"> </span>        )*\n</code></pre></div>",
+        "id": 580409374,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773922033
+    },
+    {
+        "content": "<p>Alice previously reminded that directly printing kernel pointers is unsafe, so we still need to implement pointer hashing functionality through scnprintf(\"%p\", ...).</p>",
+        "id": 580412327,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773922927
+    },
+    {
+        "content": "<p>I think these are really independent works? I don't think printing out actual addressses unhashed is worse than printing out wrong stack addresses unhashed</p>",
+        "id": 580412621,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773923009
+    },
+    {
+        "content": "<p>So these are two separate patches: first fix pointer printing, then add hash ptr support? For custom Pointer trait implementations, should we keep it simple and only consider thin pointers?</p>",
+        "id": 580415968,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773923897
+    },
+    {
+        "content": "<p>Or do you have any better suggestions?</p>",
+        "id": 580415987,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773923903
+    },
+    {
+        "content": "<p>I think an earlier version uses hash and defer to Rust pointer fmt approach, that approach works very well with fat pointers. With the current approach I think you cannot support fat pointers without unstable features like ptr_metadata.</p>",
+        "id": 580417113,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1773924204
+    },
+    {
+        "content": "<p>I'm converting fat pointers to thin pointers inside HashedPtr using <code>let ptr = self.0.cast::&lt;()&gt;()</code>.</p>",
+        "id": 580420120,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1773924977
+    }
+]

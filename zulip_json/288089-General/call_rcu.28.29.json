@@ -1,0 +1,320 @@
+[
+    {
+        "content": "<p>We (Nova, Tyr) need support for <code>call_rcu()</code>. Anyone working on infrastructure for that already?</p>",
+        "id": 585900413,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776345658
+    },
+    {
+        "content": "<p>my understanding is it was not yet added due to lack of usecase. <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span>  will have more context.</p>",
+        "id": 585955170,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1776358727
+    },
+    {
+        "content": "<p>I think Alice has some POC for her own usage: <a href=\"https://lore.kernel.org/rust-for-linux/20260116-rcu-box-v1-1-38ebfbcd53f0@google.com/\">https://lore.kernel.org/rust-for-linux/20260116-rcu-box-v1-1-38ebfbcd53f0@google.com/</a></p>\n<p>The question is: do Nova and Tyr want to use <code>RcuBox</code> or the objects being <code>call_rcu()</code> on have their own <code>rcu_head</code>.</p>",
+        "id": 585969642,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1776363644
+    },
+    {
+        "content": "<p>The latter</p>",
+        "id": 585970165,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1776363822
+    },
+    {
+        "content": "<p>I see, so likely you will need to play the same \"intrusive data\" game as <code>hrtimer</code> and <code>work_struct</code>, I do have a patchset to consolidate this: <a href=\"https://lore.kernel.org/rust-for-linux/20260128215330.58410-1-boqun.feng@gmail.com/\">https://lore.kernel.org/rust-for-linux/20260128215330.58410-1-boqun.feng@gmail.com/</a> so that you won't need to do <code>impl_has_rcu_head!()</code> for your types.</p>\n<p>Are the object types defined at C side?</p>",
+        "id": 585970845,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1776364031
+    },
+    {
+        "content": "<p>No, it's our own pure Rust data</p>\n<p>We want to defer dropping <code>DriverFence::data</code> because C callbacks (guarded with RCU) might still be accessing it (the callbacks being our Rust versions, but doing container_of on the C embedded structure)</p>\n<p><a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v3-3/rust/kernel/sync/dma_fence.rs?ref_type=heads#L465\">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v3-3/rust/kernel/sync/dma_fence.rs?ref_type=heads#L465</a></p>",
+        "id": 586054706,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776408197
+    },
+    {
+        "content": "<p>Does the C fence struct already have an <code>rcu_head</code> field?</p>",
+        "id": 586054912,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776408287
+    },
+    {
+        "content": "<p>It has <a href=\"https://elixir.bootlin.com/linux/v7.0-rc1/source/include/linux/dma-fence.h#L91\">that</a>, but doesn't seem to be available before we drop the refcount to 0</p>",
+        "id": 586055159,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776408377
+    },
+    {
+        "content": "<p>Ok, but are we not using it in the same case as when it would be used in C?</p>",
+        "id": 586055319,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776408442
+    },
+    {
+        "content": "<p>No. It's only used to perform <code>kfree_rcu()</code> if there's no provided release() function (as far as I can tell).</p>\n<p>We want to use it to defer freeing data until every potential reader has seen that we signaled the fence</p>",
+        "id": 586056512,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776408954
+    },
+    {
+        "content": "<p>I thought the readers can't access the Rust data to start with?</p>",
+        "id": 586056762,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776409061
+    },
+    {
+        "content": "<p>Well yes, but actually no <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>The issue is that sooner or later someone will want to add support for the more exotic dma_fence callbacks. We (I) currently only support the mandatory ones, get_timeline_name() and get_driver_name(), whose life time issues we can annihilate completely with owned strings.</p>\n<p>But more <a href=\"https://elixir.bootlin.com/linux/v7.0-rc1/source/include/linux/dma-fence.h#L187\">exotic callbacks</a> are sooner or later going to be implemented in Rust, and there C just returns the embedded C struct.</p>\n<p>But the Rust driver will most likely need its generic data T in the Rust callback. So we have to pass it over.</p>\n<p>And now what might happen that a different code path of the Rust driver drops that data, and the C backend_ops mechanism has no awareness of it, and then you get a UAF in Rust</p>",
+        "id": 586057291,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776409252
+    },
+    {
+        "content": "<p>Thus, dropping data needs to be defered (RCU) until the C callbacks definitely cannot see data anymore, i.e. until after the fence has signaled</p>",
+        "id": 586057516,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776409341
+    },
+    {
+        "content": "<p>But if you provide any such access to the private data, doesn't that cause issues with module unloading?</p>",
+        "id": 586058248,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776409619
+    },
+    {
+        "content": "<p>Not if we guarantee that all fences get signaled before the module unloads, which we now want to do (even if Christian doesn't like that, but he can be convinced) <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 586058554,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776409750
+    },
+    {
+        "content": "<p>While that sounds like a fine thing to require, it sounds very difficult to enforce that strictly enough that you can rely on it being true in unsafe code. For that to be the case, it needs to be impossible to bypass it in safe code, no matter how stupid that safe code is.</p>",
+        "id": 586058835,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776409870
+    },
+    {
+        "content": "<p>To give an example, what if I call <code>mem::forget</code> on my driver fence or fence context?</p>",
+        "id": 586059197,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776409949
+    },
+    {
+        "content": "<blockquote>\n<p>While that sounds like a fine thing to require, it sounds very difficult to enforce that strictly</p>\n</blockquote>\n<p>I can't follow. What is the \"that\" and the \"it\" in this sentence?<br>\nYou mean enforcing signalling on drop?</p>",
+        "id": 586059211,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776409953
+    },
+    {
+        "content": "<p>Yes</p>",
+        "id": 586059304,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776409990
+    },
+    {
+        "content": "<p>Or, rather, enforcing signalling prior to module unload.</p>",
+        "id": 586059332,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776410000
+    },
+    {
+        "content": "<p>Unsafe code cannot rely on drop being called. For example, maybe the driver has a refcount cycle that prevents the value from being cleaned up.</p>",
+        "id": 586059427,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776410036
+    },
+    {
+        "content": "<p>Do you mean that a driver can unload without all Rust data being dropped automatically, <em>without</em> the driver doing something very stupid?</p>",
+        "id": 586059456,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776410044
+    },
+    {
+        "content": "<p>Sure, the driver author could accidentally have a refcounting cycle that leads to cleanup not happening.</p>",
+        "id": 586059542,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776410088
+    },
+    {
+        "content": "<p>Yes, but the driver would than circumvent our intended design. There are reasons why we do not give drivers a <code>DriverFence</code> as an <code>Arc</code>. Like that reason for instance.</p>\n<p>That needs to be documented of course. Not dropping all your fences on unload is a bug and leads to undefined behavior.</p>\n<p>At a certain point, you just have to trust the drivers. Drivers could also unload their module, clean up everything, but forget to switch off the GPU, which will then blow up the entire computer through DMA</p>\n<p>But I'm open to hear alternative solutions, of course</p>",
+        "id": 586060961,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776410589
+    },
+    {
+        "content": "<p>We have to distinguish between \"if this happens, it would be a bug\" and \"I'm sufficiently confident that this won't happen that I am going to rely on it in unsafe code\". At first glance, \"fence must be signalled prior to module unload\" sounds like the kind of thing that is in the first category, but not the second category.</p>\n<p>Maybe there is some way to put it in the second strategy, but I would need to hear how its enforced to feel confident about it.</p>",
+        "id": 586061079,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776410629
+    },
+    {
+        "content": "<p>To make an analogy, the red/black tree obviously requires that the elements are stored in sorted order. Otherwise it can't find elements when you perform a look-up. However, the end user <em>could</em> create an element containing a mutex that lets you change its value without moving its location in the tree. The end-user could utilize this to create a red/black tree that is out of order, and the red/black tree abstraction can do nothing to prevent that.</p>\n<p>So because of this, I designed the red/black tree so that user code doing the above will <em>not</em> lead to undefined behavior. It will lead to it not functioning correctly. But not UB.</p>",
+        "id": 586061477,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776410759
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/288089-General/topic/call_rcu.28.29/near/586060961\">said</a>:</p>\n<blockquote>\n<p>Yes, but the driver would than circumvent our intended design. There are reasons why we do not give drivers a <code>DriverFence</code> as an <code>Arc</code>. Like that reason for instance.</p>\n</blockquote>\n<p>I don't mean that the Driver fence itself would be an Arc, but that the Driver would put it in a struct and that struct is in an Arc</p>",
+        "id": 586066272,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776412351
+    },
+    {
+        "content": "<p>Ack, I understand the problem.</p>\n<p>Sounds like something we could brainstorm more about in our Monday meeting if you've got time to join</p>",
+        "id": 586066656,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776412471
+    },
+    {
+        "content": "<p>I'd be happy to, but unfortunately I'm travelling to the US for a conference next week.</p>",
+        "id": 586069436,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776413246
+    },
+    {
+        "content": "<p>I can join the week after.</p>",
+        "id": 586069439,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776413247
+    },
+    {
+        "content": "<p>Hmm, so I'm not the great Rust expert, but to brainstorm a bit:</p>\n<p>Would it be possible to create a type constraint / container type that cannot be stuffed into a refcounted container?</p>",
+        "id": 586086679,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776418199
+    },
+    {
+        "content": "<p>No, if you hand the user a value, then it's possible for the user to throw away the value without running drop. You can't prevent this.</p>",
+        "id": 586088006,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776418597
+    },
+    {
+        "content": "<p>But even if that's possible, it's probably not doable in practice because we cannot that drastically constrain a driver from where it wants to store its fences, I believe</p>",
+        "id": 586088015,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776418600
+    },
+    {
+        "content": "<p>Why is it that the receiver side of the fence needs to touch the user data? I recall from previous discussions that we concluded it was not required, and the fact that it's not required was the only reason we could stop using the two layers of fences.</p>",
+        "id": 586088233,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776418662
+    },
+    {
+        "content": "<p>I think if touching the user data / function pointers defined by the driver is required, then you have to go back to the two-fence solution where only the second fence is safe to outlive the module unload.</p>",
+        "id": 586088400,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776418704
+    },
+    {
+        "content": "<p>Well, that's a bit CS-Philosophy now</p>\n<p>The consumer fence, or rather its user, doesn't need the user data and doesn't know about it.</p>\n<p>Through the backend_ops callbacks, it more or less asks the producer of the fence (the driver, the owner of the DriverFence) about the state of that fence. And for this the producer again needs the data, probably</p>",
+        "id": 586088589,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776418764
+    },
+    {
+        "content": "<p>We are currently discussing a two-fence solution. See my code linked above.</p>\n<p>The difference since a few weeks ago is just that both fences now live in the same chunk of memory; yet their accessability life time is still decoupled</p>",
+        "id": 586089133,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776418941
+    },
+    {
+        "content": "<p>I think that to satisfy the requirement that the module can be unloaded even if there are still consumers of the fence, then it's simply not possible for the consumer to call any function that is in the module. The consumer will only be able to access information for which we can write generic code in the core kernel.</p>",
+        "id": 586089897,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776419198
+    },
+    {
+        "content": "<p>I guess, looking over the code and such, a bigger question to me is the <code>struct dma_fence_ops</code> value. This is a value in static memory and if any of the function pointers are per-driver, then the entire ops value is also going to be part of the module.</p>\n<p>So you can't even access the ops value itself from a receiver if that is the case.</p>",
+        "id": 586090958,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776419523
+    },
+    {
+        "content": "<p>I guess I'm a bit sceptical of the claim that we can implement fences that can survive module unload without further changes to the C side ...</p>",
+        "id": 586091051,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776419550
+    },
+    {
+        "content": "<p>The C guys are already solving exactly that problem (I think that was merged recently, let me search…)</p>\n<p>When a fence signals, the ops pointer in the fences gets set to NULL and ops access is guarded by RCU</p>",
+        "id": 586096652,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776421334
+    },
+    {
+        "content": "<p>As for \"consumers access data\":</p>\n<p>I think that is just a reality. That is how the dma_fence contract works. Consumers must be able to ask the producers about what is the state of the job on the hardware</p>\n<p>That cannot be abolished</p>",
+        "id": 586096885,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776421411
+    },
+    {
+        "content": "<blockquote>\n<p>then it's simply not possible for the consumer to call any function that is in the module</p>\n</blockquote>\n<p>Yes it is – IF we only unload the module once all consumers are done with said accesses</p>",
+        "id": 586096996,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776421448
+    },
+    {
+        "content": "<p>yeah, here it is:<br>\n<a href=\"https://gitlab.freedesktop.org/drm/misc/kernel/-/blob/drm-misc-next/drivers/dma-buf/dma-fence.c?ref_type=heads#L375\">https://gitlab.freedesktop.org/drm/misc/kernel/-/blob/drm-misc-next/drivers/dma-buf/dma-fence.c?ref_type=heads#L375</a></p>",
+        "id": 586098107,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776421821
+    },
+    {
+        "content": "<p>You can always rely on Christian <span aria-label=\"sunglasses\" class=\"emoji emoji-1f60e\" role=\"img\" title=\"sunglasses\">:sunglasses:</span></p>",
+        "id": 586098172,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776421846
+    },
+    {
+        "content": "<p>The fences can survive module unload, just that it must be signaled so the op vtable are swapped out.</p>",
+        "id": 586112586,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776426833
+    },
+    {
+        "content": "<p>I think we should not focus too much on code UAF as it's basically not possible to prevent entirely with Rust, given that you can easily just hand out function pointers or <code>&amp;‘static STATIC</code>, and none of them are actually <code>'static</code> with the presence of module unload.</p>",
+        "id": 586112838,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776426911
+    },
+    {
+        "content": "<p>Code UAF is solved by C if I am not missing something</p>",
+        "id": 586114019,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1776427286
+    },
+    {
+        "content": "<p>If you mean \"programmer must not mess up\" by \"solve\"</p>",
+        "id": 586136519,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776433288
+    },
+    {
+        "content": "<p>What about leaking kernel virtual addresses used by modules?  Then the impact of code UAF is limited to a kernel oops.</p>\n<p>Fixing this properly would require language changes or disabling module unload entirely.</p>",
+        "id": 590312429,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1776895951
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> if you haven't started working on squashing Alice's patch and mine,  I pushed a version at: <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/boqun/linux.git/log/?h=rust-rcu\">https://git.kernel.org/pub/scm/linux/kernel/git/boqun/linux.git/log/?h=rust-rcu</a>, and I can send it out if you want (and if that could save you some time).</p>",
+        "id": 600152436,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1780597768
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> a <em>new</em> version you mean. I guess it contains the additional types that Danilo requested. So if you can send that, that would be helpful, yes. Thx.</p>",
+        "id": 600612098,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1780646388
+    },
+    {
+        "content": "<p>Sent: <a href=\"https://lore.kernel.org/rust-for-linux/20260605133541.22569-1-boqun@kernel.org/\">https://lore.kernel.org/rust-for-linux/20260605133541.22569-1-boqun@kernel.org/</a>.</p>\n<p>Although, I accidentally duplicated first two patches. Please use this one for RcuBox:</p>\n<p><a href=\"https://lore.kernel.org/rust-for-linux/20260605133541.22569-3-boqun@kernel.org/\">https://lore.kernel.org/rust-for-linux/20260605133541.22569-3-boqun@kernel.org/</a></p>",
+        "id": 600684454,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1780666805
+    }
+]

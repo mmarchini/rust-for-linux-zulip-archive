@@ -1,0 +1,380 @@
+[
+    {
+        "content": "<p>Hiya folks, I see <code>ForeignOwnable</code> was added in <a href=\"https://github.com/Rust-for-Linux/linux/commit/26949bac1e8264c711a81f962845aa0538279c78\">https://github.com/Rust-for-Linux/linux/commit/26949bac1e8264c711a81f962845aa0538279c78</a> with <code>    \n*const core::ffi::c_void</code> in its API, but I'm wondering: could we/should we make that <code>NonNull&lt;c_void&gt;</code> instead?</p>",
+        "id": 475942695,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728502402
+    },
+    {
+        "content": "<p>It's designed to directly interoperate with C code, using <code>NonNull</code> would make every user have to add <code>.as_ptr()</code></p>",
+        "id": 475943684,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502695
+    },
+    {
+        "content": "<p>That's a point. We could use <code>NonNull</code> in one direction and not the other (only in <code>from_foreign</code>). Would that be better?</p>",
+        "id": 475943895,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728502801
+    },
+    {
+        "content": "<p>you need both directions though</p>",
+        "id": 475943977,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502819
+    },
+    {
+        "content": "<p>since the pointer that comes from <code>into_foreign</code> gets passed to C</p>",
+        "id": 475944041,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502847
+    },
+    {
+        "content": "<p>Sorry, what do you mean? I'm proposing that <code>into_foreign</code> remain unchanged but <code>from_foreign</code> take a <code>NonNull</code> instead of a raw pointer.</p>",
+        "id": 475944142,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728502892
+    },
+    {
+        "content": "<p>ah, I got it in reverse</p>",
+        "id": 475944184,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502912
+    },
+    {
+        "content": "<p>but one calls <code>from_foreign</code> with a pointer coming from C</p>",
+        "id": 475944270,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502934
+    },
+    {
+        "content": "<p>and normally one doesn't check for null</p>",
+        "id": 475944315,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728502959
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475944315\">said</a>:</p>\n<blockquote>\n<p>and normally one doesn't check for null</p>\n</blockquote>\n<p>This is an interesting detail. Where is the code that uses this btw? Obviously not in tree, right?</p>",
+        "id": 475944390,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728502993
+    },
+    {
+        "content": "<p>yeah there are some occurrences in the old rust branch</p>",
+        "id": 475944783,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728503143
+    },
+    {
+        "content": "<p>we <em>could</em> use <code>NonNull</code>, but often one would use <code>NonNull::new_unchecked</code> and thus have an additional <code>unsafe</code> call</p>",
+        "id": 475944923,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728503196
+    },
+    {
+        "content": "<p>I'd argue that's preferable, since you want to demand extra scrutiny in those cases =/</p>",
+        "id": 475945018,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728503240
+    },
+    {
+        "content": "<p>I don't think that there is extra scrutiny, we're fully trusting the C side to provide a non-null pointer if we call <code>new_unchecked</code></p>",
+        "id": 475945172,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728503294
+    },
+    {
+        "content": "<p>That's not what I mean. What I mean is that the reader would see <code>new_unchecked</code> and would pause to think a moment about whether the operand is really guaranteed to be non-null.</p>",
+        "id": 475945259,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728503330
+    },
+    {
+        "content": "<p>compare the two versions:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">VTable</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Operations</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">foo_callback</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">ffi</span><span class=\"p\">::</span><span class=\"n\">c_void</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">foo</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ForeignOwnable</span><span class=\"p\">::</span><span class=\"n\">from_foreign</span><span class=\"p\">(</span><span class=\"n\">NonNull</span><span class=\"p\">::</span><span class=\"n\">new_unchecked</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">VTable</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Operations</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">foo_callback</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">ffi</span><span class=\"p\">::</span><span class=\"n\">c_void</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">foo</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">ForeignOwnable</span><span class=\"p\">::</span><span class=\"n\">from_foreign</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I don't think having the <code>new_unchecked</code> there will add any additional scrutiny</p>",
+        "id": 475945987,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728503598
+    },
+    {
+        "content": "<p>Surely signaling in the type signature that the operand must not be null is better than not? I mean, maybe people won't squint, but they're even less likely to if the type doesn't communicate the requirement.</p>",
+        "id": 475946322,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728503726
+    },
+    {
+        "content": "<p>Some implementations of <code>ForeignOwnable</code> might have to use null</p>",
+        "id": 475947188,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728504063
+    },
+    {
+        "content": "<p>I don't know if we use this, but we could implement it for <code>Option&lt;Box&lt;T&gt;&gt;</code></p>",
+        "id": 475947240,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728504086
+    },
+    {
+        "content": "<p>But what about <code>try_from_foreign</code> that uses null as a special value?</p>",
+        "id": 475947291,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728504108
+    },
+    {
+        "content": "<p>ah right we have that...</p>",
+        "id": 475947315,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728504121
+    },
+    {
+        "content": "<p>in normal code, I would agree, but I am not so sure if the hassle is worth it for this kind of glue code...</p>",
+        "id": 475948367,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728504523
+    },
+    {
+        "content": "<p>Another idea: we could change the return of <code>into_foreign</code> to <code>*mut T</code> where <code>T</code> is another associated type. That would elide the need for <code>FOREIGN_ALIGN</code> from the xarray patches.</p>",
+        "id": 475949125,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728504917
+    },
+    {
+        "content": "<p>(but would probably require some callers to write <code>as _</code>)</p>",
+        "id": 475949255,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728504978
+    },
+    {
+        "content": "<p>Could avoid the breakage by interposing <code>into_foreign_foo</code> (name to be bikeshed) which returns <code>*mut T</code> and make <code>into_foreign</code> provided using it.</p>",
+        "id": 475949548,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728505096
+    },
+    {
+        "content": "<p>You still won't get around checking the alignment in a <code>build_assert!</code></p>",
+        "id": 475949619,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728505134
+    },
+    {
+        "content": "<p>Yes, that's right, but It will get around the need to make the trait unsafe (because currently it pinky-promises the alignment)</p>",
+        "id": 475951156,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728505792
+    },
+    {
+        "content": "<p>Raw pointers don't really <em>have</em> to be aligned, so I don't think you really get around it.</p>",
+        "id": 476045521,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728541928
+    },
+    {
+        "content": "<p>Raw pointers don't, but values do - given that <code>into_foreign</code> takes <code>self</code> you'd really have to go out of your way to return a misaligned pointer</p>",
+        "id": 476065094,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728546261
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"761630\">Tamir Duberstein</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475951156\">said</a>:</p>\n<blockquote>\n<p>Yes, that's right, but It will get around the need to make the trait unsafe (because currently it pinky-promises the alignment)</p>\n</blockquote>\n<p>What trait are you talking about? <code>ForeignOwnable</code> is currently a safe trait.</p>",
+        "id": 476067733,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1728546908
+    },
+    {
+        "content": "<p>XArray makes it unsafe</p>",
+        "id": 476068226,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728547015
+    },
+    {
+        "content": "<p>Oh, I see, but as Alice said, making <code>into_foreign</code> return a <code>*mut T</code> doesn't make it safe, because <code>impl</code>s are free to return an unaligned pointer from <code>into_foreign</code>.</p>",
+        "id": 476069189,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1728547226
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/476069189\">said</a>:</p>\n<blockquote>\n<p>Oh, I see, but as Alice said, making <code>into_foreign</code> return a <code>*mut T</code> doesn't make it safe, because <code>impl</code>s are free to return an unaligned pointer from <code>into_foreign</code>.</p>\n</blockquote>\n<p>Yes, all true, but would require something pretty unusual (like returning an interior pointer to an unaligned field).</p>",
+        "id": 476134513,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728566907
+    },
+    {
+        "content": "<p>I don't think we want to make <code>ArcInner</code> public, but we would have to if we want to change it from a void pointer.</p>",
+        "id": 476142527,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728568970
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"761630\">Tamir Duberstein</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475944390\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475944315\">said</a>:</p>\n<blockquote>\n<p>and normally one doesn't check for null</p>\n</blockquote>\n<p>This is an interesting detail. Where is the code that uses this btw? Obviously not in tree, right?</p>\n</blockquote>\n<p><a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/a.hindborg/linux.git/tree/rust/kernel/xarray.rs?h=rnull-v6.11-rc2#n230\"><code>XArray is a user</code></a></p>",
+        "id": 476147862,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1728570385
+    },
+    {
+        "content": "<p>Oh, you were asking where there are users that do not null check?</p>",
+        "id": 476148858,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1728570606
+    },
+    {
+        "content": "<p>Yep, exactly.</p>",
+        "id": 476148925,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728570621
+    },
+    {
+        "content": "<p>I misread then <span aria-label=\"upside down\" class=\"emoji emoji-1f643\" role=\"img\" title=\"upside down\">:upside_down:</span></p>",
+        "id": 476148966,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1728570638
+    },
+    {
+        "content": "<p>in the old rust tree, I think <code>fs.rs</code> uses it</p>",
+        "id": 476150274,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728571010
+    },
+    {
+        "content": "<p>What is the old rust tree?</p>",
+        "id": 476150359,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728571034
+    },
+    {
+        "content": "<p>The branch called \"rust\"</p>",
+        "id": 476150721,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1728571142
+    },
+    {
+        "content": "<p>the original branch: <a href=\"https://github.com/Rust-for-Linux/linux/tree/rust\">https://github.com/Rust-for-Linux/linux/tree/rust</a></p>",
+        "id": 476150752,
+        "sender_full_name": "Sergio González Collado",
+        "timestamp": 1728571152
+    },
+    {
+        "content": "<p>Please see <a href=\"https://rust-for-linux.com/branches#rust\">https://rust-for-linux.com/branches#rust</a>.</p>",
+        "id": 476154175,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1728572060
+    },
+    {
+        "content": "<p>I wanted to have this trait actually permit null as valid value, so we can implement it for <code>usize</code>.</p>",
+        "id": 476161243,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1728573998
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> can you elaborate? How would you implement it for usize?</p>",
+        "id": 476163815,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728574752
+    },
+    {
+        "content": "<p>you just turn the integer into a pointer and vice-versa (<code>value as *const core::ffi::c_void</code>)</p>",
+        "id": 476163913,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728574789
+    },
+    {
+        "content": "<p>Oh, and zero would be a legal value. Got it.</p>\n<p>Such an implementation would break XArray because \"You must first convert it into an entry using xa_mk_value()\"[1].</p>\n<p>[1] <a href=\"https://github.com/torvalds/linux/blob/master/Documentation/core-api/xarray.rst#:~:text=You%20must%20first%20convert%20it%20into%20an%20entry%20using%20xa_mk_value()\">https://github.com/torvalds/linux/blob/master/Documentation/core-api/xarray.rst#:~:text=You%20must%20first%20convert%20it%20into%20an%20entry%20using%20xa_mk_value()</a></p>",
+        "id": 476164171,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728574870
+    },
+    {
+        "content": "<p>XArray probably need its own trait because of its tagging behaviour</p>",
+        "id": 476164314,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1728574919
+    },
+    {
+        "content": "<p>It requires all pointers to be 4-byte aligned for example</p>",
+        "id": 476164498,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1728574968
+    },
+    {
+        "content": "<p>Entirely separate or bounded by ForeignOwnable?</p>",
+        "id": 476165883,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728575379
+    },
+    {
+        "content": "<p>If it's bounded, we can't use NonNull. If it's not, we'll repeat a bunch of code :(</p>",
+        "id": 476171573,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728576868
+    },
+    {
+        "content": "<p>I would bound it</p>",
+        "id": 476225029,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594417
+    },
+    {
+        "content": "<p>if we change to NonNull, we could make <code>into_foreign</code> return <code>Option&lt;NonNull&lt;c_void&gt;&gt;</code> and then we could still implement <code>ForeignOwnable</code> for <code>usize</code>.</p>",
+        "id": 476225155,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594474
+    },
+    {
+        "content": "<p>I would of course be OK with this! The argument against that higher up was:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475943684\">said</a>:</p>\n<blockquote>\n<p>It's designed to directly interoperate with C code, using <code>NonNull</code> would make every user have to add <code>.as_ptr()</code></p>\n</blockquote>",
+        "id": 476225311,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728594520
+    },
+    {
+        "content": "<p>another alternative would be to make it more general: make <code>ForeignOwnable</code> generic over <code>P</code> which is a pointer type. Then one can implement <code>ForeignOwnable&lt;*const c_void&gt;</code> or <code>ForeignOwnable&lt;NonNull&lt;c_void&gt;&gt;</code>. But I  dislike that solution, since it makes it rather complicated...</p>",
+        "id": 476225388,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594557
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"761630\">Tamir Duberstein</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/476225311\">said</a>:</p>\n<blockquote>\n<p>I would of course be OK with this! The argument against that higher up was:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/475943684\">said</a>:</p>\n<blockquote>\n<p>It's designed to directly interoperate with C code, using <code>NonNull</code> would make every user have to add <code>.as_ptr()</code><br>\n</p>\n</blockquote>\n</blockquote>\n<p>yes and that argument still stands :)</p>",
+        "id": 476225409,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594564
+    },
+    {
+        "content": "<p>I don't think that it's going to benefit the glue code a lot</p>",
+        "id": 476225430,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594575
+    },
+    {
+        "content": "<p>but that might be different for XArray... I can't remember the code</p>",
+        "id": 476225459,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728594593
+    },
+    {
+        "content": "<p>What is \"it\" in this context? XArray just wants an invariant that pointers stored in it are 4-byte aligned</p>",
+        "id": 476225607,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728594639
+    },
+    {
+        "content": "<p>But it can also be used to store integers with some additional ceremony.</p>",
+        "id": 476225680,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728594672
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20should.20use.20NonNull.3F/near/476225430\">said</a>:</p>\n<blockquote>\n<p>I don't think that it's going to benefit the glue code a lot</p>\n</blockquote>\n<p>do you mean \"it\" here? I meant using <code>NonNull</code> isn't really going to benefit the glue code</p>",
+        "id": 476359048,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1728642939
+    },
+    {
+        "content": "<p>What I was trying to say is that maybe ForeignOwnable doesn't make sense to implement for integers because e.g. XArray required special ceremony compared to use with pointers</p>",
+        "id": 476362544,
+        "sender_full_name": "Tamir Duberstein",
+        "timestamp": 1728644384
+    },
+    {
+        "content": "<p>I think that's really XArray specific, not really related to ForeignOwnable</p>",
+        "id": 476384902,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1728652002
+    }
+]

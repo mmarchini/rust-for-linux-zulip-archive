@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Just recently I switched my development environment to NixOS and I am trying to make isolated environment for each project I am working on.</p>\n<p>For linux, I have this nix shell:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">pkgs</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"w\"> </span><span class=\"n\">import</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">nixpkgs</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">}:</span>\n\n<span class=\"nc\">pkgs</span><span class=\"p\">.</span><span class=\"n\">mkShell</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">packages</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">with</span><span class=\"w\"> </span><span class=\"n\">pkgs</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"n\">bison</span>\n<span class=\"w\">    </span><span class=\"n\">elfutils</span>\n<span class=\"w\">    </span><span class=\"n\">flex</span>\n<span class=\"w\">    </span><span class=\"n\">gcc</span>\n<span class=\"w\">    </span><span class=\"n\">glibc</span><span class=\"p\">.</span><span class=\"n\">dev</span>\n<span class=\"w\">    </span><span class=\"n\">llvmPackages</span><span class=\"p\">.</span><span class=\"n\">clang</span><span class=\"o\">-</span><span class=\"n\">unwrapped</span>\n<span class=\"w\">    </span><span class=\"n\">llvmPackages</span><span class=\"p\">.</span><span class=\"n\">lld</span>\n<span class=\"w\">    </span><span class=\"n\">llvmPackages</span><span class=\"p\">.</span><span class=\"n\">llvm</span>\n<span class=\"w\">    </span><span class=\"n\">openssl</span><span class=\"p\">.</span><span class=\"n\">dev</span>\n<span class=\"w\">    </span><span class=\"n\">pkg</span><span class=\"o\">-</span><span class=\"n\">config</span>\n<span class=\"w\">    </span><span class=\"n\">python3</span>\n<span class=\"w\">    </span><span class=\"n\">qemu</span>\n<span class=\"w\">  </span><span class=\"p\">];</span>\n\n<span class=\"w\">  </span><span class=\"n\">nativeBuildInputs</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">with</span><span class=\"w\"> </span><span class=\"n\">pkgs</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"n\">rustc</span>\n<span class=\"w\">    </span><span class=\"n\">cargo</span>\n<span class=\"w\">    </span><span class=\"n\">rust</span><span class=\"o\">-</span><span class=\"n\">bindgen</span>\n<span class=\"w\">    </span><span class=\"n\">rustfmt</span>\n<span class=\"w\">    </span><span class=\"n\">clippy</span>\n<span class=\"w\">  </span><span class=\"p\">];</span>\n\n<span class=\"w\">  </span><span class=\"n\">RUST_LIB_SRC</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pkgs</span><span class=\"p\">.</span><span class=\"n\">rustPlatform</span><span class=\"p\">.</span><span class=\"n\">rustLibSrc</span><span class=\"p\">;</span>\n\n<span class=\"w\">  </span><span class=\"n\">shellHook</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">''</span>\n<span class=\"w\">    </span><span class=\"n\">export</span><span class=\"w\"> </span><span class=\"n\">RUST_SRC_PATH</span><span class=\"o\">=</span><span class=\"s\">\"$RUST_LIB_SRC\"</span>\n<span class=\"w\">    </span><span class=\"n\">export</span><span class=\"w\"> </span><span class=\"n\">BINDGEN_EXTRA_CLANG_ARGS</span><span class=\"o\">=</span><span class=\"s\">\"-Wno-unused-command-line-argument\"</span>\n<span class=\"w\">    </span><span class=\"n\">alias</span><span class=\"w\"> </span><span class=\"n\">make</span><span class=\"o\">='</span><span class=\"na\">make</span><span class=\"w\"> </span><span class=\"n\">HOSTCC</span><span class=\"o\">=</span><span class=\"n\">gcc</span><span class=\"o\">'</span>\n<span class=\"w\">  </span><span class=\"o\">''</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but the scripts/generate_rust_analyzer.py script fails on the sysroot sanity assertion <a href=\"https://github.com/torvalds/linux/blob/b927546677c876e26eba308550207c2ddf812a43/scripts/generate_rust_analyzer.py#L216-L217\">here</a>. Anyone else hitting this issue on NixOS or is it only me? FWIW other than <code>make LLVM=1 rust-analyzer</code>, I can build the kernel just fine.</p>",
+        "id": 565270985,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1766574256
+    },
+    {
+        "content": "<p>Skipping the assertion fixes the problem</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code>$ git diff\n<span class=\"gh\">diff --git a/scripts/generate_rust_analyzer.py b/scripts/generate_rust_analyzer.py</span>\n<span class=\"gh\">index 147d0cc94068..982d5b084a20 100755</span>\n<span class=\"gd\">--- a/scripts/generate_rust_analyzer.py</span>\n<span class=\"gi\">+++ b/scripts/generate_rust_analyzer.py</span>\n<span class=\"gu\">@@ -214,7 +214,11 @@ def main():</span>\n<span class=\"w\"> </span>    )\n\n<span class=\"w\"> </span>    # Making sure that the `sysroot` and `sysroot_src` belong to the same toolchain.\n<span class=\"gd\">-    assert args.sysroot in args.sysroot_src.parents</span>\n<span class=\"gi\">+    #</span>\n<span class=\"gi\">+    # In Nix store paths for `rustc` and the `rust-src` library could be different,</span>\n<span class=\"gi\">+    # so `sysroot` might not be the parent of `sysroot_src`.</span>\n<span class=\"gi\">+    if \"nix\" not in args.sysroot.parts or \"nix\" not in args.sysroot_src.parts:</span>\n<span class=\"gi\">+        assert args.sysroot in args.sysroot_src.parents</span>\n\n<span class=\"w\"> </span>    rust_project = {\n<span class=\"w\"> </span>        \"crates\": generate_crates(args.srctree, args.objtree, args.sysroot_src, args.exttree, args.cfgs, args.core_edition),\n</code></pre></div>",
+        "id": 565271065,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1766574334
+    },
+    {
+        "content": "<p>Would it be acceptable to send this to the ML?</p>",
+        "id": 565271090,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1766574355
+    },
+    {
+        "content": "<p>Hmm... Others are using Nix, so it would be good to know why they are not hitting this. Cc <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> </p>\n<p>If the assert is not always true, then we may want to just remove it. I recall another case with that one too.</p>",
+        "id": 565280375,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1766580768
+    },
+    {
+        "content": "<p>I got my rustc from oxalica's overlay rather than nixpkgs directly</p>",
+        "id": 565281297,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766581282
+    },
+    {
+        "content": "<p>It looks like with nixpkgs's rustc, it does not have the rust-src component bundled with rustc by default, and instead provides it via another store path</p>",
+        "id": 565281328,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766581310
+    },
+    {
+        "content": "<p>It doesn't look like the nix-provided library source provides any way to identify the compiler version that it should link to. I think we should just remove the assertion in this case.</p>",
+        "id": 565281463,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1766581412
+    },
+    {
+        "content": "<p>I can send the patch in an hour or so</p>",
+        "id": 565281703,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1766581558
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/291565-Help/topic/scripts.2Fgenerate_rust_analyzer.2Epy.20fails.20on.20NixOS/near/565281297\">said</a>:</p>\n<blockquote>\n<p>I got my rustc from oxalica's overlay rather than nixpkgs directly</p>\n</blockquote>\n<p>I also do that</p>",
+        "id": 565284250,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1766583185
+    },
+    {
+        "content": "<p>There it is: <a href=\"https://lore.kernel.org/all/20251224135343.32476-1-work@onurozkan.dev/\">https://lore.kernel.org/all/20251224135343.32476-1-work@onurozkan.dev/</a></p>",
+        "id": 565286981,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1766584920
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/scripts.2Fgenerate_rust_analyzer.2Epy.20fails.20on.20NixOS/near/565284250\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/291565-Help/topic/scripts.2Fgenerate_rust_analyzer.2Epy.20fails.20on.20NixOS/near/565281297\">said</a>:</p>\n<blockquote>\n<p>I got my rustc from oxalica's overlay rather than nixpkgs directly</p>\n</blockquote>\n<p>I also do that</p>\n</blockquote>\n<p>Me3. Otherwise it is difficult to test with specific versions.</p>",
+        "id": 565294391,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1766590139
+    }
+]

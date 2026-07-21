@@ -1,0 +1,165 @@
+<html>
+<head><meta charset="utf-8"><title>Unsafe iosys_map bindings · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html">Unsafe iosys_map bindings</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="459935365"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/459935365" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#459935365">(Aug 11 2024 at 19:48)</a>:</h4>
+<p>Hi! In my work on the rust vkms driver, I came across another thing it looks like I would need to add rust support for in the kernel: iosys_map bindings. I'm not entirely sure what these would look like yet, but my assumption is because of how general this interface is that it might be a good idea to make it <code>!Send</code> + <code>!Sync</code>, and expose IO operations as <code>unsafe</code> methods so that users implement their own safe abstractions around it to fit their needs. Does this seem like a good plan?</p>
+
+
+
+<a name="459940931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/459940931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#459940931">(Aug 11 2024 at 20:29)</a>:</h4>
+<p>(disclamer, I don't know what <code>iosys_map</code> is and have just read the doc overview in <code>iosys-map.h</code>)</p>
+<p>Do you mind sharing what you need to use <code>iosys_map</code> for? What makes you think that we cannot provide safe abstractions?</p>
+
+
+
+<a name="459941429"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/459941429" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#459941429">(Aug 11 2024 at 20:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/459940931">said</a>:</p>
+<blockquote>
+<p>(disclamer, I don't know what <code>iosys_map</code> is and have just read the doc overview in <code>iosys-map.h</code>)</p>
+<p>Do you mind sharing what you need to use <code>iosys_map</code> for? What makes you think that we cannot provide safe abstractions?</p>
+</blockquote>
+<p>The main reason I want to use it is so that we can handle return values from DRM functions like <code>drm_gem_fb_vmap()</code> (<code>drivers/gpu/drm/drm_gem_framebuffer_helper.c</code>) for mapping framebuffers that could live in either system memory or IO memory at runtime. </p>
+<p>Also - I actually guess maybe we could expose them as safe? I had assumed this was something that would be an unsafe operation because a generic type for a memory mapping isn't really going to know what access rules ithe memory is governed by. However, it seems like the <code>kernel::io::Io</code> type we currently have in the kernel actually exposes stuff like <code>readw</code>/<code>readl</code>/etc. as safe methods so I guess perhaps safe would be fine here?</p>
+
+
+
+<a name="462212099"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462212099" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462212099">(Aug 13 2024 at 21:02)</a>:</h4>
+<p>Going to start working on this today - I'm thinking of trying to handle this similarly to <code>io.rs</code>, except we use a struct like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">IosysMap</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">map</span><span class="p">:</span><span class="w"> </span><span class="nc">bindings</span><span class="p">::</span><span class="n">iosys_map</span><span class="p">,</span>
+<span class="w">  </span><span class="n">maxsize</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>And probably require that any conversions from a raw iosys_map require that the user specify the size to store in maxsize</p>
+
+
+
+<a name="462212242"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462212242" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462212242">(Aug 13 2024 at 21:03)</a>:</h4>
+<p>Though I've been wondering if we should maybe do some sort of a conversion from iosys_map to a rust type instead of embedding the struct. It feels like it's a bit of a shame to have something redundant like this when we already have <code>io.rs</code></p>
+
+
+
+<a name="462215297"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462215297" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462215297">(Aug 13 2024 at 21:29)</a>:</h4>
+<p>(I just realized <a href="http://io.rs">io.rs</a> isn't actually upstream yet, whoops!)</p>
+
+
+
+<a name="462268046"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462268046" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462268046">(Aug 14 2024 at 05:49)</a>:</h4>
+<p>Could we also do this?:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// # Invariants</span>
+<span class="sd">/// - the pointer stored in `map` points to a valid `T`</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">IoSysMap</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">map</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">iosys_map</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_p</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomData</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>And then you eg could use <code>IoSysMap&lt;[u8; 256]&gt;</code>. Some more questions:</p>
+<ul>
+<li>Do you need to have a variable size? Or do you know it statically?</li>
+<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>
+</ul>
+<p>in case you don't know the size statically (which I think is the case, based on your approach), then the idea above doesn't work.</p>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462215297">said</a>:</p>
+<blockquote>
+<p>(I just realized <a href="http://io.rs">io.rs</a> isn't actually upstream yet, whoops!)</p>
+</blockquote>
+<p>is it on the rust branch? I only found <code>io_{buffer,mem,iter}.rs</code> there.</p>
+
+
+
+<a name="462414639"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462414639" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462414639">(Aug 14 2024 at 20:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046">said</a>:</p>
+<blockquote>
+<ul>
+<li>Do you need to have a variable size? Or do you know it statically?</li>
+</ul>
+</blockquote>
+<p>honestly I don't and TBH I'd rather it not, I was mostly just copying what <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> has been doing. Supposedly the <code>maxsize</code> thing is for when we don't know the size of something statically.</p>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046">said</a>:</p>
+<blockquote>
+<ul>
+<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>
+</ul>
+</blockquote>
+<p>This is a very general interface used all over the kernel, so it can really point to anything. Sometimes it might be a struct, in my case it is simply a framebuffer - so a linear array of pixel data. That being said - I don't think any non-primitive types would ever be stored in them</p>
+
+
+
+<a name="462414688"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462414688" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462414688">(Aug 14 2024 at 20:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046">said</a>:</p>
+<blockquote>
+<p>Lyude <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462215297">said</a>:</p>
+<blockquote>
+<p>(I just realized <a href="http://io.rs/">io.rs</a> isn't actually upstream yet, whoops!)</p>
+</blockquote>
+<p>is it on the rust branch? I only found <code>io_{buffer,mem,iter}.rs</code> there.</p>
+</blockquote>
+<p>I will have to check, it might be on the nova branch actually</p>
+
+
+
+<a name="462415379"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462415379" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462415379">(Aug 14 2024 at 20:49)</a>:</h4>
+<p><span class="user-mention" data-user-id="546447">@Benno Lossin</span>  You can find it in [1] and it's used by the PCI abstractions in [2].</p>
+<p>We can probably reuse it for an abstraction for iosys_map, but I still need to have a look on that.</p>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span> I did not get to it yet, but tomorrow I should have some time for that.</p>
+<p>[1] <a href="https://github.com/Rust-for-Linux/linux/commits/staging/rust-device/">https://github.com/Rust-for-Linux/linux/commits/staging/rust-device/</a><br>
+[2] <a href="https://github.com/Rust-for-Linux/linux/commits/staging/rust-pci/">https://github.com/Rust-for-Linux/linux/commits/staging/rust-pci/</a></p>
+
+
+
+<a name="462415386"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462415386" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462415386">(Aug 14 2024 at 20:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462414639">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046">said</a>:</p>
+<blockquote>
+<ul>
+<li>Do you need to have a variable size? Or do you know it statically?</li>
+</ul>
+</blockquote>
+<p>honestly I don't and TBH I'd rather it not, I was mostly just copying what <span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> has been doing. Supposedly the <code>maxsize</code> thing is for when we don't know the size of something statically.</p>
+</blockquote>
+<p>sorry, I am confused, you don't need and don't want to have variable size or you don't know it statically?</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046">said</a>:</p>
+<blockquote>
+<ul>
+<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>
+</ul>
+</blockquote>
+<p>This is a very general interface used all over the kernel, so it can really point to anything. Sometimes it might be a struct, in my case it is simply a framebuffer - so a linear array of pixel data. That being said - I don't think any non-primitive types would ever be stored in them</p>
+</blockquote>
+<p>I see, but it still would be useful to be able to give the type of the pointed to value, so I think we should support that.</p>
+
+
+
+<a name="462425471"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Unsafe%20iosys_map%20bindings/near/462425471" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Unsafe.20iosys_map.20bindings.html#462425471">(Aug 14 2024 at 22:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462415386">said</a>:</p>
+<blockquote>
+<p>I see, but it still would be useful to be able to give the type of the pointed to value, so I think we should support that.</p>
+</blockquote>
+<p>Oh yeah - this was kind of why I was hoping to mimic the way that dakr's interface currently works, since they've got support for reading a number of primitives</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

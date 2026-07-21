@@ -1,0 +1,873 @@
+<html>
+<head><meta charset="utf-8"><title>Pin&lt;_&gt; in method signature · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html">Pin&lt;_&gt; in method signature</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="339413005"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339413005" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339413005">(Mar 03 2023 at 18:09)</a>:</h4>
+<p>I'd like to have a discussion about using (or not) <code>Pin&lt;_&gt;</code> in method signature, hopefully we can reach out to a conclusion and document it somewhere.</p>
+<p>My understanding of <code>Pin</code> is largely based on the following conceptual model:</p>
+<ul>
+<li>"pinned" is a non-reversible state of a memory object, once pinned, stay pinned until <code>drop</code></li>
+<li>Of course moving a pinned <code>!Unpin</code> object is UB, no matter the move itself is a safe API or not.</li>
+</ul>
+<p>, and comes to <code>Pin&lt;&gt;</code>:</p>
+<ul>
+<li>Having a <code>Pin&lt;_&gt;</code> proves the object is pinned.</li>
+<li>Not having a <code>Pin&lt;_&gt;</code> (i.e. having a normal <code>&amp;</code> or <code>&amp;mut</code> or <code>DerefMut</code>) CANNOT prove the object is not pinned. The object may be pinned previously but the <code>Pin&lt;_&gt;</code> pointer is dropped.</li>
+</ul>
+<p>Now if the above conceptual model is right, having a <code>Pin&lt;_&gt;</code> in the method signature means at least two things (for the sake of ease, let's say the object is <code>!Unpin</code>):</p>
+<ol>
+<li>
+<p><em>Don't move inside</em>:</p>
+<ul>
+<li>the method won't move the object inside, since the method was only provides a <code>Pin&lt;_&gt;</code> there is no safe way to move the object. This is especially useful for <code>trait</code> (e.g. <code>Future::polll()</code>) or generic function. </li>
+</ul>
+</li>
+<li>
+<p><em>Don't move outside</em>:</p>
+<ul>
+<li>after the method called, the moving the object is UB, since <code>Pin&lt;_&gt;</code> proves the object was pinned when the method called. And moving something after pinned is UB.</li>
+</ul>
+</li>
+</ol>
+<p>The above is good enough to guide myself for whether use <code>Pin&lt;_&gt;</code> or not if I design something. Does it sound reasonable? (I do have some follow-ups, but in case I'm wrong, let me pause here for a while ;-))</p>
+
+
+
+<a name="339422131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339422131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339422131">(Mar 03 2023 at 18:56)</a>:</h4>
+<p>Another point is that, once you've pinned something, you cannot safely get a <code>&amp;mut T</code> to it, so any mutable method you want to be able to call after pinning must take <code>self: Pin&lt;&amp;mut Self&gt;</code></p>
+
+
+
+<a name="339437204"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339437204" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339437204">(Mar 03 2023 at 20:23)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339422131">said</a>:</p>
+<blockquote>
+<p>Another point is that, once you've pinned something, you cannot safely get a <code>&amp;mut T</code> to it, so any mutable method you want to be able to call after pinning must take <code>self: Pin&lt;&amp;mut Self&gt;</code></p>
+</blockquote>
+<p>Thanks. That's related to something I want to discuss. Let's narrow this down to <code>Pin&lt;&amp;mut T&gt;</code> and <code>&amp;mut T</code> only. Based on what you said above, can I get the following conclusion?</p>
+<ul>
+<li>For any <code>!Unpin</code>, if one of the methods takes <code>Pin&lt;&amp;mut Self&gt;</code>, all other mutable methods should also take <code>Pin&lt;&amp;mut Self&gt;</code>.</li>
+</ul>
+
+
+
+<a name="339437279"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339437279" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339437279">(Mar 03 2023 at 20:24)</a>:</h4>
+<p>As Alice already said, having a <code>&amp;mut T</code> means that it is not pinned (because I can freely <code>mem::replace</code> it). But for <code>&amp;T</code> we do not know if it is pinned or not, since <code>Pin&lt;&amp;T&gt;</code> implements <code>Deref</code>. With the same argument we know that the pointee is not pinned if we have a <code>DerefMut</code>.</p>
+<p>Otherwise your understanding seems correct. I additionally want emphasize the <a href="https://doc.rust-lang.org/std/pin/index.html#drop-guarantee">drop guarantee</a> that one has to uphold in addition to not moving. So for example if I treat some element of a vector as pinned and then call <code>Vec::set_len</code> (an <code>unsafe</code> function), then the pinned object will never be dropped, but it might be deallocated/the memory might be filled with another object. This is not allowed to happen and it would be UB.</p>
+
+
+
+<a name="339438085"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339438085" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339438085">(Mar 03 2023 at 20:29)</a>:</h4>
+<p>I surely missed the different between <code>&amp;T</code> and <code>&amp;mut T</code></p>
+
+
+
+<a name="339438144"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339438144" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339438144">(Mar 03 2023 at 20:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339437204">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339422131">said</a>:</p>
+<blockquote>
+<p>Another point is that, once you've pinned something, you cannot safely get a <code>&amp;mut T</code> to it, so any mutable method you want to be able to call after pinning must take <code>self: Pin&lt;&amp;mut Self&gt;</code></p>
+</blockquote>
+<p>Thanks. That's related to something I want to discuss. Let's narrow this down to <code>Pin&lt;&amp;mut T&gt;</code> and <code>&amp;mut T</code> only. Based on what you said above, can I get the following conclusion?</p>
+<ul>
+<li>For any <code>!Unpin</code>, if one of the methods takes <code>Pin&lt;&amp;mut Self&gt;</code>, all other mutable methods should also take <code>Pin&lt;&amp;mut Self&gt;</code>.</li>
+</ul>
+</blockquote>
+<p>That depends on if you only want to use this type while it is pinned. If yes, then you can always use <code>Pin&lt;&amp;mut Self&gt;</code>. But if you intend to</p>
+<ol>
+<li>create the value</li>
+<li>mutate it while not pinned and move it around some...</li>
+<li>at some point pin it</li>
+<li>and then mutate it again</li>
+</ol>
+<p>then you will need normal <code>&amp;mut Self</code> functions for 2 and <code>Pin&lt;&amp;mut Self&gt;</code> functions for 4. Since the functions with <code>Pin&lt;&amp;mut Self&gt;</code> might rely on the value staying pinned forever (so we cannot "just pin it for one call" and reuse the <code>Pin&lt;&amp;mut Self&gt;</code> functions instead of declaring additional <code>&amp;mut Self</code> funcs).</p>
+<p>In userland rust code I have only really seen futures that use pinning and they are normally initialized and then immediately pinned, so I dont know if it makes sense to carry around some object that is modified and then pinned at some later point, but still needs modifications.</p>
+
+
+
+<a name="339439533"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339439533" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339439533">(Mar 03 2023 at 20:38)</a>:</h4>
+<p>but what if I do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">foo</span><span class="p">(</span><span class="bp">self</span>: <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Guard</span><span class="p">;</span><span class="w"> </span><span class="c1">// Guard doesn't have a constructor</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">bar</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">g</span>: <span class="nc">Guard</span><span class="p">);</span><span class="w"> </span><span class="c1">// bar requires not move, but use `Guard` as the proof</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I'm not trying to be a langauge/UB lawyer, just want to get some rules for API signatures related to <code>Pin</code> we all agree in kernel.</p>
+
+
+
+<a name="339439787"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339439787" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339439787">(Mar 03 2023 at 20:39)</a>:</h4>
+<p>you will not be able to call <code>bar</code> after calling <code>foo</code> on the same object.<br>
+(also the guard could be created with object <code>A</code>, but <code>bar</code> could be called on object <code>B</code>, which is not pinned)</p>
+
+
+
+<a name="339440005"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339440005" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339440005">(Mar 03 2023 at 20:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339439787">said</a>:</p>
+<blockquote>
+<p>you will not be able to call <code>bar</code> after calling <code>foo</code> on the same object.<br>
+(also the guard could be created with object <code>A</code>, but <code>bar</code> could be called on object <code>B</code>, which is not pinned)</p>
+</blockquote>
+<p>Ah, good point on the other object, but why not able to call <code>bar</code> after calling <code>foo</code>? <code>bar</code> won't move the object.</p>
+
+
+
+<a name="339440082"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339440082" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339440082">(Mar 03 2023 at 20:41)</a>:</h4>
+<p>how do you get a <code>&amp;mut Self</code> when you only have a <code>Pin&lt;&amp;mut Self&gt;</code>?</p>
+
+
+
+<a name="339440103"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339440103" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339440103">(Mar 03 2023 at 20:41)</a>:</h4>
+<p>I was assuming that <code>Self: !Unpin</code></p>
+
+
+
+<a name="339441055"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441055" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441055">(Mar 03 2023 at 20:48)</a>:</h4>
+<p>You claim that <code>bar</code> won't move the object. But how do you know/guarantee that?</p>
+<p>If the receiver is <code>&amp;mut self</code>, it is allowed to move...</p>
+
+
+
+<a name="339441121"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441121" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441121">(Mar 03 2023 at 20:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339441055">said</a>:</p>
+<blockquote>
+<p>You claim that <code>bar</code> won't move the object. But how do you know/guarantee that?</p>
+<p>If the receiver is <code>&amp;mut self</code>, it is allowed to move...</p>
+</blockquote>
+<p>The topic here is API design, i.e. the implementor knows</p>
+
+
+
+<a name="339441205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441205">(Mar 03 2023 at 20:49)</a>:</h4>
+<p>All down to a very simple question, when do I need a <code>Pin&lt;&amp;mut Self&gt;</code> or <code>Pin&lt;&amp;Self&gt;</code>.</p>
+
+
+
+<a name="339441445"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441445" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441445">(Mar 03 2023 at 20:51)</a>:</h4>
+<p>The language will prevent you from calling <code>bar</code> because a <code>Pin&lt;&amp;mut Self&gt;</code> provides no safe way to get a <code>&amp;mut T</code></p>
+
+
+
+<a name="339441676"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441676" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441676">(Mar 03 2023 at 20:52)</a>:</h4>
+<p>Boqun, I think we need to go to the real issue here :)</p>
+
+
+
+<a name="339441731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441731">(Mar 03 2023 at 20:53)</a>:</h4>
+<p>Let's use a simple example as <span class="user-mention" data-user-id="546447">@y86</span>  said above:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">foo</span><span class="p">(</span><span class="bp">self</span>: <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">);</span><span class="w">  </span><span class="c1">// 4</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">bar</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">);</span><span class="w">  </span><span class="c1">// 2</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Do we say <code>foo(); bar();</code> is a UB regardless of whether <code>bar</code> moves the object or not?</p>
+
+
+
+<a name="339441798"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441798" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441798">(Mar 03 2023 at 20:53)</a>:</h4>
+<p>you cannot call <code>bar</code> after calling <code>foo</code> since you cannot get a <code>&amp;mut Self</code> after pinning the object.</p>
+
+
+
+<a name="339441885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441885">(Mar 03 2023 at 20:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339441798">said</a>:</p>
+<blockquote>
+<p>you cannot call <code>bar</code> after calling <code>foo</code> since you cannot get a <code>&amp;mut Self</code> after pinning the object.</p>
+</blockquote>
+<p>I can get <code>&amp;mut Self</code> unsafely, no?</p>
+
+
+
+<a name="339441897"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441897" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441897">(Mar 03 2023 at 20:54)</a>:</h4>
+<p>yes that is possible</p>
+
+
+
+<a name="339441933"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339441933" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339441933">(Mar 03 2023 at 20:54)</a>:</h4>
+<p>and that is not UB, but a footgun</p>
+
+
+
+<a name="339442123"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339442123" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339442123">(Mar 03 2023 at 20:55)</a>:</h4>
+<p>I'm pretty aware that's a footgun, my question is more about should we leave it as a footgun, or should we make <code>bar</code> take a <code>Pin&lt;&amp;mut Self&gt;</code></p>
+
+
+
+<a name="339442348"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339442348" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339442348">(Mar 03 2023 at 20:57)</a>:</h4>
+<p>what is the benefit of the footgun? I think it should be <code>Pin&lt;&amp;mut Self&gt;</code> and if you need to call it both before and after pinning, then one needs to duplicate the function.</p>
+
+
+
+<a name="339443013"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339443013" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339443013">(Mar 03 2023 at 21:01)</a>:</h4>
+<p>Not about benefit, just about "whose fault" ;-) Say I'm a user of <code>foo</code> and <code>bar</code>, if <code>bar</code> can be called after <code>foo</code> and <code>bar</code> takes <code>&amp;mut _</code>. It looks to me it's the fault of the API design and makes user use the footgun.</p>
+
+
+
+<a name="339443241"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339443241" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339443241">(Mar 03 2023 at 21:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339441676">said</a>:</p>
+<blockquote>
+<p>Boqun, I think we need to go to the real issue here :)</p>
+</blockquote>
+<p>I think I have plenty ;-) First, should <code>lock()</code> take a Pin&lt;&amp;Self&gt;?</p>
+
+
+
+<a name="339443670"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339443670" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339443670">(Mar 03 2023 at 21:05)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443013">said</a>:</p>
+<blockquote>
+<p>Not about benefit, just about "whose fault" ;-) Say I'm a user of <code>foo</code> and <code>bar</code>, if <code>bar</code> can be called after <code>foo</code> and <code>bar</code> takes <code>&amp;mut _</code>. It looks to me it's the fault of the API design and makes user use the footgun.</p>
+</blockquote>
+<p>not so sure if I understand correctly which scenario you are talking about, but as a user I would not use <code>unsafe</code> to call <code>&amp;mut Self</code> after <code>Pin&lt;&amp;mut Self&gt;</code>.</p>
+
+
+
+<a name="339444649"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339444649" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339444649">(Mar 03 2023 at 21:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443241">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339441676">said</a>:</p>
+<blockquote>
+<p>Boqun, I think we need to go to the real issue here :)</p>
+</blockquote>
+<p>I think I have plenty ;-) First, should <code>lock()</code> take a Pin&lt;&amp;Self&gt;?</p>
+</blockquote>
+<p>I would say that it would make sense to use <code>Pin&lt;&amp;Self&gt;</code>, but with <code>pin-init</code> it will not be possible to create a e.g. <code>mutex</code> that is not pinned (so it would not be footgun to keep <code>&amp;self</code>).</p>
+
+
+
+<a name="339444703"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339444703" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339444703">(Mar 03 2023 at 21:12)</a>:</h4>
+<p>I would prefer to change it to <code>Pin&lt;&amp;Self&gt;</code> since it also more clearly communicates this to the docs readers.</p>
+
+
+
+<a name="339445596"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339445596" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339445596">(Mar 03 2023 at 21:19)</a>:</h4>
+<p>But unlocked spinlock is safe to move</p>
+
+
+
+<a name="339445870"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339445870" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339445870">(Mar 03 2023 at 21:21)</a>:</h4>
+<p>It is <code>&amp;self</code> at the moment due to the bad ergonomics of pin projection. Suppose we have a type that is something like:</p>
+<div class="codehilite"><pre><span></span><code>struct X {
+    some_field: u32,
+    inner: Mutex&lt;InnerX&gt;,
+}
+</code></pre></div>
+<p>Now suppose we have an <code>x: &amp;X</code>. How do we access the inner instance of <code>InnerX</code>?</p>
+<p>(By the safety requirements of the constructor of <code>Mutex</code>, we know that it must have been initialised, which means that the mutex _is_ pinned.)</p>
+
+
+
+<a name="339445909"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339445909" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339445909">(Mar 03 2023 at 21:21)</a>:</h4>
+<p>(The comment above is about <code>lock()</code>.)</p>
+
+
+
+<a name="339448757"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339448757" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339448757">(Mar 03 2023 at 21:39)</a>:</h4>
+<p>Back to the topic I think Benno's idea sounds good, I add something for immutable references. Considering a pointer type of a method, here is some basic suggestion:</p>
+<ul>
+<li>For mutable functions:<ul>
+<li>If it requires pinned or assumes pinned afterwards, takes a <code>Pin&lt;&amp;mut &gt;</code></li>
+<li>If it doesn't requires pinned and may be called before pinned, takes a <code>&amp;mut self</code></li>
+<li>If it turns out the above <code>&amp;mut self</code> function may be called after pinned, introduce a different function, which takes a <code>Pin&lt;&amp;mut&gt;</code></li>
+</ul>
+</li>
+<li>For immutable functions<ul>
+<li>if it requires pinned or assumes pinned afterwards, takes a <code>Pin&lt;&amp;&gt;</code></li>
+<li>otherwise make it take a <code>&amp;</code></li>
+</ul>
+</li>
+</ul>
+<p>Thoughts?</p>
+
+
+
+<a name="339454601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339454601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339454601">(Mar 03 2023 at 22:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443670">said</a>:</p>
+<blockquote>
+<p>not so sure if I understand correctly which scenario you are talking about, but as a user I would not use <code>unsafe</code> to call <code>&amp;mut Self</code> after <code>Pin&lt;&amp;mut Self&gt;</code>.</p>
+</blockquote>
+<p>This is why I brought up this topic. If a type only provides <code>foo(Pin&lt;&amp;mut Self&gt;)</code>and <code>bar(&amp;mut self)</code>, then <code>foo(); bar()</code> is unusable for someone but usable for someone else. It's not a correctness issue (footgun code can be sound) but more a style issue. There is certainly the usage of <code>Pin</code> to get compiler happy vs the usage of <code>Pin</code> to make the most sense what <code>Pin</code> provides. Some clarification and stylish guide are helpful.</p>
+
+
+
+<a name="339457631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339457631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339457631">(Mar 03 2023 at 22:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339444649">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443241">said</a>:</p>
+<blockquote>
+<p>I think I have plenty ;-) First, should <code>lock()</code> take a Pin&lt;&amp;Self&gt;?</p>
+</blockquote>
+<p>I would say that it would make sense to use <code>Pin&lt;&amp;Self&gt;</code>, but with <code>pin-init</code> it will not be possible to create a e.g. <code>mutex</code> that is not pinned (so it would not be footgun to keep <code>&amp;self</code>).</p>
+</blockquote>
+<p>Right, for <code>Pin&lt;&amp;Self&gt;</code> vs <code>&amp;self</code>, the only difference is <em>"Don't move outside"</em>, in other word, <code>Pin&lt;_&gt;</code> only marks when the object pinned. So if a object is pinned since initialized, <code>Pin&lt;&amp;Self&gt;</code> makes no difference to <code>&amp;self</code>. Plus, we have the pin-projection issue Wedson mentioned.</p>
+
+
+
+<a name="339500200"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339500200" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339500200">(Mar 04 2023 at 07:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339454601">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443670">said</a>:</p>
+<blockquote>
+<p>not so sure if I understand correctly which scenario you are talking about, but as a user I would not use <code>unsafe</code> to call <code>&amp;mut Self</code> after <code>Pin&lt;&amp;mut Self&gt;</code>.</p>
+</blockquote>
+<p>This is why I brought up this topic. If a type only provides <code>foo(Pin&lt;&amp;mut Self&gt;)</code>and <code>bar(&amp;mut self)</code>, then <code>foo(); bar()</code> is unusable for someone but usable for someone else. It's not a correctness issue (footgun code can be sound) but more a style issue. There is certainly the usage of <code>Pin</code> to get compiler happy vs the usage of <code>Pin</code> to make the most sense what <code>Pin</code> provides. Some clarification and stylish guide are helpful.</p>
+</blockquote>
+<p>I would expect as an API designer for users to not call <code>foo(); bar()</code>, as you need unsafe for that. Even if <code>bar</code> at the moment does not rely upon the fact that <code>self</code> is not pinned, I am allowed to change that.</p>
+<p>This somewhat reminds me of the "What is unsafe?" discussion from a few months ago. When doing a lot of pin projections it is more readable to call <code>Pin::get_unchecked_mut()</code> once and then access the fields that one needs, rather than calling <code>Pin::map_unchecked_mut()</code> multiple times. But this results in a local variable which is <code>&amp;mut T</code>, but it <strong>must</strong> not be moved otherwise it is UB.<br>
+I think in that discussion we reached the consensus that as long as this is explained by the safety comment and as long as this variable is only local to the function, we are ok with that.<br>
+This seems similar, but this time <code>bar</code>'s signature communicates <em>globally</em> that it is allowed to move the value. If we decide to say in the docs of <code>bar</code> "this function does not move the given value, it always treats it as if it were pinned", then people could rely on that and call <code>foo(); bar()</code>, but I would be against this. Just create a new <code>bar_pinned(self: Pin&lt;&amp;mut Self&gt;)</code>, it is safer (users do not need <code>unsafe</code> to call it), it is clear that this is called while pinned. Additionally it allows us in the future, if we for some reason find that in <code>bar()</code> we could optimize something by doing some modification that is  disallowed for <code>Pin&lt;&amp;mut Self&gt;</code>, to change <code>bar</code> such that it does this modification, but leave <code>bar_pinned</code> as is.</p>
+
+
+
+<a name="339501955"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339501955" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339501955">(Mar 04 2023 at 07:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339445870">said</a>:</p>
+<blockquote>
+<p>It is <code>&amp;self</code> at the moment due to the bad ergonomics of pin projection. Suppose we have a type that is something like:</p>
+<div class="codehilite"><pre><span></span><code>struct X {
+    some_field: u32,
+    inner: Mutex&lt;InnerX&gt;,
+}
+</code></pre></div>
+<p>Now suppose we have an <code>x: &amp;X</code>. How do we access the inner instance of <code>InnerX</code>?</p>
+<p>(By the safety requirements of the constructor of <code>Mutex</code>, we know that it must have been initialised, which means that the mutex _is_ pinned.)</p>
+</blockquote>
+<p>because it has a mutex, we should have access to a <code>Pin&lt;&amp;X&gt;</code> and with (the missing field projection) we can get <code>Pin&lt;&amp;Mutex&lt;InnerX&gt;&gt;</code>.<br>
+But this is unergonomic at the moment...</p>
+<p>Advantages of using <code>Pin&lt;&amp;&gt;</code>:</p>
+<ul>
+<li>clearer from a documenting perspective and users are reminded that this object is pinned</li>
+<li>when we later have pinnable things that exist also while unpinned, we already have the discipline to always use <code>Pin&lt;&amp;&gt;</code> when we are talking about the pinned state</li>
+</ul>
+<p>Disadvantages:</p>
+<ul>
+<li>more to write, every pinned object now needs <code>self: Pin&lt;&amp;Self&gt;</code> instead of <code>&amp;self</code> which is very annoying (maybe macro to the rescue, or try to get something like <code>&amp;pin self</code> to work?). I feel like this could alienate some of the C folks.</li>
+<li>lack of pin projections makes this unergonomic, if we had pin-projections it would work nicely (example from above: <code>x-&gt;inner.lock()</code> where <code>x: Pin&lt;&amp;X&gt;</code>)</li>
+<li>users who see <code>Pin&lt;&amp;&gt;</code> everywhere might be confused/have to learn what pinning is (but this seems inherent to me, so we cannot really avoid this by hiding the complexity behind <code>&amp;</code>, as they might have to use <code>Pin&lt;&amp;mut &gt;</code> anyways)</li>
+</ul>
+<p>I am a bit torn on this one.</p>
+
+
+
+<a name="339502144"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339502144" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339502144">(Mar 04 2023 at 07:42)</a>:</h4>
+<p>Yeah, lack of pin projection is the most annoying thing</p>
+
+
+
+<a name="339502208"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339502208" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339502208">(Mar 04 2023 at 07:43)</a>:</h4>
+<p>I think I said this in some meeting, I will have a design meeting in late march about the projection rfc, so I hope that we can eventually have it :)</p>
+
+
+
+<a name="339520977"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339520977" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339520977">(Mar 04 2023 at 10:00)</a>:</h4>
+<p>If a locked spinlock is also safe to move when there are no threads waiting for it, then it probably doesn't have to be pinned at all. See &lt;<a href="https://github.com/MicrosoftDocs/sdk-api/pull/447">https://github.com/MicrosoftDocs/sdk-api/pull/447</a>&gt; for an illustration where Windows docs were updated to give sufficient guarantees that the std mutex doesn't have to be heap allocated (i.e. can be moved) on windows.</p>
+
+
+
+<a name="339539806"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339539806" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339539806">(Mar 04 2023 at 11:54)</a>:</h4>
+<p>A locked spinlock can't be moved due to borrowck anyway.</p>
+
+
+
+<a name="339545764"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339545764" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339545764">(Mar 04 2023 at 12:26)</a>:</h4>
+<blockquote>
+<p>(maybe macro to the rescue, or try to get something like &amp;pin self to work?</p>
+</blockquote>
+<p>I guess you mean something for entire <code>impl</code>s? (since e.g. an attribute macro for each method would even take longer to type).</p>
+<p><code>&amp;pin self</code> sounds quite natural to me.</p>
+<blockquote>
+<p>I feel like this could alienate some of the C folks.</p>
+</blockquote>
+<p>It could go both ways! Some C folks may indeed think it is too much to learn, but others may actually like the clarity/explicitness, especially while learning.</p>
+
+
+
+<a name="339547580"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339547580" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339547580">(Mar 04 2023 at 12:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339539806">said</a>:</p>
+<blockquote>
+<p>A locked spinlock can't be moved due to borrowck anyway.</p>
+</blockquote>
+<p>It's possible to forget the guard and then move or forget the mutex in a locked state, but not if anyone is waiting for the lock.</p>
+
+
+
+<a name="339574639"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339574639" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339574639">(Mar 04 2023 at 15:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339547580">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339539806">said</a>:</p>
+<blockquote>
+<p>A locked spinlock can't be moved due to borrowck anyway.</p>
+</blockquote>
+<p>It's possible to forget the guard and then move or forget the mutex in a locked state, but not if anyone is waiting for the lock.</p>
+</blockquote>
+<p>If lockdep is enabled, during lock(), lockdep will add the pointer to the lock into a held locks stack, and at unlock() time, lockdep will use the pointer to the lock and the stack to check whether the lock is held.</p>
+
+
+
+<a name="339585903"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339585903" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339585903">(Mar 04 2023 at 16:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339454601">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339443670">said</a>:</p>
+<blockquote>
+<p>not so sure if I understand correctly which scenario you are talking about, but as a user I would not use <code>unsafe</code> to call <code>&amp;mut Self</code> after <code>Pin&lt;&amp;mut Self&gt;</code>.</p>
+</blockquote>
+<p>This is why I brought up this topic. If a type only provides <code>foo(Pin&lt;&amp;mut Self&gt;)</code>and <code>bar(&amp;mut self)</code>, then <code>foo(); bar()</code> is unusable for someone but usable for someone else. It's not a correctness issue (footgun code can be sound) but more a style issue. There is certainly the usage of <code>Pin</code> to get compiler happy vs the usage of <code>Pin</code> to make the most sense what <code>Pin</code> provides. Some clarification and stylish guide are helpful.</p>
+</blockquote>
+<p>It's only an issue if some type is usable both if it's pinned or not, and the type is not <code>Unpin</code>? What type do you have in mind that satisfy this property?</p>
+
+
+
+<a name="339594645"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339594645" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339594645">(Mar 04 2023 at 17:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339585903">said</a>:</p>
+<blockquote>
+<p>It's only an issue if some type is usable both if it's pinned or not, and the type is not <code>Unpin</code>? What type do you have in mind that satisfy this property?</p>
+</blockquote>
+<p>First, I want to say it seems me there is no way to prove such a type doesn't exist.</p>
+
+
+
+<a name="339595045"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339595045" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339595045">(Mar 04 2023 at 18:01)</a>:</h4>
+<p>You can craft such a type and I'll just call that API poorly designed. There's no need to prove non-existence of such a type for soundness.</p>
+
+
+
+<a name="339599368"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339599368" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339599368">(Mar 04 2023 at 18:43)</a>:</h4>
+<p>Yeah, so maybe consider the following case:</p>
+<p>First there exists a type <code>TypeA : Unpin</code>, has a few <code>&amp;mut self</code> functions and other functions. And it has a few users.<br>
+And one day, someone wants to improve <code>TypeA</code> to work asynchronously by adding a <code>work_struct</code> in it. And that point <code>TypeA</code> becomes <code>!Unpin</code>. Note that a <code>Work&lt;TypeA&gt;</code> solution may not always work, since in the future <code>TypeA</code> may need a second async mechanism, e.g. <code>timer_list</code>.</p>
+<p>If that happens, what would be the recommendation for people working on <code>TypeA</code>?</p>
+
+
+
+<a name="339600759"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339600759" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339600759">(Mar 04 2023 at 18:56)</a>:</h4>
+<p>If you have a <code>!Unpin</code> type, it's highly unlikely that you want to have a method taking <code>&amp;mut self</code> -- so you probably want to change signature to <code>Pin&lt;&amp;mut Self&gt;</code></p>
+
+
+
+<a name="339604300"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339604300" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339604300">(Mar 04 2023 at 19:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339574639">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339547580">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339539806">said</a>:</p>
+<blockquote>
+<p>A locked spinlock can't be moved due to borrowck anyway.</p>
+</blockquote>
+<p>It's possible to forget the guard and then move or forget the mutex in a locked state, but not if anyone is waiting for the lock.</p>
+</blockquote>
+<p>If lockdep is enabled, during lock(), lockdep will add the pointer to the lock into a held locks stack, and at unlock() time, lockdep will use the pointer to the lock and the stack to check whether the lock is held.</p>
+</blockquote>
+<p>Right. At least you can't unlock it anymore once you forget the mutex guard. No idea if that is enough for preventing UB though.</p>
+
+
+
+<a name="339604461"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339604461" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339604461">(Mar 04 2023 at 19:31)</a>:</h4>
+<p>You can still attempt to lock it again, so if lockdep also accesses the pointer to the stack that is an issue.</p>
+
+
+
+<a name="339604957"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339604957" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339604957">(Mar 04 2023 at 19:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339599368">said</a>:</p>
+<blockquote>
+<p>Yeah, so maybe consider the following case:</p>
+<p>First there exists a type <code>TypeA : Unpin</code>, has a few <code>&amp;mut self</code> functions and other functions. And it has a few users.<br>
+And one day, someone wants to improve <code>TypeA</code> to work asynchronously by adding a <code>work_struct</code> in it. And that point <code>TypeA</code> becomes <code>!Unpin</code>. Note that a <code>Work&lt;TypeA&gt;</code> solution may not always work, since in the future <code>TypeA</code> may need a second async mechanism, e.g. <code>timer_list</code>.</p>
+<p>If that happens, what would be the recommendation for people working on <code>TypeA</code>?</p>
+</blockquote>
+<p>To me such a change would be a breaking change. Since it could break existing code. When you really need to do such a change, I would suggest to also change the signatures to <code>Pin&lt;&amp;mut Self&gt;</code> and only allow pinned initialization. Since there seems to be no harm to just leave it pinned forever.</p>
+
+
+
+<a name="339605062"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339605062" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339605062">(Mar 04 2023 at 19:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339604300">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339574639">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339547580">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339539806">said</a>:</p>
+<blockquote>
+<p>A locked spinlock can't be moved due to borrowck anyway.</p>
+</blockquote>
+<p>It's possible to forget the guard and then move or forget the mutex in a locked state, but not if anyone is waiting for the lock.</p>
+</blockquote>
+<p>If lockdep is enabled, during lock(), lockdep will add the pointer to the lock into a held locks stack, and at unlock() time, lockdep will use the pointer to the lock and the stack to check whether the lock is held.</p>
+</blockquote>
+<p>Right. At least you can't unlock it anymore once you forget the mutex guard. No idea if that is enough for preventing UB though.</p>
+</blockquote>
+<p>Well, you can unlock unsafely, <code>unlock()</code> safety requirement is that "you must be the owner" and nothing about pinned.</p>
+
+
+
+<a name="339605119"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339605119" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339605119">(Mar 04 2023 at 19:37)</a>:</h4>
+<p>the only reason for having both <code>&amp;mut self</code> and <code>Pin&lt;&amp;mut Self&gt;</code> methods at the same time is the need for some accumulation prior to pinning, but this could be factored out to happen entirely before pinned initialization and then you only need <code>Pin&lt;&amp;mut Self&gt;</code> methods.</p>
+
+
+
+<a name="339605630"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339605630" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339605630">(Mar 04 2023 at 19:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339605119">said</a>:</p>
+<blockquote>
+<p>the only reason for having both <code>&amp;mut self</code> and <code>Pin&lt;&amp;mut Self&gt;</code> methods at the same time is the need for some accumulation prior to pinning, but this could be factored out to happen entirely before pinned initialization and then you only need <code>Pin&lt;&amp;mut Self&gt;</code> methods.</p>
+</blockquote>
+<p>I agree, and I also agree if we go ahead and say every <code>!Unpin</code> type needs to be pinned initialized before use if it looks reasonable to every one.</p>
+
+
+
+<a name="339606871"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339606871" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339606871">(Mar 04 2023 at 19:58)</a>:</h4>
+<p>Hmm.. now think about it, replacing all <code>&amp;mut self</code>s with <code>self: Pin&lt;&amp;mut self&gt;</code>s doesn't seems a bad idea? For <code>Unpin</code>, you still have <code>as_mut()</code>, and for <code>!Unpin</code>, that's what we want, plus there is no need to change the method signature when the types go <code>Unpin</code> -&gt; <code>!Unpin</code> or vice versa</p>
+
+
+
+<a name="339606949"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339606949" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339606949">(Mar 04 2023 at 19:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339606871">said</a>:</p>
+<blockquote>
+<p>Hmm.. now think about it, replacing all <code>&amp;mut self</code>s with <code>self: Pin&lt;&amp;mut self&gt;</code>s doesn't seems a bad idea? For <code>Unpin</code>, you still have <code>as_mut()</code>, and for <code>!Unpin</code>, that's what we want, plus there is no need to change the method signature when the types go <code>Unpin</code> -&gt; <code>!Unpin</code> or vice versa</p>
+</blockquote>
+<p>Of course, the pre-condition is all <code>!Unpin</code> should be pinned initialized.</p>
+
+
+
+<a name="339608364"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339608364" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339608364">(Mar 04 2023 at 20:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339606871">said</a>:</p>
+<blockquote>
+<p>Hmm.. now think about it, replacing all <code>&amp;mut self</code>s with <code>self: Pin&lt;&amp;mut self&gt;</code>s doesn't seems a bad idea? For <code>Unpin</code>, you still have <code>as_mut()</code>, and for <code>!Unpin</code>, that's what we want, plus there is no need to change the method signature when the types go <code>Unpin</code> -&gt; <code>!Unpin</code> or vice versa</p>
+</blockquote>
+<p>you dont even need <code>as_mut()</code>, because <code>Pin&lt;&amp;mut Unpin&gt;</code> implements <code>DerefMut</code>. But reborrowing becomes more of a hassle.</p>
+
+
+
+<a name="339608881"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339608881" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339608881">(Mar 04 2023 at 20:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339608364">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339606871">said</a>:</p>
+<blockquote>
+<p>Hmm.. now think about it, replacing all <code>&amp;mut self</code>s with <code>self: Pin&lt;&amp;mut self&gt;</code>s doesn't seems a bad idea? For <code>Unpin</code>, you still have <code>as_mut()</code>, and for <code>!Unpin</code>, that's what we want, plus there is no need to change the method signature when the types go <code>Unpin</code> -&gt; <code>!Unpin</code> or vice versa</p>
+</blockquote>
+<p>you dont even need <code>as_mut()</code>, because <code>Pin&lt;&amp;mut Unpin&gt;</code> implements <code>DerefMut</code>. But reborrowing becomes more of a hassle.</p>
+</blockquote>
+<p>Reborrowing becomes pin projection? ;-)</p>
+
+
+
+<a name="339609311"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339609311" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339609311">(Mar 04 2023 at 20:28)</a>:</h4>
+<p>not sure how that would help, I think it would actually be <code>as_mut()</code> instead of doing <code>&amp;mut *</code></p>
+
+
+
+<a name="339609871"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339609871" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339609871">(Mar 04 2023 at 20:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">y86</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339609311">said</a>:</p>
+<blockquote>
+<p>not sure how that would help, I think it would actually be <code>as_mut()</code> instead of doing <code>&amp;mut *</code></p>
+</blockquote>
+<p>What's the reborrow scene in your mind?</p>
+
+
+
+<a name="339610187"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339610187" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339610187">(Mar 04 2023 at 20:38)</a>:</h4>
+<p>with <code>&amp;mut</code>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">Foo</span><span class="p">;</span>
+
+<span class="k">fn</span> <span class="nf">bar</span><span class="p">(</span><span class="n">_foo</span>: <span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">Foo</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">Foo</span><span class="p">;</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>with <code>Pin&lt;&amp;mut&gt;</code>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">pin</span>::<span class="n">Pin</span><span class="p">;</span>
+<span class="k">struct</span> <span class="nc">Foo</span><span class="p">;</span>
+
+<span class="k">fn</span> <span class="nf">bar</span><span class="p">(</span><span class="n">_foo</span>: <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">Foo</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">Foo</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">foo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span>::<span class="n">new</span><span class="p">(</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">.</span><span class="n">as_mut</span><span class="p">());</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">.</span><span class="n">as_mut</span><span class="p">());</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">.</span><span class="n">as_mut</span><span class="p">());</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">.</span><span class="n">as_mut</span><span class="p">());</span>
+<span class="w">    </span><span class="n">bar</span><span class="p">(</span><span class="n">foo</span><span class="p">.</span><span class="n">as_mut</span><span class="p">());</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="339727970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339727970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339727970">(Mar 05 2023 at 17:52)</a>:</h4>
+<p>27 messages were moved here from <a class="stream-topic" data-stream-id="288089" href="/#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature">#General &gt; Pin&lt;_&gt; in method signature</a> by <span class="user-mention silent" data-user-id="411647">Boqun Feng</span>.</p>
+
+
+
+<a name="339728054"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339728054" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339728054">(Mar 05 2023 at 17:53)</a>:</h4>
+<p>@_<strong>Notification Bot|100006</strong> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339727970">said</a>:</p>
+<blockquote>
+<p>27 messages were moved here from <a class="stream-topic" data-stream-id="288089" href="/#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature">#General &gt; Pin&lt;_&gt; in method signature</a> by <span class="user-mention silent" data-user-id="411647">Boqun Feng</span>.</p>
+</blockquote>
+<p>(sorry, I was trying to move just one message from the discussion)</p>
+
+
+
+<a name="339776282"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339776282" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339776282">(Mar 06 2023 at 04:49)</a>:</h4>
+<p>Below is the current version I'm considering to add as some sort of guidelines for using <code>Pin</code>. I probably open a Github issue first for boarder discussion before I send a patch. It's still need some polishing, but I want to see whether we can get on the same page.</p>
+<hr>
+<p>When do you need the function to take <code>Pin&lt;_&gt;</code> as the argument? If any of the following is true:</p>
+<ul>
+<li>The function expects the object pinned (i.e. the object should have a fixed address), this is a sign of starting relying on pin safety guarantee.<ul>
+<li>There are rare cases that the pin safety guarantee (once pinned, always pinned) can be broken by users, if these are allowed, see <code>UNPIN</code> comments below</li>
+</ul>
+</li>
+<li>The function is a mutable one (i.e. it would take a <code>&amp;mut self</code>) and may be called after the object is pinned. Reason: otherwise users may need to use <code>unsafe</code> to call these function.<ul>
+<li>What about the function may be called before pinned? A duplicate <code>&amp;mut self</code> version or rely on <code>pin-init</code> so all mutable functions take <code>Pin&lt;&amp;mut Self&gt;</code> ???</li>
+</ul>
+</li>
+</ul>
+<p><code>UNPIN</code> comments:</p>
+<ul>
+<li>Put an <code># Unpin</code> comments on the functions that make the object movable again (e.g. removing the object from a global list), notes these functions themselves have to be a <code>Pin&lt;_&gt;</code> function. For example,</li>
+</ul>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">A</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="n">_pin</span>: <span class="nc">PhantomPinned</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Puts on a list for execution.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">queue</span><span class="p">(</span><span class="bp">self</span>: <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="w">    </span><span class="sd">/// # Unpin</span>
+<span class="w">    </span><span class="sd">///</span>
+<span class="w">    </span><span class="sd">/// Removes the object from the global list when return,</span>
+<span class="w">    </span><span class="sd">/// can be moved after this.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">wait_for_finish</span><span class="p">(</span><span class="bp">self</span>: <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Then if these <code># Unpin</code> functions are used to make the objects movable. Add a <code>UNSOUND: UNPIN:</code> comment as the move point, e.g.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">A</span>::<span class="n">new</span><span class="p">(</span><span class="o">..</span><span class="p">);</span>
+
+<span class="c1">// UNSOUND: SAFETY: `a` may be moved afterwards, but that's after</span>
+<span class="c1">// a Unpin function.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">pin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span>::<span class="n">new_unchecked</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">a</span><span class="p">)};</span>
+
+<span class="n">pin</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">queue</span><span class="p">();</span>
+
+<span class="c1">// UNSOUND: UNPIN: `wait_for_finish()` makes `a` movable again.</span>
+<span class="n">pin</span><span class="p">.</span><span class="n">wait_for_finish</span><span class="p">();</span>
+
+<span class="c1">// UNSOUND: Moves `a`.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+</code></pre></div>
+
+
+
+<a name="339998643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339998643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339998643">(Mar 07 2023 at 01:02)</a>:</h4>
+<p>What you describe is not unsound. Soundness is a property of API, not code.</p>
+
+
+
+<a name="339998955"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339998955" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339998955">(Mar 07 2023 at 01:05)</a>:</h4>
+<p>If you want to unpin something that's pinned and <code>!Unpin</code>, a better mental model would be to treat it as dropped and reconstructed in-place.</p>
+
+
+
+<a name="339999154"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999154" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999154">(Mar 07 2023 at 01:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339998643">said</a>:</p>
+<blockquote>
+<p>What you describe is not unsound. Soundness is a property of API, not code.</p>
+</blockquote>
+<p>I used <code>unsound</code> because it's <code>unsound</code> regarding <code>Pin</code> API, no?</p>
+
+
+
+<a name="339999207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999207">(Mar 07 2023 at 01:07)</a>:</h4>
+<p>Depends.</p>
+
+
+
+<a name="339999267"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999267" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999267">(Mar 07 2023 at 01:08)</a>:</h4>
+<p>If you control a type, you control its destructor -- therefore it's perfectly valid to say that the destructor just removes references from global list.</p>
+
+
+
+<a name="339999327"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999327" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999327">(Mar 07 2023 at 01:08)</a>:</h4>
+<p>It's a move after pinned for <code>!Unpin</code>.</p>
+
+
+
+<a name="339999412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999412">(Mar 07 2023 at 01:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339999327">said</a>:</p>
+<blockquote>
+<p>It's a move after pinned for <code>!Unpin</code>.</p>
+</blockquote>
+<p>I think that's <code>unsound</code> to <code>Pin</code> API, correct?</p>
+
+
+
+<a name="339999524"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999524" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999524">(Mar 07 2023 at 01:10)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339998955">said</a>:</p>
+<blockquote>
+<p>If you want to unpin something that's pinned and <code>!Unpin</code>, a better mental model would be to treat it as dropped and reconstructed in-place.</p>
+</blockquote>
+<p>^</p>
+
+
+
+<a name="339999587"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999587" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999587">(Mar 07 2023 at 01:11)</a>:</h4>
+<p>You can model your <code>wait_for_finish</code> as doing a <code>drop_in_place</code> followed by constructing a new <code>A</code></p>
+
+
+
+<a name="339999620"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999620" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999620">(Mar 07 2023 at 01:11)</a>:</h4>
+<p>and then it's not violating <code>Pin</code>'s contract.</p>
+
+
+
+<a name="339999741"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/339999741" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#339999741">(Mar 07 2023 at 01:12)</a>:</h4>
+<p>Ah, I see what you mean, let me think about it.</p>
+
+
+
+<a name="340001065"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340001065" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340001065">(Mar 07 2023 at 01:26)</a>:</h4>
+<p><a href="https://doc.rust-lang.org/std/pin/index.html#drop-guarantee">https://doc.rust-lang.org/std/pin/index.html#drop-guarantee</a></p>
+
+
+
+<a name="340001185"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340001185" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340001185">(Mar 07 2023 at 01:28)</a>:</h4>
+<blockquote>
+<p>Concretely, for pinned data you have to maintain the invariant that its memory will not get invalidated or repurposed from the moment it gets pinned until when drop is called.</p>
+</blockquote>
+
+
+
+<a name="340001352"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340001352" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340001352">(Mar 07 2023 at 01:29)</a>:</h4>
+<p>Is <code>drop_in_place</code> + rescontructing considered as invalidated or repurposed?</p>
+
+
+
+<a name="340002020"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340002020" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340002020">(Mar 07 2023 at 01:37)</a>:</h4>
+<p><code>drop_in_place</code> is calling the drop.</p>
+
+
+
+<a name="340004004"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340004004" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340004004">(Mar 07 2023 at 01:59)</a>:</h4>
+<p>Make sense. Look like we can move a pinned <code>!Unpin</code> soundly?</p>
+
+
+
+<a name="340005763"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340005763" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340005763">(Mar 07 2023 at 02:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339999587">said</a>:</p>
+<blockquote>
+<p>You can model your <code>wait_for_finish</code> as doing a <code>drop_in_place</code> followed by constructing a new <code>A</code></p>
+</blockquote>
+<p>Here come the tricky part: what if the <code>drop</code> function of <code>A</code> has some side-effect (say, increasing some counters for statistics purpose), by ”modeling", do I need to do the same in <code>wait_for_finsh</code>?</p>
+
+
+
+<a name="340006876"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340006876" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340006876">(Mar 07 2023 at 02:30)</a>:</h4>
+<p>If it's safe to not increase it, then you don't.</p>
+
+
+
+<a name="340007025"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340007025" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340007025">(Mar 07 2023 at 02:31)</a>:</h4>
+<p>If doing so is required to remove global reference, then of course you would have to do that, but not otherwise.</p>
+
+
+
+<a name="340008573"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Pin%3C_%3E%20in%20method%20signature/near/340008573" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature.html#340008573">(Mar 07 2023 at 02:47)</a>:</h4>
+<p>Ok, so basically, if a function behaves like <code>some ops;</code>+ <code>drop_in_place()</code>+<code>write()</code>, it's an <code># Unpin</code> function. Works for me ;-)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

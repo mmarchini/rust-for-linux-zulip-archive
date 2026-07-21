@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>Hi! Yesterday I started working on the Asahi DRM driver in Rust and one of the first things I had trouble with was understanding the <code>Data&lt;T, U, V&gt;</code> design. I see the comments/docs that go over the order in which the three parts are made unavailable on device removal, but I'm left with a lot of questions about how things would interact in practice (and I wasn't able to find good examples of how everything interacts for nontrivial drivers...).</p>\n<p>As I understand it, registrations is intended to hold subsystem producer registrations, right? In other words, the objects that make the device available to other consumers. So those would go first on device removal. Then resources represent I/O resources... does that include all consumer objects that the device requests from other subsystems, like clocks/IRQs/GPIOs or even higher level things like USB devices/interfaces/endpoints or HID raw devices? And finally, what is normally expected to go in the general data portion, and what is expected to hold references to it?</p>\n<p>I wonder what happens if a device is hot-unplugged... that would make I/O resources inaccessible, but then it's the driver's job to clean up having had the device yanked out from under it, and of course then resources would have to go before registrations... but there's also the question of how this all interacts with other consumers / userspace. One common issue is userspace having an open file descriptor to a device that was removed or made inaccessible in some way. When that happens, the driver has to keep the userspace client state around, and just fail all I/O operations, while considering the device unbound and cleaned up. A lot of subsystems don't get this quite right today, e.g. I've seen it go wrong with FireWire. Hot-unplug a host controller connected via Thunderbolt, and the driver/core gets stuck in unbind until all userspace processes that had devices open are manually killed. In this case, that probably means the driver isn't designed to be able to safely unbind and remove itself while still having dangling userspace references open, so it just waits until they go away... (and of course, the kernel isn't allowed to kill userspace processes for no reason, so it <em>has</em> to wait, potentially forever, and that has to be decoupled from the existence of a device bound to the driver in a properly designed driver!). In this case, you might need to actually keep some kind of producer state around even after the device is long gone, potentially whole Registrations, even if they are zombies that fail all operations...</p>\n<p>I also still don't quite get all the wrappers, like how <code>Ref</code>/<code>RefBorrow</code> are used with device data, and the <code>PointerWrapper</code> trait which seems to be used for context data for consumer APIs.</p>\n<p>I think it might be useful to have some prose-style documentation about this, to make it easier for driver authors to understand what the Rust-for-Linux model is here (especially for people not that familiar with Rust, which includes most Linux kernel developers!). I could help write that, but first I'd have to understand it myself ^_^;</p>",
+        "id": 294035031,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660812711
+    },
+    {
+        "content": "<p>Mind to open an issue? It should be helpful to itemize the questions (and the answer), and tracking the remain work</p>",
+        "id": 294136531,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1660844507
+    },
+    {
+        "content": "<p>Would be nice to capture the answers in some kind of documentation :)</p>",
+        "id": 294213503,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1660893255
+    },
+    {
+        "content": "<p>Answering some of the questions:</p>\n<p>Rust mostly mimics how things are done in C wrt device lifetime, on removal (for whatever reason)  a <code>remove</code> function on the device is called, and that is responsible for properly cleaning things up, including ensuring that IO resources aren't used after removal,  either because the device is not present anymore (e.g., it was unplugged) or because another driver may now be using it (e.g., this driver was unbound and a different one was bound) -- in any case, those resources _must_ not be used anymore after removal.</p>\n<p>Now, experience with C has shown us that drivers don't always get this right. So we introduced a new concept in Rust, revocable structs: the fields are accessible until <code>revoke</code> is called, after which the fields are destructed (<code>drop</code> is called on them) and they can't be accessed anymore (the implementation also ensures that ongoing uses complete before dropping everything). So we get help from to compiler to ensure that parts of driver data (e.g., IO resources) are no longer accessible after remove. However, we still need drivers to call <code>revoke</code> on the relevant fields and they may forget to do so.</p>\n<p>So we require device data to implement the <code>driver::DeviceRemoval</code> trait, which only has one method called <code>device_remove</code>, which is called automatically by subsystems after <code>remove</code> is called on a device. It's a safety  mechanism to force developers to think about what they want to revoke when a device is removed.</p>\n<p>I also implemented a <code>device::Data&lt;T, U, V&gt;</code> struct that categorises things as described in its documentation. And revokes things on <code>device_remove</code> per the order described in the documentation. But this is just a convenience struct, if the order doesn't suit you, you can just implement your own struct and implement the <code>driver::DeviceRemoval</code> trait.</p>\n<p>The pl061 driver uses this: every time we touch io resources, we first need to check if they're still accessible (we can't access them without this check). This is because gpio drivers also expose a char device to userspace, and unregistering just prevents new files from being opened, but existing ones remain open, so they still have a ref-counted pointer to device data. But in Rust we ensure that this ref-counted pointer cannot be used to touch IO resources (io mem in this case) after device removal because that part of the struct is revoked.</p>\n<p>Does it make sense? Happy to try to clarify anything else that doesn't seem to make sense.</p>",
+        "id": 294261418,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1660914525
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"414281\">@Wedson Almeida Filho</span> while studying the pl061 driver I stumbled over this too. I am not seeing anything particular where the C driver handles things differently depending on whether it is removed. Does this mean that the C driver is not handling the case correctly where the driver gets unregistered while user-space still has it open?</p>",
+        "id": 328015720,
+        "sender_full_name": "Erik Schilling",
+        "timestamp": 1676469134
+    },
+    {
+        "content": "<p>Hm... I played around with this... Looks like gpiolib is crashing on derferencing a NULL ptr if I unbind a GPIO driver while reading values from a still open chip. So I guess it does not even get far enough to let me try it. Sounds like gpiolib-cdev could benefit from this though...</p>",
+        "id": 328216772,
+        "sender_full_name": "Erik Schilling",
+        "timestamp": 1676548298
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587697\">Erik Schilling</span> <a href=\"#narrow/stream/291565-Help/topic/Understanding.20Device.3A.3AData/near/328216772\">said</a>:</p>\n<blockquote>\n<p>Hm... I played around with this... Looks like gpiolib is crashing on derferencing a NULL ptr if I unbind a GPIO driver while reading values from a still open chip. So I guess it does not even get far enough to let me try it. Sounds like gpiolib-cdev could benefit from this though...</p>\n</blockquote>\n<p>So gpio tried to address this issue but they did it a racy way which doesn't really work. Here's one instance where the maintainer acknowledges the problems when I point it out: <a href=\"https://lore.kernel.org/ksummit/CACRpkdb1W=M5EJkGbSS4QxObU-Gd5yZ1qE439k_D4K=jevgcrQ@mail.gmail.com/\">https://lore.kernel.org/ksummit/CACRpkdb1W=M5EJkGbSS4QxObU-Gd5yZ1qE439k_D4K=jevgcrQ@mail.gmail.com/</a></p>",
+        "id": 328227376,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1676551487
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/291565-Help/topic/Understanding.20Device.3A.3AData/near/328227376\">said</a>:<br>\nSo gpio tried to address this issue but they did it a racy way which doesn't really work. Here's one instance where the maintainer acknowledges the problems when I point it out: <a href=\"https://lore.kernel.org/ksummit/CACRpkdb1W=M5EJkGbSS4QxObU-Gd5yZ1qE439k_D4K=jevgcrQ@mail.gmail.com/\">https://lore.kernel.org/ksummit/CACRpkdb1W=M5EJkGbSS4QxObU-Gd5yZ1qE439k_D4K=jevgcrQ@mail.gmail.com/</a></p>\n<div class=\"codehilite\"><pre><span></span><code>Thanks for the context. That thread was a good read and things make more sense now. I found it a bit hard to wrap my head around it in the pl061_rust example. I found the split into resources and data a bit confusing there (especially since the lock from data was used to guard operations on the resources). But it makes a lot of sense with things that actually *must not* be accessed anymore upon removal.\n</code></pre></div>",
+        "id": 328241728,
+        "sender_full_name": "Erik Schilling",
+        "timestamp": 1676555419
+    }
+]

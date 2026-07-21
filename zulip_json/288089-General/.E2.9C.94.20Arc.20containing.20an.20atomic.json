@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Ahoi.<br>\nI've got an Arc that contains an atomic.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">DmaFenceCtx</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">lock</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">spinlock_t</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">nr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">seqno</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">AtomicU64</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">DmaFenceCtx</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"n\">KBox</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ctx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pin_init</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"bp\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// Feed in a non-Rust spinlock for now, since the Rust side never needs the lock.</span>\n<span class=\"w\">            </span><span class=\"n\">lock</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"n\">Opaque</span><span class=\"p\">::</span><span class=\"n\">ffi_init</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">slot</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">spinlock</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"c1\">// SAFETY: `slot` is a valid pointer to an uninitialized `struct spinlock_t`.</span>\n<span class=\"w\">                </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">spin_lock_init</span><span class=\"p\">(</span><span class=\"n\">slot</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">            </span><span class=\"p\">}),</span>\n<span class=\"w\">            </span><span class=\"c1\">// SAFETY: `dma_fence_context_alloc()` merely works on a global atomic. Parameter `1`</span>\n<span class=\"w\">            </span><span class=\"c1\">// is the number of contexts we want to allocate.</span>\n<span class=\"w\">            </span><span class=\"n\">nr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">dma_fence_context_alloc</span><span class=\"p\">(</span><span class=\"mi\">1</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">},</span>\n<span class=\"w\">            </span><span class=\"n\">seqno</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">AtomicU64</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"mi\">0</span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"p\">});</span>\n\n<span class=\"w\">        </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">pin_init</span><span class=\"p\">(</span><span class=\"n\">ctx</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">get_new_fence_seqno</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">seqno</span><span class=\"p\">.</span><span class=\"n\">fetch_add</span><span class=\"p\">(</span><span class=\"mi\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Ordering</span><span class=\"p\">::</span><span class=\"n\">Relaxed</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Rust won't allow me to borrow the arc as mutable. I.e. I can't do  <code>my_arc.get_new_fence_seqno()</code>.<br>\nPresumably because it wants to enforce that locking be used, since Arcs are usually shared.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">error</span><span class=\"p\">[</span><span class=\"n\">E0596</span><span class=\"p\">]:</span><span class=\"w\"> </span><span class=\"nc\">cannot</span><span class=\"w\"> </span><span class=\"n\">borrow</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">dereference</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">DmaFenceCtx</span><span class=\"o\">&gt;</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">mutable</span>\n<span class=\"w\">   </span><span class=\"o\">-</span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">rust</span><span class=\"o\">/</span><span class=\"n\">kernel</span><span class=\"o\">/</span><span class=\"n\">sync</span><span class=\"o\">/</span><span class=\"n\">dma_fence</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"p\">:</span><span class=\"mi\">107</span><span class=\"p\">:</span><span class=\"mi\">26</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">107</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">         </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">seqno</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">fctx</span><span class=\"p\">.</span><span class=\"n\">get_new_fence_seqno</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                          </span><span class=\"o\">^^^^</span><span class=\"w\"> </span><span class=\"n\">cannot</span><span class=\"w\"> </span><span class=\"n\">borrow</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">mutable</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">help</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">trait</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">DerefMut</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">modify</span><span class=\"w\"> </span><span class=\"n\">through</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">dereference</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">but</span><span class=\"w\"> </span><span class=\"n\">it</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">not</span><span class=\"w\"> </span><span class=\"n\">implemented</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">DmaFenceCtx</span><span class=\"o\">&gt;</span><span class=\"err\">`</span>\n</code></pre></div>\n<p>I don't need locking in this case, however. How do I solve that idiomatically. Do I have to implement <code>DerefMut</code>, as the compiler is suggesting?</p>",
+        "id": 538837392,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1757591574
+    },
+    {
+        "content": "<p>The method should be <code>&amp;self</code> to take a shared reference instead of an exclusive reference. You can't get an exclusive reference to something in an <code>Arc</code> because an <code>Arc</code> is always considered shared.</p>",
+        "id": 538839376,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757592112
+    },
+    {
+        "content": "<p>I need a mutable (exclusive?) reference for modifying the atomic.</p>",
+        "id": 538843715,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1757593289
+    },
+    {
+        "content": "<p>Hmm, or maybe I don't?<br>\nHow is it allowed / possible to modify an atomic through a non-mutable reference?</p>",
+        "id": 538844163,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1757593439
+    },
+    {
+        "content": "<p>It's because mutable is a misnomer. <code>&amp;mut</code> really means exclusive and <code>&amp;</code> really means shared. Modifying atomics through shared access is ok, therefore you can do it with an <code>&amp;</code>.</p>",
+        "id": 538844636,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757593585
+    },
+    {
+        "content": "<p>Yeah, I know it's OK – but how does the compiler know / understand?</p>",
+        "id": 538844957,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1757593685
+    },
+    {
+        "content": "<p>Because the <code>AtomicU64::fetch_add</code> method is declared as <code>&amp;self</code>.</p>",
+        "id": 538845149,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757593739
+    },
+    {
+        "content": "<p>btw, I would just use <code>SpinLock&lt;()&gt;</code> for your spinlock</p>",
+        "id": 538845249,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757593769
+    },
+    {
+        "content": "<p>no need to roll your own</p>",
+        "id": 538845282,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757593778
+    },
+    {
+        "content": "<p>Thx so far.<br>\nRegarding the lock, we can discuss that in an RFC</p>",
+        "id": 538845941,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1757593881
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> has marked this topic as resolved.</p>",
+        "id": 539738482,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1758020316
+    }
+]

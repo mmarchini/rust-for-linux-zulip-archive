@@ -1,0 +1,141 @@
+<html>
+<head><meta charset="utf-8"><title>✔ Embedded objects with shared refcount · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html">✔ Embedded objects with shared refcount</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="467492099"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467492099" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467492099">(Sep 04 2024 at 10:43)</a>:</h4>
+<p>The kernel has lots of places where a ref-counted object has a unique owner, and provides exclusive features to that owner. For instance, the <code>userdata</code> pointers allow the owner to store back-pointers into the object, while other code accesses the ref-counted object in a generic way without ever looking at <code>userdata</code>. This is fairly easy to model in Rust. However, what do we do if the <code>userdata</code> is not a void-pointer, but a trailing byte buffer where the size is specified dynamically at object-creation, and used to directly store data of the owner?</p>
+<p>I can easily mark the kernel object as DST with a trailing buffer, but then everything becomes a wide-pointer, which seems excessive. I'd rather be able to reduce a Box or Arc in size (stripping the trailing buffer) to turn a specificly typed reference to a generic one (stripping this trailing byte buffer from the type, or reducing it to size 0). This works fine in C, since <code>kfree</code> and friends don't take the total size as argument. But is this ok to do with <code>Box</code>? Or does anyone have an alternative?</p>
+<p>And when designing new code in Rust, do we have a strategy how to solve this? The entire thing can be avoided by using a backpointer with <code>userdata</code>, but then you cannot share cachelines and allocations.</p>
+
+
+
+<a name="467493092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467493092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467493092">(Sep 04 2024 at 10:47)</a>:</h4>
+<p>I imagine that since it has a refcount, those refcounts keep it alive to some extent even when the owner is no longer needed?</p>
+
+
+
+<a name="467493230"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467493230" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467493230">(Sep 04 2024 at 10:48)</a>:</h4>
+<p>Or is the refcount only part of the owner?</p>
+
+
+
+<a name="467493810"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467493810" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467493810">(Sep 04 2024 at 10:50)</a>:</h4>
+<p>You could have two pointer types <code>ARef&lt;JustTheOwner&gt;</code> and <code>ARef&lt;OwnerWithKnownUserData&lt;MyUserData&gt;&gt;</code> and just make sure that both structs agree on the layout of the owner. Then you can have either kind of reference to the owner.</p>
+
+
+
+<a name="467494041"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467494041" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467494041">(Sep 04 2024 at 10:51)</a>:</h4>
+<p>You'll need some way to know how to free the user data given only an <code>ARef&lt;JustTheOwner&gt;</code> but I imagine you can store a function pointer to run the destructor of the user data somewhere in the owner.</p>
+
+
+
+<a name="467499410"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467499410" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467499410">(Sep 04 2024 at 11:12)</a>:</h4>
+<p>The owner ctx is not ref-counted, but retains a ref-count on the generic object for its lifetime. So once the ref-count goes to 0, the owner data is guaranteed to be uninitialized/deinitialized.</p>
+
+
+
+<a name="467499580"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467499580" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467499580">(Sep 04 2024 at 11:12)</a>:</h4>
+<p>Yeah, ARef works, but kinda hacky. Any elegant way to do it with Arc?</p>
+
+
+
+<a name="467499654"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467499654" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467499654">(Sep 04 2024 at 11:13)</a>:</h4>
+<p>(for new code, not for bindings)</p>
+
+
+
+<a name="467499679"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467499679" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467499679">(Sep 04 2024 at 11:13)</a>:</h4>
+<p>The <code>Arc</code> type explicitly only supports the case where it has full control over where the refcount goes.</p>
+
+
+
+<a name="467499956"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467499956" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467499956">(Sep 04 2024 at 11:14)</a>:</h4>
+<p>If you're ok with how Arc lays out the refcount outside of your struct, then you can use it. We'll probably need some guarantee that the relevant allocator doesn't care about the size matching, but I think with the upcoming allocator series we could define a trait saying that this allocator guarantees that the size doesn't matter when freeing.</p>
+
+
+
+<a name="467750514"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467750514" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467750514">(Sep 05 2024 at 07:53)</a>:</h4>
+<p>So basically a transmute from <code>Arc&lt;Big&gt;</code> to <code>Arc&lt;Small&gt;</code> with <code>struct Big { small: Small, ... }</code>? I don't see why it wouldn't work, but it certainly violates the current requirements of the allocator definitions.</p>
+
+
+
+<a name="467751127"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467751127" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467751127">(Sep 05 2024 at 07:55)</a>:</h4>
+<p>This works for my use-case. Though there are some other core kernel concepts I don't think I can model that way. Like <code>struct device</code>, which you can embed anywhere, not just the front, of your structures.</p>
+
+
+
+<a name="467751278"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467751278" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467751278">(Sep 05 2024 at 07:55)</a>:</h4>
+<p>I agree that it doesn't work for <code>struct device</code>.</p>
+
+
+
+<a name="467751437"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467751437" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467751437">(Sep 05 2024 at 07:56)</a>:</h4>
+<p>I will use the transmute for now. Thanks for the hint!</p>
+
+
+
+<a name="467785685"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467785685" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467785685">(Sep 05 2024 at 09:41)</a>:</h4>
+<p>Talking of it, is it possible to create a runtime-dynamically-sized <code>Arc</code> in the kernel? Right now, all exposed constructors require a sized type. I can then coerce that into an unsized type for convenience, but it still requires the type-size to be known at compile time. Or am I missing something?</p>
+
+
+
+<a name="467786285"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467786285" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467786285">(Sep 05 2024 at 09:43)</a>:</h4>
+<p>I imagine we could have a constructor that takes a size and alignment, and creates an <code>Arc</code> that can hold such type by returning a raw pointer. You then initialize the value and use <code>Arc::from_raw</code> to actually create the <code>Arc</code>.</p>
+
+
+
+<a name="467786603"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467786603" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467786603">(Sep 05 2024 at 09:44)</a>:</h4>
+<p>To be clear, all of this depends on having the upcoming allocator patchset that lets you free with unknown size.</p>
+
+
+
+<a name="467786859"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467786859" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467786859">(Sep 05 2024 at 09:44)</a>:</h4>
+<p>Well, it works right now, since Box never makes use of that knowledge, right? But it is not explicitly allowed right now.</p>
+
+
+
+<a name="467787365"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467787365" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467787365">(Sep 05 2024 at 09:46)</a>:</h4>
+<p>You're probably guaranteed to get lucky right now, but it's best not to rely on that kind of thing.</p>
+
+
+
+<a name="467787789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/467787789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#467787789">(Sep 05 2024 at 09:47)</a>:</h4>
+<p>Right. But for out-of-tree hacking it works fine.</p>
+
+
+
+<a name="468090801"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Embedded%20objects%20with%20shared%20refcount/near/468090801" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Embedded.20objects.20with.20shared.20refcount.html#468090801">(Sep 06 2024 at 07:05)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="748963">David Rheinsberg</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

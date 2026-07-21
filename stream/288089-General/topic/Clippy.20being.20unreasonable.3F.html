@@ -1,0 +1,230 @@
+<html>
+<head><meta charset="utf-8"><title>Clippy being unreasonable? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html">Clippy being unreasonable?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="563714558"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714558" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714558">(Dec 14 2025 at 21:58)</a>:</h4>
+<p>I'm trying to apply some patches from Alice, this is the macro that the patch changed:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">static_lock_class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">()</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{{</span>
+<span class="w">        </span><span class="c1">// SAFETY: The returned `LockClassKey` is stored in static memory and we pin it. Drop never</span>
+<span class="w">        </span><span class="c1">// runs on a static global.</span>
+<span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="n">CLASS</span><span class="p">:</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="p">::</span><span class="n">new_static</span><span class="p">()</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="cp">$crate</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="n">Pin</span><span class="p">::</span><span class="n">static_ref</span><span class="p">(</span><span class="o">&amp;</span><span class="n">CLASS</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}};</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Now <code>rustfmt</code> is unhappy, and it wants me to do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">static</span><span class="w"> </span><span class="n">CLASS</span><span class="p">:</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="p">::</span><span class="n">new_static</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>instead. But then clippy is unhappy because it fails to find the safety comments for the unsafe block (which it could find with the previous formating):</p>
+<div class="codehilite" data-code-language="Text output"><pre><span></span><code><span class="go">warning: unsafe block missing a safety comment</span>
+<span class="go">   --&gt; ../rust/kernel/sync.rs:121:13</span>
+<span class="go">    |</span>
+<span class="go">121 |             unsafe { $crate::sync::LockClassKey::new_static() };</span>
+<span class="go">    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>
+<span class="go">    |</span>
+<span class="go">   ::: ../rust/kernel/block/mq/gen_disk.rs:125:17</span>
+<span class="go">    |</span>
+<span class="go">125 |                 static_lock_class!().as_ptr(),</span>
+<span class="go">    |                 -------------------- in this macro invocation</span>
+<span class="go">    |</span>
+<span class="go">    = help: consider adding a safety comment on the preceding line</span>
+<span class="go">    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#undocumented_unsafe_blocks</span>
+<span class="go">    = note: requested on the command line with `-W clippy::undocumented-unsafe-blocks`</span>
+<span class="go">    = note: this warning originates in the macro `static_lock_class` (in Nightly builds, run with -Z macro-backtrace for more info)</span>
+</code></pre></div>
+
+
+
+<a name="563714764"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714764" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714764">(Dec 14 2025 at 22:01)</a>:</h4>
+<p>rustfmt isn't actually unhappy, right? It's a macro</p>
+
+
+
+<a name="563714804"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714804" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714804">(Dec 14 2025 at 22:02)</a>:</h4>
+<p>Well, it wants me to change, so it's not happy.</p>
+
+
+
+<a name="563714828"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714828" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714828">(Dec 14 2025 at 22:03)</a>:</h4>
+<p>I guess you put the safety comment in the ugly position <span aria-label="woman shrugging" class="emoji emoji-1f937-200d-2640" role="img" title="woman shrugging">:woman_shrugging:</span></p>
+
+
+
+<a name="563714833"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714833" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714833">(Dec 14 2025 at 22:03)</a>:</h4>
+<p>yeah.</p>
+
+
+
+<a name="563714851"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714851" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714851">(Dec 14 2025 at 22:03)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">static_lock_class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">()</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{{</span>
+<span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="n">CLASS</span><span class="p">:</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="w"> </span><span class="o">=</span>
+<span class="w">            </span><span class="c1">// SAFETY: The returned `LockClassKey` is stored in static memory and we pin it. Drop</span>
+<span class="w">            </span><span class="c1">// never runs on a static global.</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cp">$crate</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">LockClassKey</span><span class="p">::</span><span class="n">new_static</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="cp">$crate</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="n">Pin</span><span class="p">::</span><span class="n">static_ref</span><span class="p">(</span><span class="o">&amp;</span><span class="n">CLASS</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}};</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="563714858"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714858" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714858">(Dec 14 2025 at 22:03)</a>:</h4>
+<p>now I'm unhappy</p>
+
+
+
+<a name="563714912"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714912" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714912">(Dec 14 2025 at 22:04)</a>:</h4>
+<p>file a bug with clippy I guess</p>
+
+
+
+<a name="563714935"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563714935" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563714935">(Dec 14 2025 at 22:05)</a>:</h4>
+<p>Yep</p>
+
+
+
+<a name="563805480"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563805480" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563805480">(Dec 15 2025 at 12:08)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Clippy.20being.20unreasonable.3F/near/563714858">said</a>:</p>
+<blockquote>
+<p>now I'm unhappy</p>
+</blockquote>
+<p>Why? Moving the comment as close to the unsafe block makes sense?</p>
+
+
+
+<a name="563805846"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563805846" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563805846">(Dec 15 2025 at 12:10)</a>:</h4>
+<p>Well, it’s now adding a comment between “=“ and the expression.</p>
+
+
+
+<a name="563806059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563806059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563806059">(Dec 15 2025 at 12:11)</a>:</h4>
+<p>Would you normally do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="c1">// SAFETY: ...</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>?</p>
+
+
+
+<a name="563807760"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563807760" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563807760">(Dec 15 2025 at 12:19)</a>:</h4>
+<p>Sometimes I do put a comment in a middle of a statement, e.g.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">MyStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// SAFETY: ...</span>
+<span class="w">    </span><span class="n">foo</span><span class="p">:</span><span class="w"> </span><span class="nc">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>but I think putting it above the entire statement should be accepted too.</p>
+
+
+
+<a name="563822635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563822635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563822635">(Dec 15 2025 at 13:28)</a>:</h4>
+<p>I think that yes, we may consider this a bug in clippy. I'll look into this in the next days.</p>
+
+
+
+<a name="563823474"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563823474" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563823474">(Dec 15 2025 at 13:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Clippy.20being.20unreasonable.3F/near/563806059">said</a>:</p>
+<blockquote>
+<p>Would you normally do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="c1">// SAFETY: ...</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>?</p>
+</blockquote>
+<p>Yes, I think this style makes sense in some cases, and I think it is also OK in this case. It is easy enough for the eyes to parse and it does move the comment closer to the code that it relates to.</p>
+
+
+
+<a name="563827204"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563827204" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563827204">(Dec 15 2025 at 13:47)</a>:</h4>
+<p>I agree. I think that it shouldn't be too hard to extend the lint to also cover those cases.</p>
+
+
+
+<a name="563837690"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563837690" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563837690">(Dec 15 2025 at 14:27)</a>:</h4>
+<p>I think that the formatting is not the sole reason for the lint, e.g. <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=bf958cbc802f8b652c6dee67794dc565">playground</a> does not lint. The macro may have something to do with it. I'll investigate further.</p>
+
+
+
+<a name="563838925"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563838925" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563838925">(Dec 15 2025 at 14:31)</a>:</h4>
+<p>Looks indeed macro-related. This does lint: <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=4991f16be9de6d4223b19d7407f1bf67">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=4991f16be9de6d4223b19d7407f1bf67</a></p>
+
+
+
+<a name="563839398"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563839398" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563839398">(Dec 15 2025 at 14:33)</a>:</h4>
+<p>Yep. I think the reason is that the clippy check indiscriminantly ignores spans coming from macros.</p>
+
+
+
+<a name="563841502"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563841502" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563841502">(Dec 15 2025 at 14:41)</a>:</h4>
+<p>Correction: It doesn't, but there is a check for expansions at some place. We have a test case against macro-expanded stuff, which works, but this has no binding, so there appears to be some interaction.</p>
+
+
+
+<a name="563938356"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/563938356" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#563938356">(Dec 15 2025 at 22:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Clippy.20being.20unreasonable.3F/near/563823474">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Clippy.20being.20unreasonable.3F/near/563806059">said</a>:</p>
+<blockquote>
+<p>Would you normally do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="c1">// SAFETY: ...</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>?</p>
+</blockquote>
+<p>Yes, I think this style makes sense in some cases, and I think it is also OK in this case. It is easy enough for the eyes to parse and it does move the comment closer to the code that it relates to.</p>
+</blockquote>
+<p>The annoying part is that this lint warning was solely introduced by <code>rustfmt</code>, and I could argue the previous format is also fine. And as Gary pointed out, the missing safety comment warning only triggers if this is in a macro, i.e. in normal code it's fine.</p>
+<p>It's more of the consistency of the tooling rather than which style is more reasonable.</p>
+
+
+
+<a name="564024786"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/564024786" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> llogiq <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#564024786">(Dec 16 2025 at 12:00)</a>:</h4>
+<p>The weird thing here is that the code which is responsible for finding the <code>// SAFETY</code> comment in a macro call (namely the <code>span_from_macro_expansion_has_safety_comment</code> function in <code>clippy_lints/src/undocumented_unsafe_blocks.rs</code>, line 688) doesn't appear to pick this up.</p>
+
+
+
+<a name="565004649"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Clippy%20being%20unreasonable%3F/near/565004649" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Clippy.20being.20unreasonable.3F.html#565004649">(Dec 22 2025 at 13:35)</a>:</h4>
+<p>We had similar issues in the past (outside macros, though), linked in our usual lists, i.e. I think this may be <a href="https://github.com/rust-lang/rust-clippy/issues/13024">https://github.com/rust-lang/rust-clippy/issues/13024</a>.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

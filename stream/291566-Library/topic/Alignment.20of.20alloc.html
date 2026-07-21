@@ -1,0 +1,86 @@
+<html>
+<head><meta charset="utf-8"><title>Alignment of alloc · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Alignment.20of.20alloc.html">Alignment of alloc</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="302334309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Alignment%20of%20alloc/near/302334309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Alignment.20of.20alloc.html#302334309">(Oct 04 2022 at 19:43)</a>:</h4>
+<p>Below is the message log from #mm channel in oftc, I asked about the alignment guarantee of <code>kmalloc</code> API, and got some suggestion:</p>
+<p>vbabka is Vlastimil Babka<br>
+dhansen  is Dave Hansen<br>
+willy is Matthew Wilcox</p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>IRC log</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<p>2022-09-20 12:31:35     boqun   Will we have a kmalloc()-like API that has an "alignment" argument? I ask because Rust's alloc function takes a Layou   which is basically a (size, alignment) tuple, if it directly calls kmalloc() or krealloc(), it's not semantically correct<br>
+ 2022-09-20 12:32:12     boqun   Some dicussion here: <a href="https://github.com/Rust-for-Linux/linux/pull/815#discussion_r914031172">https://github.com/Rust-for-Linux/linux/pull/815#discussion_r914031172</a><br>
+ 2022-09-20 12:34:50     boqun   What Rust-for-Linux can do is the allocating size+alignment-1 trick itself, but that's suboptimal..<br>
+ 2022-09-20 12:37:19     willy   slab already guarantees natural alignment for 512-byte and above<br>
+ 2022-09-20 12:38:36     boqun   but for example, kmalloc(192) will align to 64 or not?<br>
+ 2022-09-20 12:41:24     dhansen $ cat /sys/kernel/slab/kmalloc-192/align<br>
+ 2022-09-20 12:41:24     dhansen 8<br>
+ 2022-09-20 12:45:02     boqun   Does the sl*b implementation take (or will take) advantage of this alignment requirement?<br>
+ 2022-09-20 12:45:45     boqun   To save memory I suppose?<br>
+ 2022-09-20 12:48:01     dhansen Are you asking if it will actually align to 8 bytes in practice?  Or whether it will just end up doing 64 in practice?<br>
+2022-09-20 12:50:08     boqun   Both, but I'm more interested in the latter one, i.e. is it in fact 64byte aligned? And if so do we want users to rely on it?<br>
+2022-09-20 12:50:15     willy   i suspect it wouldn't hurt us (if debugging turned off) to guarantee higher alignment for a lot of general-purpose slabs<br>
+2022-09-20 12:50:28     vbabka  willy: really 512 and above? IIRC it was for all power-of-2 requests<br>
+2022-09-20 12:50:55     willy   i'd defer to the slab maintainer, but 512-and-above-powers-of-two was the request from the FS people<br>
+2022-09-20 12:51:59     vbabka  it made sense just to do it for everything<br>
+2022-09-20 12:52:14     vbabka  but no 64byte guarantees for 192byte allocations<br>
+2022-09-20 12:52:41     boqun   To be clear, I'm not asking to butter Rust up, just want to know what we already have ;-)<br>
+2022-09-20 12:53:03     vbabka  there it will just happen to be alighned if no debugging enabled, but for power-of-two we guarantee even with debugging     enabled<br>
+2022-09-20 12:53:34     dhansen boqun: it's not guaranteed to remain the same, but you can see what happens in practice pretty easily<br>
+2022-09-20 12:53:37     dhansen echo 1 &gt; /sys/kernel/debug/tracing/events/kmem/kmalloc/enable; cat /sys/kernel/debug/tracing/trace_pipe | grep bytes_req    =192<br>
+2022-09-20 12:53:57     boqun   so that Rust can do things like: if CONFIG_XXX=y, alloc(192) is 64 aligned, just do the allocation, otherwise fallback to size+align-1 approach<br>
+2022-09-20 12:54:14     dhansen oh and you need to disable /sys/kernel/debug/tracing/options/hash-ptr<br>
+2022-09-20 12:54:56     vbabka  debugging is runtime enabled so CONFIG won't be enough<br>
+2022-09-20 12:55:22     vbabka  more precisely, boot-time enabled<br>
+2022-09-20 12:56:12     dhansen boqun: honestly, for now, I'd just stick with the "fallback"<br>
+2022-09-20 12:56:22     dhansen it penalizes rust code only so it won't rock the boat<br>
+2022-09-20 12:56:27     boqun   vbabka: Got it<br>
+2022-09-20 12:56:38     boqun   dhansen: fine by me<br>
+2022-09-20 12:57:31     &lt;--     chipxxx (~chip@pop.92-184-96-137.mobile.abo.orange.fr) has quit (Read error: Connection reset by peer)<br>
+2022-09-20 12:57:51     vbabka  the fallback of size+align-1 sucks, it would need to track the pointer returned by kmalloc() that has to be passed to kfree(), and then the pointer used internally?<br>
+2022-09-20 13:00:03     willy   hrm, i thought kfree(kmalloc(x, GFP_*) + 1) worked<br>
+2022-09-20 13:00:34     willy   i don't think we <em>guarantee</em> it, but it'd be OK for the rust runtime<br>
+2022-09-20 13:00:46     vbabka  just calculate sufficient power-of-two size that gives you the needed alignment and fits the object<br>
+2022-09-20 13:01:08     vbabka  in the github link I see "there are no ways that we can do allocation for a layout, say, with size = 192 and alignment =     64."<br>
+2022-09-20 13:01:18     vbabka  so that's a kmalloc(256) and you can use the pointer directly<br>
+2022-09-20 13:01:53     vbabka  willy: SLOB would explode and the debugging code in SLAB/SLUB would also complain I think<br>
+2022-09-20 13:02:43     boqun   vbabka: that's just a wrong comment (the "no ways" one) ;-)<br>
+2022-09-20 13:02:45     willy   pretty sure we have permission to delete SLOB now ;-)<br>
+2022-09-20 13:03:21     willy   anyway, this is feeling dangerously like work.  going to put the laptop down now and go back to being on holiday<br>
+2022-09-20 13:04:12     boqun   vbabka: calculating sufficient power-of-two size does seems better<br>
+2022-09-20 13:04:31     vbabka  willy: enjoy<br>
+2022-09-20 13:04:41     vbabka  looks like I'm the only one who didn't stay in Ireland or what<br>
+2022-09-20 13:05:06     boqun   I got back to work at Sep 15 ;-(<br>
+2022-09-20 13:07:37     boqun   so for align &lt; 512, we calculate the sufficient power-of-two, and use that as the size of kmalloc(), for align &gt;=512, we just allocate with the size (size is always a multiple of the alignment). Sounds reasonable?<br>
+2022-09-20 13:08:19     boqun   I assume that kmalloc(1536) gives me a 512 aligned memory<br>
+2022-09-20 13:14:10     vbabka  well that's because we happen to have caches sized 1024 and 2048 and nothing in between<br>
+2022-09-20 13:14:22     vbabka  but there's no guarantee<br>
+2022-09-20 13:14:26     vbabka  only for power-of-two<br>
+2022-09-20 13:15:53     vbabka  but the only way to change it is to modify the kernel source so you could say that whoever does that needs to fix up Rust's layer too</p>
+</div></div>
+<p>One of the suggestion I got from vbabka is</p>
+<blockquote>
+<p>2022-09-20 13:00:46     vbabka  just calculate sufficient power-of-two size that gives you the needed alignment and fits the object</p>
+</blockquote>
+<p>I'm not 100% sure that's good, but put the log here.</p>
+
+
+
+<a name="302352085"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Alignment%20of%20alloc/near/302352085" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Alignment.20of.20alloc.html#302352085">(Oct 04 2022 at 21:43)</a>:</h4>
+<p>Ideally we can have a kernel API that allows custom alignment.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

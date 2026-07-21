@@ -1,0 +1,157 @@
+<html>
+<head><meta charset="utf-8"><title>Box::try_new -&gt; ENOMEM? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html">Box::try_new -&gt; ENOMEM?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="434011918"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434011918" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434011918">(Apr 18 2024 at 10:05)</a>:</h4>
+<p>Is it intentional that <code>Box::try_new()</code> doesn't return an <code>Err(ENOMEM)</code> on failure?</p>
+<p>I just wanted to return it as a <code>Result</code>, but apparently I'm forced to cast it with <code>.into()</code></p>
+
+
+
+<a name="434012736"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434012736" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434012736">(Apr 18 2024 at 10:10)</a>:</h4>
+<p>the error that <code>Box::try_new</code> returns is <code>AllocError</code>. this means that if it fails, it must be becausr there is no memory left. the general <code>Error</code> type (that declares the constant <code>ENOMEM</code>) also can represent othrr failures such as <code>EINVAL</code>.</p>
+
+
+
+<a name="434013070"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434013070" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434013070">(Apr 18 2024 at 10:12)</a>:</h4>
+<p>so yes, it is intentional. it also allows for better optimizations, since <code>Result&lt;Box&lt;T&gt;, AllocError&gt;</code> is pointer sized.</p>
+
+
+
+<a name="434013127"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434013127" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434013127">(Apr 18 2024 at 10:12)</a>:</h4>
+<p>"Optimizations" in sense of compiler / performance optimizations?</p>
+
+
+
+<a name="434016981"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434016981" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434016981">(Apr 18 2024 at 10:36)</a>:</h4>
+<p>The question mark operator automatically converts error types for you, so if you do <code>Box::try_new()?</code> in a function that returns the usual kernel error type, then it will work and result in an ENOMEM error.</p>
+
+
+
+<a name="434017055"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434017055" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434017055">(Apr 18 2024 at 10:37)</a>:</h4>
+<p>So if the box is the last thing you return, then one thing you can do is return <code>Ok(Box::try_new(foo)?)</code>.</p>
+
+
+
+<a name="434017084"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434017084" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434017084">(Apr 18 2024 at 10:37)</a>:</h4>
+<p>which will work even if <code>Box::try_new(foo)</code> doesn't.</p>
+
+
+
+<a name="434017628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434017628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434017628">(Apr 18 2024 at 10:40)</a>:</h4>
+<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>
+Lacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>
+
+
+
+<a name="434017861"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434017861" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434017861">(Apr 18 2024 at 10:41)</a>:</h4>
+<p>Ah, I understand what you're doing now. Yeah in that case an explicit conversion is the easiest way to go about it.</p>
+
+
+
+<a name="434018579"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434018579" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434018579">(Apr 18 2024 at 10:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> <a href="#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434013127">said</a>:</p>
+<blockquote>
+<p>"Optimizations" in sense of compiler / performance optimizations?</p>
+</blockquote>
+<p>yes, <code>Result&lt;Box&lt;T&gt;, AllocError&gt;</code> fits in 64 bits, <code>Result&lt;Box&lt;T&gt;, Error&gt;</code> needs 128 bits, so it cannot be returned in just <code>rax</code>.</p>
+
+
+
+<a name="434018769"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434018769" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434018769">(Apr 18 2024 at 10:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> <a href="#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434017628">said</a>:</p>
+<blockquote>
+<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>
+Lacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>
+</blockquote>
+<p>you can create another rust function that returns a result and in the C function you call that</p>
+
+
+
+<a name="434019170"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434019170" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434019170">(Apr 18 2024 at 10:50)</a>:</h4>
+<p>Another way to go about it is this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="nb">Box</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">foo</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">b</span><span class="p">,</span>
+<span class="w">    </span><span class="nb">Err</span><span class="p">(</span><span class="n">AllocError</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">clean_up</span><span class="p">();</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">ENOMEM</span><span class="p">);</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="p">};</span>
+</code></pre></div>
+<p>By typing <code>Err(AllocError)</code>, you are asserting that <code>Box::try_new</code> returns an <code>AllocError</code>, and the code will not compile if there are other possible reasons <code>Box::try_new</code> could fail.</p>
+<p>I've sometimes seen comments along the lines of "// this function can only fail with ESRCH", and this pattern allows you to encode that assertion as a checked condition in your code. As a similar example, see <a href="https://lore.kernel.org/all/20240209-alice-file-v5-3-a37886783025@google.com/">BadFdError from my file patchset</a>. By using the same syntax, you can assert in your code that an <code>fget</code> call can only fail with EBADF and that no other error conditions exist for that method. I think that is useful.</p>
+
+
+
+<a name="434028478"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/434028478" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#434028478">(Apr 18 2024 at 11:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434018769">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> <a href="#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434017628">said</a>:</p>
+<blockquote>
+<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>
+Lacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>
+</blockquote>
+<p>you can create another rust function that returns a result and in the C function you call that</p>
+</blockquote>
+<p>That can be a workaround that helps a bit, yes, but only if the unwind path is always the same. Otherwise you'd need several helper functions.<br>
+It's all solvable, obviously.</p>
+
+
+
+<a name="435426790"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/435426790" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#435426790">(Apr 25 2024 at 16:32)</a>:</h4>
+<p>Is it possible in your use case to use scope guard for cleanup?</p>
+
+
+
+<a name="435528188"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/435528188" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#435528188">(Apr 26 2024 at 07:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/435426790">said</a>:</p>
+<blockquote>
+<p>Is it possible in your use case to use scope guard for cleanup?</p>
+</blockquote>
+<p>You mean defining a separate scope with <code>{ }</code>?</p>
+
+
+
+<a name="435528405"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/435528405" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#435528405">(Apr 26 2024 at 07:16)</a>:</h4>
+<p>Probably not, we have a type named <a href="https://rust-for-linux.github.io/docs/v6.8/kernel/types/struct.ScopeGuard.html"><code>ScopeGuard</code></a> that can help you release resources (it provides the same mechanism as go's <code>defer</code> keyword, but you can also "cancel" it).</p>
+
+
+
+<a name="435531012"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/435531012" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#435531012">(Apr 26 2024 at 07:32)</a>:</h4>
+<p><code>goto</code> on cocaine then ;p<br>
+Danilo (and I) will provde some patches soon, then we could look at that in-line</p>
+
+
+
+<a name="438077953"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Box%3A%3Atry_new%20-%3E%20ENOMEM%3F/near/438077953" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F.html#438077953">(May 11 2024 at 04:24)</a>:</h4>
+<p>One small clarification here: go's <code>defer</code> runs when the function exits, while <code>ScopeGuard</code> runs when it goes out of scope, so they're slightly different</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

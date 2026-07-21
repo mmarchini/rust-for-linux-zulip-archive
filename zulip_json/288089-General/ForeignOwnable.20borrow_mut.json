@@ -1,0 +1,164 @@
+[
+    {
+        "content": "<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>\n<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>\n<p>Also, using the scope guard like this seems like a leaky abstraction.</p>",
+        "id": 372211547,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688456921
+    },
+    {
+        "content": "<p>Also, why does the trait always provide <code>borrow_mut</code>? Most similar traits in std have separate traits for immutable and mutable access, meaning that a type may choose to only implement the immutable one.</p>",
+        "id": 372218115,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688458514
+    },
+    {
+        "content": "<p>Related, I have a todo to add a lifetime parameter to the scope guard returned by <code>borrow_mut()</code></p>",
+        "id": 372256789,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688466692
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547\">said</a>:</p>\n<blockquote>\n<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>\n<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>\n<p>Also, using the scope guard like this seems like a leaky abstraction.</p>\n</blockquote>\n<p>It looks to me like this might have some issues in light of <code>core::mem::replace()/swap()/take()</code>.<br>\nIf you replace the <code>Arc&lt;T&gt;</code> that is behind the <code>&amp;mut</code> you can obtain through <code>borrow_mut()</code>, the Arc that was there will be dropped. Refcount might go to zero and leave a dangling pointer in C land.</p>\n<p>Further, when <code>ScopeGuard</code> guarding the <code>&amp;mut</code> is dropped, it will <code>into_foreign()</code> the new <code>Arc&lt;T&gt;</code> and it will leak.</p>\n<p>This is not the intention as far as I know. I don't think we considered this.</p>",
+        "id": 372315900,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688478467
+    },
+    {
+        "content": "<p>Perhaps we could check if the address of the pointee changed when the <code>borrow_mut()</code> is over and then update the pointer</p>",
+        "id": 372322930,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688479710
+    },
+    {
+        "content": "<p>Anyhow, it should be possible to bound the lifetime of the <code>ScopeGuard</code> returned by <code>borrow_mut()</code></p>",
+        "id": 372323333,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688479796
+    },
+    {
+        "content": "<p>IMO it should not be a scope guard.</p>",
+        "id": 372323506,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688479820
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372323506\">said</a>:</p>\n<blockquote>\n<p>IMO it should not be a scope guard.</p>\n</blockquote>\n<p>What instead?</p>",
+        "id": 372328719,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688480761
+    },
+    {
+        "content": "<p>I would do the same as the immutable guard.</p>",
+        "id": 372329931,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688480987
+    },
+    {
+        "content": "<p>Not following. The immutable borrow is not using a guard?</p>",
+        "id": 372339588,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688482677
+    },
+    {
+        "content": "<p>By \"immutable guard\" I am referring to the <code>Borrowed</code> associated type in the <code>ForeignOwnable</code> trait.</p>",
+        "id": 372342176,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688483157
+    },
+    {
+        "content": "<p>My suggestion is to add a <code>BorrowedMut</code> associated type and return that.</p>",
+        "id": 372342429,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688483198
+    },
+    {
+        "content": "<p>Are there even any users of <code>borrow_mut</code>?</p>",
+        "id": 372343963,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688483491
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372343963\">said</a>:</p>\n<blockquote>\n<p>Are there even any users of <code>borrow_mut</code>?</p>\n</blockquote>\n<p>I had a use in the radix tree, but since that is deprecated that is not going anywhere</p>",
+        "id": 372378435,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688491763
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"sd\">/// Search for `key` in the map. Return a mutable reference to the</span>\n<span class=\"w\">    </span><span class=\"sd\">/// associated value if found.</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">get_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">key</span>: <span class=\"nc\">Key</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">MutBorrow</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">V</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">item</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">            </span><span class=\"n\">core</span>::<span class=\"n\">ptr</span>::<span class=\"n\">NonNull</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">bindings</span>::<span class=\"n\">radix_tree_lookup</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">tree</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">key</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">})</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: `item` was created by a call to</span>\n<span class=\"w\">        </span><span class=\"c1\">// `ForeignOwnable::into_foreign()`. As `get()` takes a `&amp;self` and</span>\n<span class=\"w\">        </span><span class=\"c1\">// `remove()` takes a `&amp;mut self`, no borrows for `item` can exist and</span>\n<span class=\"w\">        </span><span class=\"c1\">// `ForeignOwnable::from_foreign()` cannot be called until this borrow</span>\n<span class=\"w\">        </span><span class=\"c1\">// is dropped.</span>\n<span class=\"w\">        </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">MutBorrow</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">guard</span>: <span class=\"nc\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">V</span>::<span class=\"n\">borrow_mut</span><span class=\"p\">(</span><span class=\"n\">item</span><span class=\"p\">.</span><span class=\"n\">as_ptr</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">},</span>\n<span class=\"w\">            </span><span class=\"n\">_marker</span>: <span class=\"nc\">core</span>::<span class=\"n\">marker</span>::<span class=\"n\">PhantomData</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 372378516,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688491792
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372342429\">said</a>:</p>\n<blockquote>\n<p>My suggestion is to add a <code>BorrowedMut</code> associated type and return that.</p>\n</blockquote>\n<p>That is fine but does not really solve anything. We would have to put a bound on the lifetime and update the safety comment to specify that caller must call <code>into_foreign()</code> when done with the reference. I guess that if it is the responsibility of the caller of <code>borrow_mut()</code> to make sure that <code>into_foreign()</code> is called, we can make it the responsibility of that caller to update the C pointer if the target of the smart pointer has changed.</p>",
+        "id": 372380502,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688492385
+    },
+    {
+        "content": "<p>I'm not convinced that an Arc should have a <code>borrow_mut</code> in the first place.</p>",
+        "id": 372381163,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688492583
+    },
+    {
+        "content": "<p>For a box, it could deref to <code>&amp;mut T</code> so that you can't swap the box.</p>",
+        "id": 372381216,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688492594
+    },
+    {
+        "content": "<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>",
+        "id": 372383033,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688493132
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372381163\">said</a>:</p>\n<blockquote>\n<p>I'm not convinced that an Arc should have a <code>borrow_mut</code> in the first place.</p>\n</blockquote>\n<p>You are right, it makes sense to split the trait.</p>",
+        "id": 372383956,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688493397
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547\">said</a>:</p>\n<blockquote>\n<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>\n<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>\n<p>Also, using the scope guard like this seems like a leaky abstraction.</p>\n</blockquote>\n<p>I agree, this seems wrong. Also agree with the approach to have a mut trait with this functionality that we implement just for box.</p>",
+        "id": 372419094,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1688506940
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372383033\">said</a>:</p>\n<blockquote>\n<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>\n</blockquote>\n<p>how do you know the location in C land? what if there are multiple refs? I dont think this is possible</p>",
+        "id": 372419285,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1688507050
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372419285\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372383033\">said</a>:</p>\n<blockquote>\n<p>Basically compare the result of <code>into_foreign()</code> when the original <code>c_void</code> passed to <code>borrow_mut()</code> and if they differ, update the place in C land where the pointer came from in the first place</p>\n</blockquote>\n<p>how do you know the location in C land? what if there are multiple refs? I dont think this is possible</p>\n</blockquote>\n<p>Yes, you are right. One would have to always pass in a <code>**</code> and we would not know if it is the only one.</p>",
+        "id": 372472478,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688536728
+    },
+    {
+        "content": "<p>If <code>borrow_mut()</code> returns a <code>&amp;mut</code> to the target of the smart pointer, we should be fine. The object might be swapped out, but at least the allocation will contain a valid object, right?</p>",
+        "id": 372472635,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1688536804
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372419094\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/ForeignOwnable.20borrow_mut/near/372211547\">said</a>:</p>\n<blockquote>\n<p>Why is the <code>borrow_mut</code> method designed in the way it is? It seems rather weird.</p>\n<p>For example, lets say I call <code>borrow_mut</code> on an <code>Arc&lt;T&gt;</code>, then I get something that derefs to <code>&amp;mut Arc&lt;T&gt;</code>, which means that I can swap it for another <code>Arc&lt;T&gt;</code>. Is that how its intended to work?</p>\n<p>Also, using the scope guard like this seems like a leaky abstraction.</p>\n</blockquote>\n<p>I agree, this seems wrong. Also agree with the approach to have a mut trait with this functionality that we implement just for box.</p>\n</blockquote>\n<p>Maybe \"borrow\" is the wrong part of the name.</p>\n<p>If I remember correctly, the usage is during a series of callbacks, the foreign owned data needs to be accessed multiple times (so manually <code>from_foreign</code> and <code>into_foreign</code> is a bit annoying), and some of the callback implementation may modify the underlying data, so a deref to <code>&amp;mut ForeignOwnable</code> is returned, of course that only works if <code>Box&lt;..&gt;</code> is used, but the different implementations may use either <code>Arc</code> or <code>Box</code>, and having a <code>borrow_mut</code> makes <code>Box</code> case and <code>Arc</code> case share the generic callback handling code.</p>\n<p>For example: <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/fs.rs#L139\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/fs.rs#L139</a></p>",
+        "id": 372474796,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1688537543
+    },
+    {
+        "content": "<p>A had some interesting thoughts regarding <code>borrow_mut</code> and xarray. See:</p>\n<blockquote>\n<p>This probably depends on changes to <code>borrow_mut</code>. I think ideally we want the trait to have a <code>BorrowedMut</code> type that represents the kind of access you can get to the inner value given mutable access to the <code>T</code>, then return <code>Option&lt;T::BorrowedMut&lt;'a&gt;&gt;</code>.</p>\n<p>For an <code>Arc</code>, the <code>BorrowedMut</code> type would still be <code>ArcBorrow</code>, but that actually still gives this extra powers over the two other methods. It lets you access the <code>Arc</code>s contents without modifying the refcount, and without a closure.</p>\n<p>And of course, with a <code>Box</code>, the <code>BorrowedMut</code> type would be <code>&amp;mut T</code>, so this type would return <code>Option&lt;&amp;mut T&gt;</code> when the pointer type is <code>Box</code>.</p>\n<p>&lt;<a href=\"https://github.com/Rust-for-Linux/linux/pull/1019#discussion_r1254112511\">https://github.com/Rust-for-Linux/linux/pull/1019#discussion_r1254112511</a>&gt;</p>\n</blockquote>",
+        "id": 372810688,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1688632385
+    },
+    {
+        "content": "<p>I'll resend this patch with the updated comment here: <a href=\"https://lore.kernel.org/all/20230822093148.3478340-1-aliceryhl@google.com/\">https://lore.kernel.org/all/20230822093148.3478340-1-aliceryhl@google.com/</a></p>\n<p>Any objections?</p>",
+        "id": 386785014,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1692777282
+    }
+]

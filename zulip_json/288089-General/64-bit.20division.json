@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>There have been quite a few patches related to 64-bit division. Could we instead provide a definition of <code>__aeabi_uldivmod</code> in terms of <code>div64_s64</code>?</p>",
+        "id": 536252715,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1756219113
+    },
+    {
+        "content": "<p>From my understanding:<br>\nYes we could technically do that, but we don't want to since this operation is very expensive on 32 bit architectures (and a full 64 bit by 64 bit division is usually not needed).</p>\n<p>Implementing <code>__aeabi_uldivmod</code> would make this operation implicit and easy to use accidentally where it is not actually needed. It wasn't implemented in the first place because of this, since the same applies to C.</p>",
+        "id": 536257265,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1756220474
+    },
+    {
+        "content": "<p>I think all the <code>CONFIG_64BIT</code> workarounds that I think are now in multiple places in the kernel are also pretty bad.</p>",
+        "id": 536257511,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1756220537
+    },
+    {
+        "content": "<p>On the full 64by64 bit division point, does arm have 64by32 bit division?</p>",
+        "id": 536257771,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1756220619
+    },
+    {
+        "content": "<p>There is the generic version, plus arm32 appears to have an optimized version from a quick look (<code>__div64_32</code>).</p>",
+        "id": 536289270,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1756231791
+    },
+    {
+        "content": "<p>Going to bump this thread again - I think we should really figure out something for this, as I just ran into another 64 bit divide in one of the patch series for booting up the GSP firmware on nova</p>",
+        "id": 541318318,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758743232
+    },
+    {
+        "content": "<p>Something I've been curious about - is it at all possible that we could implement <code>__aeabi_uldivmod</code> but somehow make it so that <code>Div</code> isn't implemented by default for 64 bit users so that they have to use a named function?</p>",
+        "id": 541319528,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758743455
+    },
+    {
+        "content": "<p>No, we can't remove impls like that.</p>",
+        "id": 541319646,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758743474
+    },
+    {
+        "content": "<p>Have we had any other ideas then I guess regarding how we want to expose this in the future?</p>",
+        "id": 541321548,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758743881
+    },
+    {
+        "content": "<p>I mean, a band-aid is to just add a method and call it.</p>",
+        "id": 541321612,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758743909
+    },
+    {
+        "content": "<p>but it won't prevent you from using /</p>",
+        "id": 541321627,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758743916
+    },
+    {
+        "content": "<p>So I'm curious, I guess I would have assumed that if we're only using core rust that we would potentially be able to make changes specific to the linux kernel. or is that just something we're trying to avoid in general?</p>",
+        "id": 541321769,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758743990
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/64-bit.20division/near/541321612\">said</a>:</p>\n<blockquote>\n<p>I mean, a band-aid is to just add a method and call it.</p>\n</blockquote>\n<p>mhm, we'll likely need a helper function here as well since the function I'm looking at is a macro, <code>DIV_U64_ROUND_UP</code></p>",
+        "id": 541321843,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758744019
+    },
+    {
+        "content": "<p>We can't change core. It's shipped with the compiler, not with Linux.</p>",
+        "id": 541321864,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758744028
+    },
+    {
+        "content": "<p>ahhh gotcha, that makes sense</p>",
+        "id": 541321874,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758744036
+    },
+    {
+        "content": "<p>We can raise it again to the upstream Rust people to see what they say. I am not sure, in any case, if we would want the <code>/</code> operator to do that by default, i.e. do we want to force users to be explicit for that case?</p>",
+        "id": 541322156,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1758744166
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/288089-General/topic/64-bit.20division/near/541322156\">said</a>:</p>\n<blockquote>\n<p>We can raise it again to the upstream Rust people to see what they say. I am not sure, in any case, if we would want the <code>/</code> operator to do that by default, i.e. do we want to force users to be explicit for that case?</p>\n</blockquote>\n<p>Perhaps we could have a special error message when it gets used that points people towards the correct functions, and points out that 64 bit division should be avoided by default if possible. of course that's something we'd need to somehow request of the core library though</p>",
+        "id": 541322474,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758744293
+    },
+    {
+        "content": "<p>Clippy has a similar lint: <a href=\"https://github.com/rust-lang/rust-clippy/pull/12451\">https://github.com/rust-lang/rust-clippy/pull/12451</a></p>",
+        "id": 541322987,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758744514
+    },
+    {
+        "content": "<p>but it's for all division, not just 64-bit</p>",
+        "id": 541323018,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758744525
+    },
+    {
+        "content": "<p>Sounds like we could make the case pretty easily then, though I'm curious then how we would handle things like <code>div_ceil()</code>, since I'd at least assume we would prefer to use the kernel math library for this sort of thing?</p>",
+        "id": 541323741,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758744790
+    },
+    {
+        "content": "<p>or would we be OK with using rust's version of these things</p>",
+        "id": 541323812,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758744817
+    },
+    {
+        "content": "<p>it's probably fine</p>",
+        "id": 541325351,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758745501
+    },
+    {
+        "content": "<p>JFYI: seems I was unaware until now that nova actually made a decision at some point to depend on CONFIG_64BIT, so we at least don't need to worry about that usecase</p>",
+        "id": 541331570,
+        "sender_full_name": "Lyude",
+        "timestamp": 1758748427
+    },
+    {
+        "content": "<p>What about leaving <code>__aeabi_uldivmod</code> undefined so that it causes a linker error?</p>",
+        "id": 595200616,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1778807368
+    }
+]

@@ -1,0 +1,449 @@
+<html>
+<head><meta charset="utf-8"><title>Splitting `ClockSource` into `TimeSource` and `ClockSource`? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html">Splitting `ClockSource` into `TimeSource` and `ClockSource`?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="528397173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528397173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528397173">(Jul 11 2025 at 19:40)</a>:</h4>
+<p>(cc: <span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> <span class="user-mention" data-user-id="597998">@FUJITA Tomonori</span> )<br>
+Hey! So I mentioned in one of the RFL meetings that I've been rebasing rvkms and trying to figure out how to handle all of the time related changes, and one of the issues I hit was whether or not to actually be using <code>Instant</code> types in the modesetting vblank API - since timestamps for vblanks usually come from a timing source on the modesetting device itself and not one of the standard system clocks, but the C side  of DRM this uses <code>ktime_t</code> for vblank timestamps.<br>
+<code>ClockSource</code> on its own though doesn't really seem completely appropriate though, we can't provide a clock ID for a source like this since none exists.<br>
+So I had the idea of potentially splitting <code>ClockSource</code> into two traits to deal with this: a <code>TimeSource</code> that any kind of timestamp providing source can implement (-maybe- with ktime_get(), but I'm not sure yet), and then <code>ClockSource</code> which would be a supertrait of <code>TimeSource</code> and handle all of the kernel timer specific bits, e.g. <code>ID</code>. Then we would be using <code>Instant&lt;T: TimeSource&gt;</code> and only binding <code>T</code> to <code>ClockSource</code> as needed. Does this seem reasonable?</p>
+
+
+
+<a name="528399905"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528399905" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528399905">(Jul 11 2025 at 20:07)</a>:</h4>
+<p>It makes sense to me, for example <code>hrtimer</code> would require a <code>ClockSource</code> because these are supported with a hrtimer.</p>
+
+
+
+<a name="528399999"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528399999" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528399999">(Jul 11 2025 at 20:08)</a>:</h4>
+<p>I guess my <a href="https://lore.kernel.org/rust-for-linux/aFIEAiDKnxsZQ8s4@tardis.local/">comment on sealing <code>ClockSource</code></a> gets resolved in a different way with this <code>TimeSource</code> idea.</p>
+
+
+
+<a name="528400193"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528400193" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528400193">(Jul 11 2025 at 20:09)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">TimeSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">now</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">ktime_t</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>but does your <code>TimeSource</code> impl always return non-negative <code>ktime_t</code>?</p>
+
+
+
+<a name="528400782"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528400782" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528400782">(Jul 11 2025 at 20:14)</a>:</h4>
+<p>Because <code>Instant - Instant</code> cannot overflow.</p>
+
+
+
+<a name="528404438"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528404438" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528404438">(Jul 11 2025 at 20:49)</a>:</h4>
+<p>We were talking about just assigning an ID to your custom source. What would prevent this?</p>
+
+
+
+<a name="528408936"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528408936" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528408936">(Jul 11 2025 at 21:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528404438">said</a>:</p>
+<blockquote>
+<p>We were talking about just assigning an ID to your custom source. What would prevent this?</p>
+</blockquote>
+<p>I'm not sure if anything would prevent it so much as I'm not really sure what the purpose would be? I was under the assumption that <code>clockid_t</code> was only relevant for core kernel clock sources, and something like a custom clock source for vblanks wouldn't necessarily correlate with a kernel timer at all. (-technically- it does correlate for rvkms, but that is the exception rather than the rule.</p>
+
+
+
+<a name="528409034"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528409034" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528409034">(Jul 11 2025 at 21:32)</a>:</h4>
+<p>And having a distinction between non-core kernel time sources and core kernel time sources would let us do things we probably want anyway, like ensuring you can't try scheduling an <code>HrTimer</code> using an <code>Instant&lt;VblankTime&gt;</code> (or whatever we would call it).</p>
+
+
+
+<a name="528422713"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528422713" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528422713">(Jul 12 2025 at 01:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528400193">said</a>:</p>
+<blockquote>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">TimeSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">now</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">ktime_t</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>but does your <code>TimeSource</code> impl always return non-negative <code>ktime_t</code>?</p>
+</blockquote>
+<p>Also - I believe it should. a negative vblank timestamp wouldn't make much sense</p>
+
+
+
+<a name="528422914"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528422914" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528422914">(Jul 12 2025 at 01:17)</a>:</h4>
+<p>Do we actually use <code>ClockSource::ID</code>?</p>
+
+
+
+<a name="528423212"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528423212" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528423212">(Jul 12 2025 at 01:24)</a>:</h4>
+<p>Ah, <code>hrtimer_setup</code> needs it.  What clockid_t does a driver that uses own clock source  pass to <code>hrtimer_setup</code>?</p>
+
+
+
+<a name="528425572"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528425572" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528425572">(Jul 12 2025 at 02:15)</a>:</h4>
+<p>I thought that your driver uses hrtimer but hrtimer needs the proper clockid. The driver needs only Instant and Delta?</p>
+
+
+
+<a name="528425628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528425628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528425628">(Jul 12 2025 at 02:17)</a>:</h4>
+<p>So: rvkms specifically uses an hrtimer using monotonic time for emulating vblanks - so it's a bit of an exception and not a typical usecase. display hardware typically has its own vertical blank timer that a driver usually reads from</p>
+
+
+
+<a name="528425701"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528425701" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528425701">(Jul 12 2025 at 02:18)</a>:</h4>
+<p>So the places where we need our own TimeSource are just for returning the vblank timestamp to the DRM subsystem for drivers implementing vblank support. We never would actually want to use that TimeSource for scheduling an hrtimer</p>
+
+
+
+<a name="528425891"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528425891" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528425891">(Jul 12 2025 at 02:23)</a>:</h4>
+<p>The places where uses own TimerSource needs Instant/Delta with the own ktime_get(); does not use hrtimer, right?</p>
+
+
+
+<a name="528425993"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528425993" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528425993">(Jul 12 2025 at 02:25)</a>:</h4>
+<p>The idea to split the ClockSource  sounds reasonable.</p>
+
+
+
+<a name="528426366"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528426366" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528426366">(Jul 12 2025 at 02:34)</a>:</h4>
+<p>TImeSource name is a bit confusing though. A clock is a source of time information, generating time values. So ClockSource name makes sense. But Time is a value from the clock source.</p>
+
+
+
+<a name="528426412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528426412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528426412">(Jul 12 2025 at 02:35)</a>:</h4>
+<p>Yeah - though one thing to mention is they don't use <code>ktime_get()</code> either, it's really just on the C side of things DRM uses ktime_t for describing vblank timestamps - so ideally we want to be able to return an <code>Instant</code> type in vblank callbacks. We wouldn't be able to use the <code>ktime_get()</code> interface as-is anyhow because we need device context to access vblank timestamp registers</p>
+
+
+
+<a name="528431076"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528431076" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528431076">(Jul 12 2025 at 04:25)</a>:</h4>
+<p>The name <code>ktime_get()</code>for the trait method might be a bad idea ;-) It should be called <code>now()</code>, right? ;-)</p>
+
+
+
+<a name="528431127"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528431127" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528431127">(Jul 12 2025 at 04:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528426412">said</a>:</p>
+<blockquote>
+<p>Yeah - though one thing to mention is they don't use <code>ktime_get()</code> either, it's really just on the C side of things DRM uses ktime_t for describing vblank timestamps - so ideally we want to be able to return an <code>Instant</code> type in vblank callbacks. We wouldn't be able to use the <code>ktime_get()</code> interface as-is anyhow because we need device context to access vblank timestamp registers</p>
+</blockquote>
+<p>you mean you won't call the <code>ktime_get()</code> C function, right? Surely you can implement a <code>now()</code> function for your <code>TimeSource</code>?</p>
+
+
+
+<a name="528431508"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528431508" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528431508">(Jul 12 2025 at 04:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528431076">said</a>:</p>
+<blockquote>
+<p>The name <code>ktime_get()</code>for the trait method might be a bad idea ;-) It should be called <code>now()</code>, right? ;-)</p>
+</blockquote>
+<p>Yeah, we should use <code>now()</code> or <code>current_time()</code> or something instead of ktime_get().</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Foo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">now</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">ktime_t</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>IMHO, this trait implements a mechanism generating current time values, which is the definition of clock source. So I think that we should use <code>ClockSource</code> for this trait. We need a different name for clockid_t.</p>
+
+
+
+<a name="528433079"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528433079" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528433079">(Jul 12 2025 at 05:07)</a>:</h4>
+<p>Also on the naming point - what about <code>ClockSource</code> and <code>KernelClock</code> or <code>KernelClockSource</code>?</p>
+
+
+
+<a name="528433774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528433774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528433774">(Jul 12 2025 at 05:21)</a>:</h4>
+<p>My preference are ClockSource and ClockSourceId</p>
+
+
+
+<a name="528433996"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528433996" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528433996">(Jul 12 2025 at 05:26)</a>:</h4>
+<p>or ClockSrouce and ClockId</p>
+
+
+
+<a name="528434059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528434059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> FUJITA Tomonori <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528434059">(Jul 12 2025 at 05:27)</a>:</h4>
+<p>because ClockId trait gives a valid clockid_t</p>
+
+
+
+<a name="528434650"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528434650" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528434650">(Jul 12 2025 at 05:41)</a>:</h4>
+<p>oh yeah that works</p>
+
+
+
+<a name="528728552"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528728552" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528728552">(Jul 14 2025 at 19:44)</a>:</h4>
+<p>Honestly while thinking about this after a bit - while I don't think we're really supposed to return negative timestamps, I'm not really sure that we gain much using Instant here - especially since it would require us to make sure that the timestamp that we want to return isn't &lt; 0. So it might actually make sense to just use Delta here, and also add something so that we can convert Instant to Delta specifically for handling rvkms's case of emulating vblanks using an hrtimer</p>
+
+
+
+<a name="528729086"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729086" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729086">(Jul 14 2025 at 19:47)</a>:</h4>
+<p>You don't need to make <code>Instant</code> non-negative actually, you just need to make sure <code>Instant - Instant</code> won't overflow.</p>
+
+
+
+<a name="528729414"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729414" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729414">(Jul 14 2025 at 19:50)</a>:</h4>
+<p>Oh. Though, that's still a check that we need the driver to do and I'm not totally sure it matters much to the vblank core.</p>
+
+
+
+<a name="528729621"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729621" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729621">(Jul 14 2025 at 19:51)</a>:</h4>
+<p>With other clock sources, an instant is in the range <code>[0,i32::MAX]</code>, which means that the difference can be anywhere in <code>[-i32::MAX,i32::MAX]</code>, i.e. it's the largest range so that differences don't overflow.</p>
+
+
+
+<a name="528729649"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729649" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729649">(Jul 14 2025 at 19:51)</a>:</h4>
+<p>(I think ktime_t is an i32?)</p>
+
+
+
+<a name="528729668"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729668" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729668">(Jul 14 2025 at 19:51)</a>:</h4>
+<p>no it's i64</p>
+
+
+
+<a name="528729681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729681">(Jul 14 2025 at 19:52)</a>:</h4>
+<p>then i32 -&gt; i64 in what I said</p>
+
+
+
+<a name="528729756"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729756" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729756">(Jul 14 2025 at 19:52)</a>:</h4>
+<p>But it means that there's no need for overflow checks when subtracting instants - with the range they're in, it can never overflow.</p>
+
+
+
+<a name="528729823"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729823" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729823">(Jul 14 2025 at 19:53)</a>:</h4>
+<p>But it means that it does need to be non-negative.</p>
+
+
+
+<a name="528729866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729866">(Jul 14 2025 at 19:53)</a>:</h4>
+<p>BTW on that note - would we be open to having some simple arithmatic for adding/subtracting Deltas from Instant? One issue I did definitely notice is that without this, it's pretty difficult to work with Instants in regards to scheduling a timer at a precise time in the future</p>
+
+
+
+<a name="528729965"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729965" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729965">(Jul 14 2025 at 19:54)</a>:</h4>
+<p>If we don't have methods for adding a duration to an instant, we should.</p>
+
+
+
+<a name="528729977"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528729977" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528729977">(Jul 14 2025 at 19:54)</a>:</h4>
+<p>It should probably force an overflow check, though.</p>
+
+
+
+<a name="528730058"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730058" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730058">(Jul 14 2025 at 19:54)</a>:</h4>
+<p>Yeah - I was thinking that with this sort of thing maybe we should just handle it the same way that rust handles arithmatic in general - panicking in situations where wrapping/saturating isn't explicitly specified and an over/underflow occurred</p>
+
+
+
+<a name="528730087"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730087" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730087">(Jul 14 2025 at 19:55)</a>:</h4>
+<p><code>Instant + Delta</code> should be supported</p>
+
+
+
+<a name="528730110"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730110" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730110">(Jul 14 2025 at 19:55)</a>:</h4>
+<p><code>Delta + Delta</code> as well.</p>
+
+
+
+<a name="528730194"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730194" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730194">(Jul 14 2025 at 19:55)</a>:</h4>
+<p>We need <code>Instant - Delta</code> as well, btw. And <code>Delta % Delta</code> (this one sounds silly but it is actually useful for figuring out where in a repeating interval of time we are from a given time</p>
+
+
+
+<a name="528730235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730235">(Jul 14 2025 at 19:56)</a>:</h4>
+<p>Yes <code>Instant - Delta</code> is fine.</p>
+
+
+
+<a name="528730299"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730299" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730299">(Jul 14 2025 at 19:56)</a>:</h4>
+<p><code>Delta</code> itself is just a normal <code>i64</code></p>
+
+
+
+<a name="528730394"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730394" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730394">(Jul 14 2025 at 19:57)</a>:</h4>
+<p>but we probably want to avoid hardware division implementation (software division is fine)</p>
+
+
+
+<a name="528730512"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528730512" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528730512">(Jul 14 2025 at 19:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528730394">said</a>:</p>
+<blockquote>
+<p>but we probably want to avoid hardware division implementation (software division is fine)</p>
+</blockquote>
+<p>What do you mean by this btw?</p>
+
+
+
+<a name="528731015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731015">(Jul 14 2025 at 20:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528730512">said</a>:</p>
+<blockquote>
+<p>What do you mean by this btw?</p>
+</blockquote>
+<p>When you implement <code>Delta % Delta</code>, you need to check the generated code, and it cannot use division instruction on the architectures that don't support them at the kernel context.</p>
+
+
+
+<a name="528731070"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731070" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731070">(Jul 14 2025 at 20:02)</a>:</h4>
+<p>oh dear</p>
+
+
+
+<a name="528731121"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731121" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731121">(Jul 14 2025 at 20:02)</a>:</h4>
+<p>I never realized there were architectures that didn't let you divide in kernel context</p>
+
+
+
+<a name="528731238"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731238" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731238">(Jul 14 2025 at 20:03)</a>:</h4>
+<p><code>do_div()</code> exists for a purpose.</p>
+
+
+
+<a name="528731352"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731352" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731352">(Jul 14 2025 at 20:04)</a>:</h4>
+<p>I might not be the expert for this topic, you need to consult linux-arch for this.</p>
+
+
+
+<a name="528731797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528731797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528731797">(Jul 14 2025 at 20:07)</a>:</h4>
+<p>this really feels like something that the compiler should be handling and not the developer. Like, if I were bringing up an architecture it feels like it would be easy to spot these things. But I also am not an expert on ISAs, and I'm not really sure if I've got the time to put in for that even though I really do need to be able to do modulos here</p>
+
+
+
+<a name="528732331"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528732331" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528732331">(Jul 14 2025 at 20:11)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> is "you can't do a % b` actually documented anywhere btw? I feel like I've seen code doing modulos in the kernel before</p>
+
+
+
+<a name="528733543"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528733543" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528733543">(Jul 14 2025 at 20:19)</a>:</h4>
+<p>otherwise, tbh, i'm kind of just tempted to say we should ask upstream rust about this or see if this sort of thing can be handled (by someone else) as op implementations on <code>i8/16/32/64</code>/etc. otherwise i worry this code is never getting upstream :S</p>
+
+
+
+<a name="528733780"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528733780" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528733780">(Jul 14 2025 at 20:21)</a>:</h4>
+<p>I did say "consult", didn't I? ;-)</p>
+
+
+
+<a name="528733941"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528733941" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528733941">(Jul 14 2025 at 20:22)</a>:</h4>
+<p>So you're not going to face this alone.</p>
+
+
+
+<a name="528734029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528734029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528734029">(Jul 14 2025 at 20:22)</a>:</h4>
+<p>For 32bit architectures, I think you will get a link error when doing 64bit division.</p>
+
+
+
+<a name="528734902"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528734902" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528734902">(Jul 14 2025 at 20:28)</a>:</h4>
+<p>FYI: <a href="https://lore.kernel.org/rust-for-linux/CANiq72ke45eOwckMhWHvmwxc03dxr4rnxxKvx+HvWdBLopZfrQ@mail.gmail.com/">https://lore.kernel.org/rust-for-linux/CANiq72ke45eOwckMhWHvmwxc03dxr4rnxxKvx+HvWdBLopZfrQ@mail.gmail.com/</a></p>
+
+
+
+<a name="528738327"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528738327" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528738327">(Jul 14 2025 at 20:51)</a>:</h4>
+<p>so I was not accurate, it is “i64 / i64” that is not fully supported for all the architectures</p>
+
+
+
+<a name="528740449"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528740449" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528740449">(Jul 14 2025 at 21:05)</a>:</h4>
+<p>honestly it's just that the change I made with rvkms that brought me down this rabbit hole was not supposed to be that difficult and i'm trying quite hard not to pile additional work on top of what I need to already get upstream.</p>
+
+
+
+<a name="528740509"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528740509" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528740509">(Jul 14 2025 at 21:06)</a>:</h4>
+<p>is there a way i can just prevent this driver from being built on architectures that don't deal with this?</p>
+
+
+
+<a name="528742107"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528742107" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528742107">(Jul 14 2025 at 21:18)</a>:</h4>
+<p>Make “Delta / Delta” only exists for CONFIG_64BIT, and make your driver depends on CONFIG_64BIT</p>
+
+
+
+<a name="528742131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528742131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528742131">(Jul 14 2025 at 21:18)</a>:</h4>
+<p>looks like i'm fine if I just block this on 64 bit architectures, so i'll implement the other ops and just leave delta out of this and convert to/from nanos</p>
+
+
+
+<a name="528742158"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528742158" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528742158">(Jul 14 2025 at 21:18)</a>:</h4>
+<p>sorry, 32 bit arches</p>
+
+
+
+<a name="528742486"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528742486" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528742486">(Jul 14 2025 at 21:20)</a>:</h4>
+<p>I think making “Delta / Delta” depend on CONFIG_64BIT is the way to go, and if one accidentally do that on 32 bit kernel, compile can tell them.</p>
+
+
+
+<a name="528742560"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Splitting%20%60ClockSource%60%20into%20%60TimeSource%60%20and%20%60ClockSource%60%3F/near/528742560" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F.html#528742560">(Jul 14 2025 at 21:20)</a>:</h4>
+<p>sgtm! thank you btw ♥\</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

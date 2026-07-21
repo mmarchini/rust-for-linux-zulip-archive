@@ -1,0 +1,68 @@
+<html>
+<head><meta charset="utf-8"><title>Store removable reference to list entry · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Store.20removable.20reference.20to.20list.20entry.html">Store removable reference to list entry</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="568820243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Store%20removable%20reference%20to%20list%20entry/near/568820243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Store.20removable.20reference.20to.20list.20entry.html#568820243">(Jan 19 2026 at 14:51)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span>  <span class="user-mention" data-user-id="413824">@Gary Guo</span> </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// Callback item for the hardware fences to wake / progress the jobqueue.</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">HwFenceWaker</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">jobq</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">Revocable</span><span class="o">&lt;</span><span class="n">SpinLock</span><span class="o">&lt;</span><span class="n">InnerJobqueue</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">job</span><span class="p">:</span><span class="w"> </span><span class="nc">Job</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="n">DmaFenceCbFunc</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">HwFenceWaker</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">callback</span><span class="p">(</span><span class="n">cb</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">DmaFenceCb</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;&gt;</span><span class="p">)</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="bp">Self</span><span class="p">:</span><span class="w"> </span><span class="nb">Sized</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// This prevents against deadlock. See Jobqueue's drop() for details.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">jq_guard</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">jobq</span><span class="p">.</span><span class="n">try_access</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">jq_guard</span><span class="p">.</span><span class="n">is_none</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">jq_guard</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jq_guard</span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Take Jobqueue lock.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">jq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jq_guard</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+<span class="w">        </span><span class="c1">// Remove job from running list.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">job</span><span class="p">.</span><span class="n">remove</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="c1">// Signal done_fence.</span>
+<span class="w">        </span><span class="c1">// TODO: It's more robust if the JQ makes sure that fences get signalled</span>
+<span class="w">        </span><span class="c1">// in order, even if the driver should signal them chaotically.</span>
+<span class="w">        </span><span class="c1">//         let _ = cb.data.job.done_fence.signal();</span>
+<span class="w">        </span><span class="c1">// Run more ready jobs if there's capacity.</span>
+<span class="w">        </span><span class="n">jq</span><span class="p">.</span><span class="n">start_submit_worker</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2/rust/kernel/drm/jq.rs?ref_type=heads#L119">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2/rust/kernel/drm/jq.rs?ref_type=heads#L119</a></p>
+<p>I'm now almost there with drm_jobqueue. One thing I am still missing is a way to store a pointer to my <code>Job</code> in <code>struct HwFenceWaker</code>.</p>
+<p>I need to access the Job, and remove it from the list the job was in.<br>
+How would I best achieve that? I.e., what container should Job be in so that <code>remove()</code> is available?</p>
+<p>--</p>
+<p>Note that parallel access to a <code>Job</code> is guarded against through <code>SpinLock&lt;InnerJobqueue&gt;</code>, but I suspect I also have to tell Rust about that still…</p>
+
+
+
+<a name="569199641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Store%20removable%20reference%20to%20list%20entry/near/569199641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Store.20removable.20reference.20to.20list.20entry.html#569199641">(Jan 21 2026 at 09:00)</a>:</h4>
+<p>I've now worked around that with a different mechanism. We can discuss its merit on-list then.</p>
+
+
+
+<a name="569199830"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Store%20removable%20reference%20to%20list%20entry/near/569199830" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Store.20removable.20reference.20to.20list.20entry.html#569199830">(Jan 21 2026 at 09:01)</a>:</h4>
+<p>Sorry I didn't reply. I'm a bit unsure what the question here was, but glad you found a solution.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

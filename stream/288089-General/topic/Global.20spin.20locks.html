@@ -1,0 +1,325 @@
+<html>
+<head><meta charset="utf-8"><title>Global spin locks · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html">Global spin locks</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="469133522"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469133522" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469133522">(Sep 10 2024 at 15:44)</a>:</h4>
+<p>I think we can avoid the separate initialization step of global locks like this: <a href="https://github.com/Darksonn/linux/commits/arch-spin-global/">https://github.com/Darksonn/linux/commits/arch-spin-global/</a></p>
+<p>Thoughts? The idea is to do this:</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="w"> </span>#define __ARCH_SPIN_LOCK_UNLOCKED      { 0 }
+<span class="gi">+#define __ARCH_SPIN_LOCK_UNLOCKED_TYP  unsigned int</span>
+<span class="gi">+#define __ARCH_SPIN_LOCK_UNLOCKED_INT  0</span>
+</code></pre></div>
+<p>and use the new defines on the Rust side.</p>
+
+
+
+<a name="469150411"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469150411" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469150411">(Sep 10 2024 at 16:39)</a>:</h4>
+<p>looks a bit cursed, but I think that is a huge improvement if we can avoid the additional init function. Great idea!<br>
+In <code>rust/bindings/lib.rs</code>, I do not like the hardcoded <code>64</code> constant... Do you think it's possible to just calculate the required length? If not, then I would add a <code>build_assert!</code> to check that it's fine. Or maybe define the size also on the C side?</p>
+
+
+
+<a name="469150653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469150653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469150653">(Sep 10 2024 at 16:40)</a>:</h4>
+<p>The Rust compiler will catch the UB during const evaluation if 64 is too small.</p>
+
+
+
+<a name="469157558"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469157558" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469157558">(Sep 10 2024 at 17:06)</a>:</h4>
+<p>Anyone happens to know what file would be a good place to put a kunit test (on the C side) related to this change?</p>
+
+
+
+<a name="469160730"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469160730" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469160730">(Sep 10 2024 at 17:20)</a>:</h4>
+<p>why do you need a <code>__ARCH_SPIN_LOCK_UNLOCKED_TYP</code>, it should always be an <code>i32</code>, right?</p>
+
+
+
+<a name="469161296"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469161296" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469161296">(Sep 10 2024 at 17:22)</a>:</h4>
+<p>also, I think you need to statically check that <code>__ARCH_SPIN_LOCK_UNLOCKED</code> is the same value as  <code>__ARCH_SPIN_LOCK_UNLOCKED_INT</code>.</p>
+
+
+
+<a name="469161697"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469161697" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469161697">(Sep 10 2024 at 17:24)</a>:</h4>
+<p>See the Todo in the commit message</p>
+
+
+
+<a name="469162411"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469162411" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469162411">(Sep 10 2024 at 17:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469160730">said</a>:</p>
+<blockquote>
+<p>why do you need a <code>__ARCH_SPIN_LOCK_UNLOCKED_TYP</code>, it should always be an <code>i32</code>, right?</p>
+</blockquote>
+<p>Ah oh, in SMP=n, spinlock is ZST ;-)</p>
+
+
+
+<a name="469162647"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469162647" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469162647">(Sep 10 2024 at 17:28)</a>:</h4>
+<p>Parisc is another tricky one</p>
+
+
+
+<a name="469163125"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469163125" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469163125">(Sep 10 2024 at 17:29)</a>:</h4>
+<p>You could define the new macro only for the archs that support Rust, right?</p>
+
+
+
+<a name="469163227"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469163227" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469163227">(Sep 10 2024 at 17:30)</a>:</h4>
+<p>True.</p>
+
+
+
+<a name="469163610"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469163610" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469163610">(Sep 10 2024 at 17:32)</a>:</h4>
+<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>
+
+
+
+<a name="469163788"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469163788" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469163788">(Sep 10 2024 at 17:32)</a>:</h4>
+<p>Won't it cause build error if they forget?</p>
+
+
+
+<a name="469163868"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469163868" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469163868">(Sep 10 2024 at 17:32)</a>:</h4>
+<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>
+
+
+
+<a name="469165022"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469165022" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469165022">(Sep 10 2024 at 17:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469162647">said</a>:</p>
+<blockquote>
+<p>Parisc is another tricky one</p>
+</blockquote>
+<p>Rust doesn't support this _at all_, so we probably don't need to add it</p>
+
+
+
+<a name="469165197"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469165197" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469165197">(Sep 10 2024 at 17:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469163610">said</a>:</p>
+<blockquote>
+<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>
+</blockquote>
+<p>it will be a compile error when they forget, right?</p>
+
+
+
+<a name="469165259"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469165259" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469165259">(Sep 10 2024 at 17:37)</a>:</h4>
+<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>
+
+
+
+<a name="469165349"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469165349" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469165349">(Sep 10 2024 at 17:37)</a>:</h4>
+<p>In general, I thought I could just add some tests for the correct value on the C side, and not bother with making the test arch-specific.</p>
+
+
+
+<a name="469166308"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469166308" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469166308">(Sep 10 2024 at 17:41)</a>:</h4>
+<p>if someone adds a brand-new arch, they would also have this issue, right?</p>
+
+
+
+<a name="469166402"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469166402" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469166402">(Sep 10 2024 at 17:41)</a>:</h4>
+<p>what?</p>
+
+
+
+<a name="469166450"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469166450" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469166450">(Sep 10 2024 at 17:41)</a>:</h4>
+<p>so I don't think it's that bad for people that add rust support for a new arch to have to do add it</p>
+
+
+
+<a name="469166452"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469166452" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469166452">(Sep 10 2024 at 17:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469165259">said</a>:</p>
+<blockquote>
+<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>
+</blockquote>
+<p>Arch needs to explicitly select whether it uses "asm-generic" header or not, so there is no "silent inclusion".</p>
+
+
+
+<a name="469166605"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469166605" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469166605">(Sep 10 2024 at 17:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469166452">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469165259">said</a>:</p>
+<blockquote>
+<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>
+</blockquote>
+<p>Arch needs to explicitly select whether it uses "asm-generic" header or not, so there is no "silent inclusion".</p>
+</blockquote>
+<p>Thanks for the clarification.</p>
+
+
+
+<a name="469167206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469167206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469167206">(Sep 10 2024 at 17:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469166402">said</a>:</p>
+<blockquote>
+<p>what?</p>
+</blockquote>
+<p>I was referring to this:</p>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469163610">said</a>:</p>
+<blockquote>
+<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>
+</blockquote>
+<p>When someone adds support for an arch that isn't yet supported in the kernel, they would have to add this, if they also wanted to enable rust.</p>
+
+
+
+<a name="469167360"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469167360" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469167360">(Sep 10 2024 at 17:44)</a>:</h4>
+<p>so I think it's fine to have people that add rust support for an arch also have to add it</p>
+
+
+
+<a name="469167437"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469167437" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469167437">(Sep 10 2024 at 17:44)</a>:</h4>
+<p>Also, we could make an "architecture checking list" for new arch to implement Rust support, it would be helpful anyway.</p>
+
+
+
+<a name="469167916"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469167916" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469167916">(Sep 10 2024 at 17:46)</a>:</h4>
+<p>But overall, I agree that using a const value to initialize static spinlocks is the right thing to do, thanks for looking into this!</p>
+
+
+
+<a name="469168141"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469168141" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469168141">(Sep 10 2024 at 17:47)</a>:</h4>
+<p>Any advice on where to put a kunit test?</p>
+
+
+
+<a name="469168693"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469168693" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469168693">(Sep 10 2024 at 17:49)</a>:</h4>
+<p>I haven't written any kunit test for C myself, but I find a few <code>_kunit.c</code> file in <code>lib/</code>, so that's probably where it should be put.</p>
+
+
+
+<a name="469170853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469170853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469170853">(Sep 10 2024 at 17:55)</a>:</h4>
+<p>but since it can be done static may be just</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">static_assert</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED_TYP</span><span class="w"> </span><span class="o">*</span><span class="p">)(</span><span class="o">&amp;</span><span class="p">(</span><span class="n">arch_spinlock_t</span><span class="w"> </span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED</span><span class="p">))</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED_INT</span><span class="p">);</span>
+</code></pre></div>
+<p>in <code>rust/bindings/bindings_helper.h</code></p>
+
+
+
+<a name="469171092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469171092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469171092">(Sep 10 2024 at 17:56)</a>:</h4>
+<p>Ah nice!</p>
+
+
+
+<a name="469171152"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469171152" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469171152">(Sep 10 2024 at 17:56)</a>:</h4>
+<p>though why not put the test somewhere that runs even if Rust is disabled?</p>
+
+
+
+<a name="469171738"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469171738" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469171738">(Sep 10 2024 at 17:59)</a>:</h4>
+<p>to avoid introducing _TYP and _INT for archs that don't support Rust I think.</p>
+
+
+
+<a name="469171807"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469171807" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469171807">(Sep 10 2024 at 17:59)</a>:</h4>
+<p>We can wrap it in <code>#ifdef __ARCH_SPIN_LOCK_UNLOCKED_TYP</code></p>
+
+
+
+<a name="469172067"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469172067" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469172067">(Sep 10 2024 at 18:00)</a>:</h4>
+<p>Then probably put it in <code>include/linux/spinlock_types.h</code>.</p>
+
+
+
+<a name="469172125"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469172125" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469172125">(Sep 10 2024 at 18:00)</a>:</h4>
+<p>Ok</p>
+
+
+
+<a name="469186987"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469186987" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469186987">(Sep 10 2024 at 19:03)</a>:</h4>
+<p>Hmm.. but seems a </p>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469170853">said</a>:</p>
+<blockquote>
+<p>but since it can be done static may be just</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">static_assert</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED_TYP</span><span class="w"> </span><span class="o">*</span><span class="p">)(</span><span class="o">&amp;</span><span class="p">(</span><span class="n">arch_spinlock_t</span><span class="w"> </span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED</span><span class="p">))</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED_INT</span><span class="p">);</span>
+</code></pre></div>
+<p>in <code>rust/bindings/bindings_helper.h</code></p>
+</blockquote>
+<p>Hmm... looks like this C version "transmute" doesn't work in constant expression...</p>
+
+
+
+<a name="469187126"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469187126" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469187126">(Sep 10 2024 at 19:04)</a>:</h4>
+<p>So it has to be a real kunit test?</p>
+
+
+
+<a name="469190543"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469190543" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469190543">(Sep 10 2024 at 19:19)</a>:</h4>
+<p>Probably, I'm still trying to see if there is an alternative.</p>
+
+
+
+<a name="469190579"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469190579" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469190579">(Sep 10 2024 at 19:19)</a>:</h4>
+<p>Well let me know what you come up with.</p>
+
+
+
+<a name="469196223"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469196223" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469196223">(Sep 10 2024 at 19:48)</a>:</h4>
+<p>so if bindgen can convert a C const to Rust const, we can do a:</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">const</span><span class="w"> </span><span class="n">arch_spinlock_t</span><span class="w"> </span><span class="n">UNLOCKED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">__ARCH_SPIN_LOCK_UNLOCKED</span><span class="p">;</span>
+</code></pre></div>
+<p>and use that in Rust code?</p>
+
+
+
+<a name="469197638"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469197638" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469197638">(Sep 10 2024 at 19:54)</a>:</h4>
+<p>(it's a bit annoying to work around a bindgen issue with C side changes, sigh)</p>
+
+
+
+<a name="469199351"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Global%20spin%20locks/near/469199351" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Global.20spin.20locks.html#469199351">(Sep 10 2024 at 20:02)</a>:</h4>
+<p>Yeah if Bingen could handle the struct it would be much easier</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

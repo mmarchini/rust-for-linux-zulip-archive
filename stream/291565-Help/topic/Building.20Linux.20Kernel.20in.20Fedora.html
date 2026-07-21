@@ -1,0 +1,133 @@
+<html>
+<head><meta charset="utf-8"><title>Building Linux Kernel in Fedora · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Building.20Linux.20Kernel.20in.20Fedora.html">Building Linux Kernel in Fedora</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="561317267"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Building%20Linux%20Kernel%20in%20Fedora/near/561317267" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steven Pérez Alfaro <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Building.20Linux.20Kernel.20in.20Fedora.html#561317267">(Dec 02 2025 at 03:16)</a>:</h4>
+<p>Hello everyone,</p>
+<p>I was building Linux Kernel in Fedora 43 today, I followed the below steps and It "worked" in terms that it didn't panic and I have limited access to some commands like ls, nano, etc, but I cannot do a touch, etc ...</p>
+<p>I wonder if those steps make sense and if I'm missing something important. I used ChatGPT in some scenarios to troubleshoot some issues I had.</p>
+<p>Install Rust and Dependencies</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>rust<span class="w"> </span>rust-src<span class="w"> </span>bindgen-cli<span class="w"> </span>rustfmt<span class="w"> </span>clippy
+</code></pre></div>
+<p>Clone the Kernel</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>git@github.com:Rust-for-Linux/linux.git
+</code></pre></div>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>make<span class="w"> </span><span class="nv">LLVM</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>rustavailable
+</code></pre></div>
+<p>Install <code>flex</code> (and other Kconfig build deps)</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>flex<span class="w"> </span>bison<span class="w"> </span>ncurses-devel
+</code></pre></div>
+<p>Install the full LLVM toolchain</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>clang<span class="w"> </span>lld<span class="w"> </span>llvm<span class="w"> </span>llvm-devel
+</code></pre></div>
+<p>Install elfutils development package</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>elfutils-libelf-devel
+</code></pre></div>
+<p>Install OpenSSL development package</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>openssl-devel
+</code></pre></div>
+<p>Install QEMU</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>qemu-system-x86
+</code></pre></div>
+<p>Install busybox</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>busybox
+</code></pre></div>
+<p>Setup Kernel Configuration</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>make<span class="w"> </span>menuconfig
+</code></pre></div>
+<p>a) Go to <em>General setup → Rust support (CONFIG_RUST)</em>, enable it. </p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>General setup →
+    [*] Rust support (CONFIG_RUST)
+</code></pre></div>
+<p>b) Then under <em>Kernel hacking → Sample kernel code → Rust samples</em>, enable some sample modules</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>make<span class="w"> </span>rust-analyzer
+</code></pre></div>
+<p>It should output:</p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>rust-project.json
+</code></pre></div>
+<p>Build the kernel full</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>make<span class="w"> </span><span class="nv">LLVM</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>-j<span class="k">$(</span>nproc<span class="k">)</span>
+</code></pre></div>
+<p>It should output:</p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>Kernel: arch/x86/boot/bzImage is ready  (#1)
+</code></pre></div>
+<p>Create a clean minimal rootfs with BusyBox</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code><span class="ch">#!/usr/bin/env bash</span>
+<span class="nb">set</span><span class="w"> </span>-e
+<span class="c1"># 1. Remove old rootfs and initramfs</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>minimal_initramfs<span class="w"> </span>initramfs.cpio<span class="w"> </span>initramfs.cpio.gz
+<span class="c1"># 2. Create minimal directory structure</span>
+mkdir<span class="w"> </span>-p<span class="w"> </span>minimal_initramfs/<span class="o">{</span>bin,sbin,etc,proc,sys,usr/bin,usr/sbin,dev<span class="o">}</span>
+<span class="c1"># 3. Copy BusyBox</span>
+cp<span class="w"> </span>/usr/bin/busybox<span class="w"> </span>minimal_initramfs/bin/
+chmod<span class="w"> </span>+x<span class="w"> </span>minimal_initramfs/bin/busybox
+<span class="c1"># 4. Create device nodes (required for console)</span>
+sudo<span class="w"> </span>mknod<span class="w"> </span>-m<span class="w"> </span><span class="m">622</span><span class="w"> </span>minimal_initramfs/dev/console<span class="w"> </span>c<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">1</span>
+sudo<span class="w"> </span>mknod<span class="w"> </span>-m<span class="w"> </span><span class="m">666</span><span class="w"> </span>minimal_initramfs/dev/null<span class="w"> </span>c<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span>
+<span class="c1"># 5. Create BusyBox symlinks INSIDE /bin</span>
+<span class="nb">cd</span><span class="w"> </span>minimal_initramfs/bin
+<span class="k">for</span><span class="w"> </span>cmd<span class="w"> </span><span class="k">in</span><span class="w"> </span>sh<span class="w"> </span>mount<span class="w"> </span>ls<span class="w"> </span><span class="nb">echo</span><span class="w"> </span>dmesg<span class="w"> </span>cat<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span>ln<span class="w"> </span>-sf<span class="w"> </span>busybox<span class="w"> </span><span class="s2">"</span><span class="nv">$cmd</span><span class="s2">"</span>
+<span class="k">done</span>
+<span class="nb">cd</span><span class="w"> </span>-
+<span class="c1"># 6. Create init script</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span>minimal_initramfs/init<span class="w"> </span><span class="s">&lt;&lt;'EOF'</span>
+<span class="s">#!/bin/sh</span>
+<span class="s">mount -t proc none /proc</span>
+<span class="s">mount -t sysfs none /sys</span>
+<span class="s">echo "*** Welcome to minimal initramfs! ***"</span>
+<span class="s">exec /bin/sh</span>
+<span class="s">EOF</span>
+chmod<span class="w"> </span>+x<span class="w"> </span>minimal_initramfs/init
+</code></pre></div>
+<p>Build the initramfs</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>minimal_initramfs
+find<span class="w"> </span>.<span class="w"> </span>-print0<span class="w"> </span><span class="p">|</span><span class="w"> </span>cpio<span class="w"> </span>--null<span class="w"> </span>-ov<span class="w"> </span>--format<span class="o">=</span>newc<span class="w"> </span>&gt;<span class="w"> </span>../initramfs.cpio
+<span class="nb">cd</span><span class="w"> </span>..
+</code></pre></div>
+<p>Boot custom Linux kernel in QEMU</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>qemu-system-x86_64<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span>2G<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-kernel<span class="w"> </span>arch/x86/boot/bzImage<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-initrd<span class="w"> </span>initramfs.cpio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-append<span class="w"> </span><span class="s2">"console=ttyS0 rdinit=/init nokaslr initcall_debug loglevel=8 earlyprintk=ttyS0"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-serial<span class="w"> </span>mon:stdio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-enable-kvm
+</code></pre></div>
+<p>Debug</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code><span class="ch">#!/bin/bash</span>
+qemu-system-x86_64<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-s<span class="w"> </span>-S<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span>2G<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-kernel<span class="w"> </span>arch/x86/boot/bzImage<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-initrd<span class="w"> </span>initramfs.cpio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-append<span class="w"> </span><span class="s2">"console=ttyS0 rdinit=/init nokaslr"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-serial<span class="w"> </span>mon:stdio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-enable-kvm
+</code></pre></div>
+<p>Notes for debugging</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>gdb<span class="w"> </span>vmlinux
+</code></pre></div>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>rust-gdb<span class="w"> </span>vmlinux
+</code></pre></div>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>target remote localhost:1234
+</code></pre></div>
+
+
+
+<a name="562254033"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Building%20Linux%20Kernel%20in%20Fedora/near/562254033" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Charalampos Mitrodimas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Building.20Linux.20Kernel.20in.20Fedora.html#562254033">(Dec 06 2025 at 17:21)</a>:</h4>
+<p>For the qemu running part of this, I can't recommend <a href="https://github.com/arighi/virtme-ng">virtme-ng (<code>vng</code>)</a> more.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

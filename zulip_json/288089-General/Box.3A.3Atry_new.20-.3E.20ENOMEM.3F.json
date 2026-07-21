@@ -1,0 +1,110 @@
+[
+    {
+        "content": "<p>Is it intentional that <code>Box::try_new()</code> doesn't return an <code>Err(ENOMEM)</code> on failure?</p>\n<p>I just wanted to return it as a <code>Result</code>, but apparently I'm forced to cast it with <code>.into()</code></p>",
+        "id": 434011918,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713434752
+    },
+    {
+        "content": "<p>the error that <code>Box::try_new</code> returns is <code>AllocError</code>. this means that if it fails, it must be becausr there is no memory left. the general <code>Error</code> type (that declares the constant <code>ENOMEM</code>) also can represent othrr failures such as <code>EINVAL</code>.</p>",
+        "id": 434012736,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713435011
+    },
+    {
+        "content": "<p>so yes, it is intentional. it also allows for better optimizations, since <code>Result&lt;Box&lt;T&gt;, AllocError&gt;</code> is pointer sized.</p>",
+        "id": 434013070,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713435140
+    },
+    {
+        "content": "<p>\"Optimizations\" in sense of compiler / performance optimizations?</p>",
+        "id": 434013127,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713435167
+    },
+    {
+        "content": "<p>The question mark operator automatically converts error types for you, so if you do <code>Box::try_new()?</code> in a function that returns the usual kernel error type, then it will work and result in an ENOMEM error.</p>",
+        "id": 434016981,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713436589
+    },
+    {
+        "content": "<p>So if the box is the last thing you return, then one thing you can do is return <code>Ok(Box::try_new(foo)?)</code>.</p>",
+        "id": 434017055,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713436621
+    },
+    {
+        "content": "<p>which will work even if <code>Box::try_new(foo)</code> doesn't.</p>",
+        "id": 434017084,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713436630
+    },
+    {
+        "content": "<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>\nLacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>",
+        "id": 434017628,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713436814
+    },
+    {
+        "content": "<p>Ah, I understand what you're doing now. Yeah in that case an explicit conversion is the easiest way to go about it.</p>",
+        "id": 434017861,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713436915
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434013127\">said</a>:</p>\n<blockquote>\n<p>\"Optimizations\" in sense of compiler / performance optimizations?</p>\n</blockquote>\n<p>yes, <code>Result&lt;Box&lt;T&gt;, AllocError&gt;</code> fits in 64 bits, <code>Result&lt;Box&lt;T&gt;, Error&gt;</code> needs 128 bits, so it cannot be returned in just <code>rax</code>.</p>",
+        "id": 434018579,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713437193
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434017628\">said</a>:</p>\n<blockquote>\n<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>\nLacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>\n</blockquote>\n<p>you can create another rust function that returns a result and in the C function you call that</p>",
+        "id": 434018769,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713437275
+    },
+    {
+        "content": "<p>Another way to go about it is this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">try_new</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">b</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">AllocError</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">clean_up</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">ENOMEM</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">},</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>By typing <code>Err(AllocError)</code>, you are asserting that <code>Box::try_new</code> returns an <code>AllocError</code>, and the code will not compile if there are other possible reasons <code>Box::try_new</code> could fail.</p>\n<p>I've sometimes seen comments along the lines of \"// this function can only fail with ESRCH\", and this pattern allows you to encode that assertion as a checked condition in your code. As a similar example, see <a href=\"https://lore.kernel.org/all/20240209-alice-file-v5-3-a37886783025@google.com/\">BadFdError from my file patchset</a>. By using the same syntax, you can assert in your code that an <code>fget</code> call can only fail with EBADF and that no other error conditions exist for that method. I think that is useful.</p>",
+        "id": 434019170,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713437415
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434018769\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/434017628\">said</a>:</p>\n<blockquote>\n<p>Nope, that only works if you're not dealing with C abstractions where you have to clean up stuff on error with <code>unsafe</code>.<br>\nLacking goto, you then need to match for the Error, clean up, convert the AllocError, then return</p>\n</blockquote>\n<p>you can create another rust function that returns a result and in the C function you call that</p>\n</blockquote>\n<p>That can be a workaround that helps a bit, yes, but only if the unwind path is always the same. Otherwise you'd need several helper functions.<br>\nIt's all solvable, obviously.</p>",
+        "id": 434028478,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713440931
+    },
+    {
+        "content": "<p>Is it possible in your use case to use scope guard for cleanup?</p>",
+        "id": 435426790,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714062740
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Box.3A.3Atry_new.20-.3E.20ENOMEM.3F/near/435426790\">said</a>:</p>\n<blockquote>\n<p>Is it possible in your use case to use scope guard for cleanup?</p>\n</blockquote>\n<p>You mean defining a separate scope with <code>{ }</code>?</p>",
+        "id": 435528188,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1714115701
+    },
+    {
+        "content": "<p>Probably not, we have a type named <a href=\"https://rust-for-linux.github.io/docs/v6.8/kernel/types/struct.ScopeGuard.html\"><code>ScopeGuard</code></a> that can help you release resources (it provides the same mechanism as go's <code>defer</code> keyword, but you can also \"cancel\" it).</p>",
+        "id": 435528405,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1714115783
+    },
+    {
+        "content": "<p><code>goto</code> on cocaine then ;p<br>\nDanilo (and I) will provde some patches soon, then we could look at that in-line</p>",
+        "id": 435531012,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1714116778
+    },
+    {
+        "content": "<p>One small clarification here: go's <code>defer</code> runs when the function exits, while <code>ScopeGuard</code> runs when it goes out of scope, so they're slightly different</p>",
+        "id": 438077953,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1715401463
+    }
+]

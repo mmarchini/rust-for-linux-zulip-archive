@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>So, let me know if I need to clarify anything here since I'm still trying to figure a lot of this stuff out. Or if this should go in the original thread, I wasn't sure since this seems a bit broader then the scope of my last question and is sort of brainstorming. This is in reference to <a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms/rust/kernel/drm/kms/plane.rs?ref_type=heads\">https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms/rust/kernel/drm/kms/plane.rs?ref_type=heads</a> but note that I haven't really updated that branch yet (specifically, I'm already planning on dropping the <code>UnsafeCell&lt;&gt;</code> around <code>bindings::drm_plane</code>)<br>\nI basically figured out the other night how I think I'd like to expose <code>drm_plane</code>, <code>drm_crtc</code>, etc. to drivers. Using planes as an example (I'm pretty sure it'll be more or less the same for CRTCs), I want the <code>Plane&lt;T&gt;</code> type defined there to represent the actual <code>drm_plane</code> subclassed struct. Furthermore, I want to make it so that we never actually pass ownership of the <code>Plane&lt;T&gt;</code> to the driver. The reason being: while the driver does instantiate drm_plane, the lifetime of drm_plane isn't actually defined solely by the driver - it's also defined by the DRM subsystem since that's the part that eventually \"destroys\" the drm_plane on device unregistration - so passing ownership back to the driver of the Plane&lt;T&gt; could cause UB. As well, I want to limit <code>Plane&lt;T&gt;</code> access such that you can only get a mutable reference to this struct after grabbing the appropriate drm_modeset_locks (and some other things needed for that).<br>\nMy idea for accomplishing this is to modify the <code>Plane&lt;T&gt;::new()</code> function you see in that code to return a new type, a <code>PlaneRef&lt;T&gt;</code>. The main idea is that <code>Plane&lt;T&gt;</code> will mainly live in an <code>Arc&lt;T&gt;</code> of some sort, which the DRM subsystem takes one reference to and then drops said reference from the <code>drm_plane_funcs-&gt;destroy()</code> callback on the C side of things. The driver on the other hand will only ever get a PlaneRef&lt;T&gt;, which it can only turn into a <code>&amp;mut Plane&lt;T&gt;</code> in one of two ways:</p>\n<ul>\n<li>Getting passed a <code>&amp;mut Plane&lt;T&gt;</code> from a DRM callback, where we're already guaranteed to hold the respective locks required to honor rust's aliasing rules</li>\n<li>Using some currently undefined <code>ModeConfig</code> object, which can do the appropriate lock grabbing and synchronization to get a &amp;mut Plane&lt;T&gt;. The reason this would be a separate object is because it would be the equivalent of grabbing atomic modesetting locks, which means <code>ModeConfig</code> would represent a <code>drm_modeset_acquire_ctx</code> - and could be used to grab &amp;mut references to other atomic state objects and modesetting objects.</li>\n</ul>\n<p>Which brings me to ask, what type should I actually be using for this that would make sense? Like, would something like:</p>\n<p><code>pub struct PlaneRef&lt;T: DriverPlane&gt; { plane: Arc&lt;UnsafeCell&lt;Plane&lt;T&gt;&gt;&gt; }</code></p>\n<p>Be appropriate? I wasn't sure if I should be using <code>Opaque&lt;&gt;</code> here since it seems like that's mainly for ffi objects, and while Plane&lt;T&gt; does contain an ffi object - it also contains the driver's custom plane data as well which isn't an ffi object.</p>",
+        "id": 421334801,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707862713
+    },
+    {
+        "content": "<p>Is the purpose for dropping the <code>UnsafeCell</code> around <code>drm_plane</code> because the C side also provides synchronization for the T?</p>",
+        "id": 421357455,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707876273
+    },
+    {
+        "content": "<p>Or what exactly does this synchronization look like, who needs to be able to modify the T</p>",
+        "id": 421357515,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707876331
+    },
+    {
+        "content": "<p>Maybe something like this could work for the types?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Plane</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">plane</span>: <span class=\"nc\">UnsafeCell</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span>::<span class=\"n\">drm_plane</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span>: <span class=\"nc\">UnsafeCell</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">_p</span>: <span class=\"nc\">PhantomPinned</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>(edited to remove the double indirection)</p>",
+        "id": 421358191,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707876835
+    },
+    {
+        "content": "<p>Having the side-by-side <code>UnsafeCell</code> might make it more clear that <code>plane</code> and <code>inner</code> are independent entities. I don't think having a new type for <code>Arc&lt;Plane&lt;T&gt;&gt;</code> adds much (unless you want to impl something on the Arc), maybe a type alias if anything</p>",
+        "id": 421358669,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707877130
+    },
+    {
+        "content": "<p>Those <code>UnsafeCell</code>s should be <code>Opaque</code> if their contents will ever be only partially initialized</p>",
+        "id": 421358709,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707877164
+    },
+    {
+        "content": "<p>I'm not sure where a <code>&amp;mut Plane&lt;T&gt;</code> is needed like you mentioned, but it seems like maybe you should give <code>Plane&lt;T&gt;</code> only <code>&amp;self</code> (shared reference) methods, and allow getting <code>&amp;mut T</code> without the <code>Plane</code> wrapper in the contexts you mention. That is, treat <code>Plane</code> like a type that adds synchronization to T, rather than something that needs to be synchronized itself. Maybe even <code>lock()</code> methods that return a <code>PlaneGuard&lt;T&gt;</code> if an API like that makes sense</p>",
+        "id": 421359098,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707877435
+    },
+    {
+        "content": "<p>What is the smallest C driver that makes use of these interfaces? I have no background here but would like to get some, don't see anything in samples</p>",
+        "id": 421359766,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707877885
+    },
+    {
+        "content": "<p>You can definitely have a <code>PlaneRef</code> struct if you want. It can just contain a raw pointer if that makes more sense.</p>",
+        "id": 421399689,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1707901581
+    },
+    {
+        "content": "<p>The main purpose of dropping the <code>UnsafeCell</code> from <code>drm_plane</code> was just that it didn't seem like the correct way of doing things, but I'm not sure TBH.<br>\nThe main idea is that generally: there isn't really much/any data that I think drivers really need from <code>drm_plane</code> except during initialization, and within an atomic modeset (<code>struct drm_plane_helper_funcs.{atomic_check,atomic_commit,etc.}</code>). In those callbacks, any planes we're passed are guaranteed to be part of the atomic commit - which means we've already grabbed the various locks for them. That's sort of where I'd like to have <code>&amp;mut Plane&lt;T&gt;</code> and <code>&amp;mut PlaneState&lt;T&gt;</code> - to make it easy for the driver to access/modify both plane-private state and atomic state. But I still want to make sure that drivers can still have unique identifiers that point to a specific plane even outside of atomic callbacks, especially since when creating <code>drm_crtc</code> objects we need to be able to tell DRM which planes each CRTC can use - which is the purpose of <code>PlaneRef</code>.</p>",
+        "id": 421499415,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707932853
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/415254-DRM/topic/More.20KMS.20bindings.20feedback.2Fquestions/near/421399689\">said</a>:</p>\n<blockquote>\n<p>You can definitely have a <code>PlaneRef</code> struct if you want. It can just contain a raw pointer if that makes more sense.</p>\n</blockquote>\n<p>So just a raw pointer to a <code>Arc&lt;Plane&lt;T&gt;&gt;</code> or something like that? We do at least need a way of keeping the plane allocated until both DRM and the driver have dropped all references to it</p>",
+        "id": 421499704,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707932932
+    },
+    {
+        "content": "<p>Note as well <code>drm_plane</code> doesn't actually have its own refcount mechanism on the C side - which is why we need the Arc, since DRM is the one in control of eventually \"freeing\" the <code>drm_plane</code></p>",
+        "id": 421500316,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707933118
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/415254-DRM/topic/More.20KMS.20bindings.20feedback.2Fquestions/near/421359766\">said</a>:</p>\n<blockquote>\n<p>What is the smallest C driver that makes use of these interfaces? I have no background here but would like to get some, don't see anything in samples</p>\n</blockquote>\n<p>oh! I forgot to respond to this, the smallest one (that happens to be the driver I'm porting to rust as the initial user) is vkms</p>",
+        "id": 421529147,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707943315
+    },
+    {
+        "content": "<p>fwiw too the reason I figured locking would happen through another mechanism is because we won't be dealing with normal mutexes, we'll be dealing with modeset locks (which are basically just DRM's wrapper around wounded-warrior locks). which means that we have to deal with potentially needing to grab the lock for multiple modesetting objects at the same time in any arbitrary order</p>",
+        "id": 421529326,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707943389
+    },
+    {
+        "content": "<p>when doing that you have to use the same lock acquisition context (drm_modeset_acquire_ctx) as well so the kernel can let you know if you've hit a potential deadlock and need to back off, drop all locks and try acquiring them again</p>",
+        "id": 421529658,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707943521
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/415254-DRM/topic/More.20KMS.20bindings.20feedback.2Fquestions/near/421357515\">said</a>:</p>\n<blockquote>\n<p>Or what exactly does this synchronization look like, who needs to be able to modify the T</p>\n</blockquote>\n<p>also - the T is mainly just something for drivers implementing these interfaces to stick their own private hw state tracking into. it's mostly intended for hw-specific state tracking that doesn't really fit very well in atomic states. The easiest example I can think of is when drivers have hw-specific limitations or other info that apply per-<code>drm_plane</code>/per-<code>drm_crtc</code>/etc.</p>",
+        "id": 421531288,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707944187
+    },
+    {
+        "content": "<p>I guess just to give some more context too since I assume not everyone is familiar with the atomic modesetting interface: generally, a \"modeset\" (\"modeset\" means setting a display mode on a monitor, like a DisplayPort display or something like that) happens like this:</p>\n<ul>\n<li>allocate a <code>drm_atomic_state</code> to represent the new display state, this is mutable by the user</li>\n<li>Add the modesetting objects (e.g. <code>drm_plane</code>/<code>drm_crtc</code>/<code>drm_connector</code>s)  that will be affected by this state change to the <code>drm_atomic_state</code>. This happens by grabbing each modesetting object's ww lock, and then duplicating the current atomic state set on each modeset object to give the user a state they can mutate. Nothing actually gets committed to hardware yet</li>\n<li>Perform an atomic check, which is basically handing the new display state to the kernel and having it verify that this state is actually physically possible, and this state is also checked against the currently programmed display state to figure out what changes are needed. This prevents us from getting in a situation where we commit an impossible display state, and then get stuck because the hardware crashes and we don't have a good way of recovering.</li>\n<li>If the atomic check passes, then an atomic commit can happen. This is the final step and causes us to swap the current display states on each modesetting object out with the new states we created, and then the changes from the new display state are actually applied to hardware. This step is infallible, which was guaranteed by the atomic check we just performed (both this and the previous step happen under lock. if they happened as separate steps, another atomic check is performed beforehand to prevent racing).</li>\n</ul>\n<p>It's mainly ^ the last step that I would assume would access Plane&lt;T&gt; (or our future Crtc&lt;T&gt;, etc.) directly, as a driver might have information it needs that's specific to a plane - especially static info that is populated at driver load time. As well, information there usually refers to the <em>actual</em> hardware state that's currently programmed. That can be important sometimes since non-blocking modesets are a thing, and we swap the old and new display states in that case before the actual modeset completes in hardware. In which case the only actual source of truth we would have for the state that's currently programmed in the hardware would be in the <code>Plane&lt;T&gt;</code></p>",
+        "id": 421533022,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707944882
+    },
+    {
+        "content": "<p>Atomic checks on the other hand shouldn't ever really look at <code>Plane&lt;T&gt;</code> for anything beyond static information that's populated at driver load, since if non-blocking modesets are a thing you aren't guaranteed there isn't already a modeset happening while you're in the atomic_check phase.</p>",
+        "id": 421533292,
+        "sender_full_name": "Lyude",
+        "timestamp": 1707944984
+    },
+    {
+        "content": "<p>Went looking through the kernel wiki again this morning and I think I figured out the type I actually want to use for this, it's <a href=\"https://rust-for-linux.github.io/docs/kernel/sync/struct.LockedBy.html\">https://rust-for-linux.github.io/docs/kernel/sync/struct.LockedBy.html</a><br>\nI will probably need to make some changes to get it working for the fallible locking scheme (modeset locks are wait/wound) that DRM uses but this should be perfect - it makes the object essentially opaque until you can prove you have the right locks</p>",
+        "id": 421720922,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708023613
+    },
+    {
+        "content": "<p>So I think something like <code>Arc&lt;LockedBy&lt;Plane&lt;T&gt;, ModesetLock&gt;</code> (<code>ModesetLock</code> being a placeholder for modesetting lock wrappers) would do the trick</p>",
+        "id": 421721088,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708023677
+    },
+    {
+        "content": "<p>this will definitely mean having to implement an interface for ww locks though, so that'll be interesting</p>",
+        "id": 421722912,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708024333
+    },
+    {
+        "content": "<p>Thanks for the awesome intro summary :)</p>",
+        "id": 421744902,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1708032923
+    },
+    {
+        "content": "<p>BTW <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> since it's probably a bit easier for me to explain over text:<br>\nIn the KMS patch series: I think the patches I'm most curious about for feedback from rust people are 2-7, 12-18, and then 31-32 if you're up for a bonus round. Most of the other patches aren't actually that complicated and are just adding various simple KMS callbacks and/or bindings</p>",
+        "id": 503837380,
+        "sender_full_name": "Lyude",
+        "timestamp": 1741278529
+    },
+    {
+        "content": "<p>Hey - figured this thread would probably be a good spot to ask some questions that just came up as I was working on rebasing / cleaning up my KMS work (cc <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> since you probably have some takes on this).<br>\nOne of the things I'm solving ATM is doing atomic modesetting cleanup on device destruction since despite <code>drmm_mode_config_init()</code> being a thing, there's still some extra DRM calls we need to do for KMS on device destruction. I originally assumed it would make sense to use a Devres for this, but I'm wondering if maybe it would also be worth us looking at the DRM-specific managed functions like <code>__drmm_add_action()</code>?</p>",
+        "id": 601219608,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780944105
+    },
+    {
+        "content": "<p>It seems like the answer is likely going to be around the lines or whether or not registering plain Devres resources after setting up KMS will actually result in those resources being released on device unbind before the resources registered by <code>drmm_mode_config_init()</code>. Not actually too sure about that yet</p>",
+        "id": 601243650,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780951319
+    },
+    {
+        "content": "<p>but I'm getting the feeling it might not be a bad idea to at least add a <code>devres::register</code> like function for this</p>",
+        "id": 601243741,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780951343
+    },
+    {
+        "content": "<p>It depends, in the KMS core code it may be useful to have <code>drm_managed</code> helpers for managing software states etc. exposed to userspace. On the driver side this shouldn't be needed, as the driver should only take care of the hardware state and the corresponding device resources, whose lifetime is defined by the device driver lifecycle through the registration data. This should be decoupled on the DRM /KMS core code side.</p>",
+        "id": 601245252,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1780951730
+    },
+    {
+        "content": "<p>Yeah - this is entirely intended for the DRM core and nothing outside of there, in particular to make it a lot easier to handle exceptionally early cleanup paths (like failing to initialize some KMS thing, etc.).</p>",
+        "id": 601245550,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780951815
+    },
+    {
+        "content": "<p>I can send out some patches for it next chance I get then, probably won't bother trying to add a full <code>Devres</code> equivalent since I don't get the feeling it'll be useful at all - just the <code>register()</code> function</p>",
+        "id": 601247120,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780952286
+    }
+]

@@ -1,0 +1,806 @@
+<html>
+<head><meta charset="utf-8"><title>Optimisation  for enums of pointers to aligned objects · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html">Optimisation  for enums of pointers to aligned objects</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="569743750"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569743750" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569743750">(Jan 23 2026 at 15:31)</a>:</h4>
+<h1>Optimization opportunity for pointers to aligned objects</h1>
+<p>Consider the following Rust (Linux kernel) code:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">enum</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Internal</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Value</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The size of <code>Node</code> is 2 words, one for the discriminant and one for the value.<br>
+However, because <code>Node</code> has an alignment of at least 4 bytes, the discriminant could<br>
+be encoded in the lower two bits of the first word.</p>
+<p>This is an optimization that is applied by hand in key areas of the Linux kernel<br>
+C code to achieve lower memory pressure and better cache utilization.<br>
+Specifically, the Linux kernel's C xarray uses this pattern.</p>
+<p>For the Linux kernel's XArray, this means that an idiomatic Rust implementation<br>
+uses twice the memory of the C implementation. Matching the memory density of<br>
+the C implementation with Rust code requires manual pointer tagging with unsafe<br>
+code.</p>
+<p>The effort to implement the Linux kernel xarray in Rust is driven in part by<br>
+memory safety issues encountered in the existing C implementation. Thus, having<br>
+to reach for unsafe blocks for cases like this is very undesirable.</p>
+<h2>Use Case: Linux Kernel XArray</h2>
+<p>The XArray is a kernel data structure that acts as a key/value map, mapping integers<br>
+to object addresses, or integers to integers. It's used in the page cache,<br>
+filesystems, and block layer.</p>
+<p>Pointers stored in XArray must be 4-byte aligned (true for <code>kmalloc()</code> and<br>
+<code>alloc_page()</code> returns). Integers between 0 and <code>LONG_MAX</code> can be stored via<br>
+<code>xa_mk_value()</code>.</p>
+<p>The XArray is a radix tree with a default shift value of 6 such that each node<br>
+stores 64 pointers to the next level of the tree. In C, with 8-byte tagged<br>
+pointers, this results in 512-byte nodes. An idiomatic Rust implementation<br>
+requires 16 bytes per entry (8 for discriminant + 8 for value), resulting in<br>
+1024-byte nodes. The performance impact of this difference is significant.</p>
+<h2>Conclusion</h2>
+<p>There exists an optimization opportunity for Rust enums that contain pointers to<br>
+aligned objects. Unlocking this optimization is key in achieving a performant<br>
+Rust XArray implementation without unsafe blocks.</p>
+<p><span class="user-group-mention" data-user-group-id="436926">@team</span> <span class="user-mention" data-user-id="719737">@Ding Xiang Fei</span> <span class="user-mention" data-user-id="737725">@Daniel Gomez</span></p>
+
+
+
+<a name="569745797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569745797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569745797">(Jan 23 2026 at 15:40)</a>:</h4>
+<p>Linked to <a href="https://github.com/Rust-for-Linux/linux/issues/354">https://github.com/Rust-for-Linux/linux/issues/354</a>.</p>
+
+
+
+<a name="569748582"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569748582" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569748582">(Jan 23 2026 at 15:52)</a>:</h4>
+<p>I think you can just apply the conversion on the API boundaries in this case.</p>
+
+
+
+<a name="569748666"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569748666" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569748666">(Jan 23 2026 at 15:53)</a>:</h4>
+<p>Having <code>0..PAGE_SIZE</code> be a niche is sufficient for this one.</p>
+
+
+
+<a name="569749405"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569749405" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569749405">(Jan 23 2026 at 15:56)</a>:</h4>
+<p>I think it won't be enough if you change u8 to u16</p>
+
+
+
+<a name="569749559"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569749559" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569749559">(Jan 23 2026 at 15:57)</a>:</h4>
+<p>Even if rust does support niche optimisation for this one, you still cannot assume on the layout though, so I don't see much benefit for XArray.</p>
+
+
+
+<a name="569752702"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569752702" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569752702">(Jan 23 2026 at 16:09)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::{</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">ManuallyDrop</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">ptr</span><span class="p">;</span>
+
+<span class="c1">// Assuming KBox is an alias for Box or a similar kernel smart pointer.</span>
+<span class="c1">// We use Box here for demonstration.</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">KBox</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="cp">#[repr(transparent)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">PackedNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">Node</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Internal</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Value</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_MASK</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b11</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_PTR</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b00</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_INT</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b01</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_VAL</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b10</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_pointer</span><span class="p">(</span><span class="n">kbox</span><span class="p">:</span><span class="w"> </span><span class="nc">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="n">kbox</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">Node</span><span class="p">;</span>
+<span class="w">        </span><span class="fm">debug_assert_eq!</span><span class="p">(</span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">,</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_internal</span><span class="p">(</span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">val</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_INT</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">::</span><span class="n">without_provenance</span><span class="p">(</span><span class="n">addr</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_value</span><span class="p">(</span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">val</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_VAL</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">::</span><span class="n">without_provenance</span><span class="p">(</span><span class="n">addr</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">unpack</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ManuallyDrop</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">this</span><span class="p">.</span><span class="n">ptr</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">tag</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">tag</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">kbox</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="n">ptr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">Node</span><span class="p">);</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Pointer</span><span class="p">(</span><span class="n">kbox</span><span class="p">)</span>
+<span class="w">            </span><span class="p">},</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_INT</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">addr</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Internal</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_VAL</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">addr</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Value</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="fm">unreachable!</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_pointer</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// Drop implementation is critical to prevent memory leaks for the KBox variant.</span>
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">is_pointer</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nb">drop</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">Node</span><span class="p">))</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">Node</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="p">{}</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">Node</span><span class="p">:</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+
+
+
+<a name="569962696"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569962696" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569962696">(Jan 25 2026 at 15:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569752702">said</a>:</p>
+<blockquote>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">mem</span><span class="p">::{</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">ManuallyDrop</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">ptr</span><span class="p">;</span>
+
+<span class="c1">// Assuming KBox is an alias for Box or a similar kernel smart pointer.</span>
+<span class="c1">// We use Box here for demonstration.</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">KBox</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="cp">#[repr(transparent)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">PackedNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">Node</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Internal</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Value</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_MASK</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b11</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_PTR</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b00</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_INT</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b01</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TAG_VAL</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mb">0b10</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_pointer</span><span class="p">(</span><span class="n">kbox</span><span class="p">:</span><span class="w"> </span><span class="nc">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="n">kbox</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">Node</span><span class="p">;</span>
+<span class="w">        </span><span class="fm">debug_assert_eq!</span><span class="p">(</span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">,</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_internal</span><span class="p">(</span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">val</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_INT</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">::</span><span class="n">without_provenance</span><span class="p">(</span><span class="n">addr</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_value</span><span class="p">(</span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">val</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_VAL</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">::</span><span class="n">without_provenance</span><span class="p">(</span><span class="n">addr</span><span class="p">);</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">unpack</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ManuallyDrop</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">this</span><span class="p">.</span><span class="n">ptr</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">tag</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">;</span>
+
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">tag</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">kbox</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="n">ptr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">Node</span><span class="p">);</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Pointer</span><span class="p">(</span><span class="n">kbox</span><span class="p">)</span>
+<span class="w">            </span><span class="p">},</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_INT</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">addr</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Internal</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_VAL</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">addr</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">u8</span><span class="p">;</span>
+<span class="w">                </span><span class="n">Node</span><span class="p">::</span><span class="n">Value</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="fm">unreachable!</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_pointer</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">.</span><span class="n">addr</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_MASK</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">TAG_PTR</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// Drop implementation is critical to prevent memory leaks for the KBox variant.</span>
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">is_pointer</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nb">drop</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">Node</span><span class="p">))</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">Node</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="p">{}</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PackedNode</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">Node</span><span class="p">:</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>This is what we do now. We think that the compiler should be able to do this for us.</p>
+
+
+
+<a name="569962789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569962789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569962789">(Jan 25 2026 at 15:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569748582">said</a>:</p>
+<blockquote>
+<p>I think you can just apply the conversion on the API boundaries in this case.</p>
+</blockquote>
+<p>This is what we do. The request is to have the compiler do it for us, so we don't need to do a manual conversion.</p>
+
+
+
+<a name="569962864"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569962864" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569962864">(Jan 25 2026 at 15:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569749559">said</a>:</p>
+<blockquote>
+<p>Even if rust does support niche optimisation for this one, you still cannot assume on the layout though, so I don't see much benefit for XArray.</p>
+</blockquote>
+<p>If we had a way to restrict the object stored in the pointer, we could benefit.</p>
+
+
+
+<a name="569964278"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569964278" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569964278">(Jan 25 2026 at 16:16)</a>:</h4>
+<p>I don't think this is something that should be done by the language or compiler</p>
+
+
+
+<a name="569968816"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569968816" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569968816">(Jan 25 2026 at 17:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569964278">said</a>:</p>
+<blockquote>
+<p>I don't think this is something that should be done by the language or compiler</p>
+</blockquote>
+<p>Why not?</p>
+
+
+
+<a name="569969079"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969079" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969079">(Jan 25 2026 at 17:28)</a>:</h4>
+<p>It's a huge complication to the language with very little gain, given that implementing it with library is already pretty easy</p>
+
+
+
+<a name="569969106"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969106" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969106">(Jan 25 2026 at 17:29)</a>:</h4>
+<p>do you have a branch with the code?</p>
+
+
+
+<a name="569969336"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969336" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ding Xiang Fei <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969336">(Jan 25 2026 at 17:32)</a>:</h4>
+<p>Will there ever be any possibility to implement from library to use the niche of a pointer value for enum discriminant, if the enum is <code>#[repr(Rust)]</code>?</p>
+
+
+
+<a name="569969628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ding Xiang Fei <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969628">(Jan 25 2026 at 17:37)</a>:</h4>
+<p>I also see a good use of it when pattern types eventually land. A natural question that comes right after is, well, if it is now possible to have <code>bit_pattern!(u64, 0xfffffffffffff800)</code>, can I use the unused niche below those bits, given that one knows already <code>u64: Copy</code>?</p>
+
+
+
+<a name="569969691"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969691" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969691">(Jan 25 2026 at 17:38)</a>:</h4>
+<p>Doing Niche optimization is fine, but I don't think there's should be any guarantee on the exact optimization being performed</p>
+
+
+
+<a name="569969736"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/569969736" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ding Xiang Fei <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#569969736">(Jan 25 2026 at 17:39)</a>:</h4>
+<p>For embedded and environments that sizes matter, they are happy with possible layout optimisation. It will be good enough for them.</p>
+
+
+
+<a name="570039023"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570039023" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570039023">(Jan 26 2026 at 09:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569969106">said</a>:</p>
+<blockquote>
+<p>do you have a branch with the code?</p>
+</blockquote>
+<p>Not at the moment, but we will be making the code public soon <span aria-label="tm" class="emoji emoji-2122" role="img" title="tm">:tm:</span></p>
+
+
+
+<a name="570039621"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570039621" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570039621">(Jan 26 2026 at 09:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="719737">Ding Xiang Fei</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569969736">said</a>:</p>
+<blockquote>
+<p>For embedded and environments that sizes matter, they are happy with possible layout optimisation. It will be good enough for them.</p>
+</blockquote>
+<p>We would defninitly need to be able to rely on the optimization for the XArray code, in the same way I expect <code>Option&lt;NonNull&lt;_&gt;&gt;</code> to be representable in one word now.</p>
+
+
+
+<a name="570039733"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570039733" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570039733">(Jan 26 2026 at 09:08)</a>:</h4>
+<p>Without triggering the optimization reliably, we would have to use manual conversion anyway.</p>
+
+
+
+<a name="570281037"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570281037" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570281037">(Jan 27 2026 at 10:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569748666">said</a>:</p>
+<blockquote>
+<p>Having <code>0..PAGE_SIZE</code> be a niche is sufficient for this one.</p>
+</blockquote>
+<p>The values able to be stored in C xarray is actually <code>0..(2^(64-2)-1)</code>. I just illustrated with <code>u8</code>.</p>
+
+
+
+<a name="570281198"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570281198" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570281198">(Jan 27 2026 at 10:15)</a>:</h4>
+<p>Can I do an integer with a custom range in Rust?</p>
+
+
+
+<a name="570281452"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570281452" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Gomez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570281452">(Jan 27 2026 at 10:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281037">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569748666">said</a>:</p>
+<blockquote>
+<p>Having <code>0..PAGE_SIZE</code> be a niche is sufficient for this one.</p>
+</blockquote>
+<p>The values able to be stored in C xarray is actually <code>0..(2^(64-2)-1)</code>. I just illustrated with <code>u8</code>.</p>
+</blockquote>
+<p>XArray can store anything that is 4-byte aligned. See paragraph 3 in docs:<br>
+<a href="https://docs.kernel.org/core-api/xarray.html">https://docs.kernel.org/core-api/xarray.html</a></p>
+
+
+
+<a name="570281814"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570281814" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570281814">(Jan 27 2026 at 10:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="737725">Daniel Gomez</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281452">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281037">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569748666">said</a>:</p>
+<blockquote>
+<p>Having <code>0..PAGE_SIZE</code> be a niche is sufficient for this one.</p>
+</blockquote>
+<p>The values able to be stored in C xarray is actually <code>0..(2^(64-2)-1)</code>. I just illustrated with <code>u8</code>.</p>
+</blockquote>
+<p>XArray can store anything that is 4-byte aligned. See paragraph 3 in docs:<br>
+<a href="https://docs.kernel.org/core-api/xarray.html">https://docs.kernel.org/core-api/xarray.html</a></p>
+</blockquote>
+<p>I mean if you store integers rather than pointers. The API takes an <code>unsigned long</code> and shifts it. It is actualy just a 1 bit shift, so the range is <code>0..(2^(64-1)-1)</code>:</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">static</span><span class="w"> </span><span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">xa_mk_value</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">WARN_ON</span><span class="p">((</span><span class="kt">long</span><span class="p">)</span><span class="n">v</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="p">)((</span><span class="n">v</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="570281927"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570281927" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570281927">(Jan 27 2026 at 10:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281198">said</a>:</p>
+<blockquote>
+<p>Can I do an integer with a custom range in Rust?</p>
+</blockquote>
+<p>no, though there are proposals</p>
+
+
+
+<a name="570282002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282002">(Jan 27 2026 at 10:20)</a>:</h4>
+<p>I just did not have a way to express that in rust.</p>
+
+
+
+<a name="570282251"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282251" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282251">(Jan 27 2026 at 10:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281927">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281198">said</a>:</p>
+<blockquote>
+<p>Can I do an integer with a custom range in Rust?</p>
+</blockquote>
+<p>no, though there are proposals</p>
+</blockquote>
+<p>How about the niche optimization of values like <code>Option&lt;NonNull&lt;_&gt;&gt;</code>? Is the optimization guaranteed or is it best effort?</p>
+
+
+
+<a name="570282411"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282411" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282411">(Jan 27 2026 at 10:21)</a>:</h4>
+<p>For the specific case of <code>Option</code> wrapping a pointer, it's guaranteed.</p>
+
+
+
+<a name="570282420"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282420" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282420">(Jan 27 2026 at 10:22)</a>:</h4>
+<p>But it's the only guaranteed case.</p>
+
+
+
+<a name="570282519"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282519" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282519">(Jan 27 2026 at 10:22)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570282420">said</a>:</p>
+<blockquote>
+<p>But it's the only guaranteed case.</p>
+</blockquote>
+<p>Is this compiler internal tribal knowledge, or can I read about this somewhere?</p>
+
+
+
+<a name="570282599"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570282599" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570282599">(Jan 27 2026 at 10:22)</a>:</h4>
+<p><a href="https://doc.rust-lang.org/stable/std/option/index.html#representation">https://doc.rust-lang.org/stable/std/option/index.html#representation</a></p>
+
+
+
+<a name="570283640"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570283640" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Gomez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570283640">(Jan 27 2026 at 10:28)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> </p>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281814">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="737725">Daniel Gomez</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281452">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570281037">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/569748666">said</a>:</p>
+<blockquote>
+<p>Having <code>0..PAGE_SIZE</code> be a niche is sufficient for this one.</p>
+</blockquote>
+<p>The values able to be stored in C xarray is actually <code>0..(2^(64-2)-1)</code>. I just illustrated with <code>u8</code>.</p>
+</blockquote>
+<p>XArray can store anything that is 4-byte aligned. See paragraph 3 in docs:<br>
+<a href="https://docs.kernel.org/core-api/xarray.html">https://docs.kernel.org/core-api/xarray.html</a></p>
+</blockquote>
+<p>I mean if you store integers rather than pointers. The API takes an <code>unsigned long</code> and shifts it. It is actualy just a 1 bit shift, so the range is <code>0..(2^(64-1)-1)</code>:</p>
+<p><div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">static</span><span class="w"> </span><span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">xa_mk_value</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">WARN_ON</span><span class="p">((</span><span class="kt">long</span><span class="p">)</span><span class="n">v</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="p">)((</span><span class="n">v</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Agree. We do have <code>usize::MAX &gt;&gt; 1</code> as max value that can be stored.</p>
+
+
+
+<a name="570296774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570296774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570296774">(Jan 27 2026 at 11:36)</a>:</h4>
+<p><span class="user-mention" data-user-id="737725">@Daniel Gomez</span> found <a href="https://github.com/joshtriplett/rfcs/blob/niche/text/3334-niche.md">RFC 3334</a>. It is somehow absent from <a href="https://rust-lang.github.io/rfcs/">https://rust-lang.github.io/rfcs/</a>. It seems relevant.</p>
+
+
+
+<a name="570646365"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570646365" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570646365">(Jan 28 2026 at 19:43)</a>:</h4>
+<p><span class="user-mention" data-user-id="737725">@Daniel Gomez</span> I feel like I didn't understand your last point in the meeting, do you mind spelling it out again here?</p>
+
+
+
+<a name="570651306"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570651306" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Gomez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570651306">(Jan 28 2026 at 20:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570646365">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="737725">Daniel Gomez</span> I feel like I didn't understand your last point in the meeting, do you mind spelling it out again here?</p>
+</blockquote>
+<p>Just a follow up on the idea to have a separate macro to handle niches and focus on the implementation. IMO, this doesn't "solve" the problem that <span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> pointed out at the beginning where having unsafe for dealing with these things, defeats the purpose of writing this data structure in Rust when one of the reasons is to have memory safety. This is especially true when this macro would be used in the hot path.</p>
+
+
+
+<a name="570651417"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570651417" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570651417">(Jan 28 2026 at 20:13)</a>:</h4>
+<p>I think Dani was saying that even if we move the unsafe code out of the data structure implementation, if it is still in the hot path of page management, it will have a very high execution count. So moving the unsafe code out is no help.</p>
+<p>I don' t agree in this observation (correct me if I'm wrong about the interpretation Dani) for a few reasons. First, I don't think it matters too much if the code is in hot path or not. If it is flawed, it might be exploitable no matter the placement. </p>
+<p>Second, the code will be in the hot path no matter if we write it or if the compiler writes it. We just want the compiler to write it for us. The code will be more or less the same.</p>
+
+
+
+<a name="570651944"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570651944" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Gomez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570651944">(Jan 28 2026 at 20:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570651417">said</a>:</p>
+<blockquote>
+<p>I think Dani was saying that even if we move the unsafe code out of the data structure implementation, if it is still in the hot path of page management, it will have a very high execution count. So moving the unsafe code out is no help.</p>
+<p>I don' t agree in this observation (correct me if I'm wrong about the interpretation Dani) for a few reasons. First, I don't think it matters too much if the code is in hot path or not. If it is flawed, it might be exploitable no matter the placement. </p>
+<p>Second, the code will be in the hot path no matter if we write it or if the compiler writes it. We just want the compiler to write it for us. The code will be more or less the same.</p>
+</blockquote>
+<p>Agree on both. On the first part, I guess I though it was even more critical when code is in the hot path. If not, that's good too.</p>
+
+
+
+<a name="570652177"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652177" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652177">(Jan 28 2026 at 20:17)</a>:</h4>
+<p>are you saying that the manual code is not optimal and the compiler would do better?</p>
+
+
+
+<a name="570652242"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652242" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652242">(Jan 28 2026 at 20:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="737725">Daniel Gomez</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570651944">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570651417">said</a>:</p>
+<blockquote>
+<p>I think Dani was saying that even if we move the unsafe code out of the data structure implementation, if it is still in the hot path of page management, it will have a very high execution count. So moving the unsafe code out is no help.</p>
+<p>I don' t agree in this observation (correct me if I'm wrong about the interpretation Dani) for a few reasons. First, I don't think it matters too much if the code is in hot path or not. If it is flawed, it might be exploitable no matter the placement. </p>
+<p>Second, the code will be in the hot path no matter if we write it or if the compiler writes it. We just want the compiler to write it for us. The code will be more or less the same.</p>
+</blockquote>
+<p>Agree on both. On the first part, I guess I though it was even more critical when code is in the hot path. If not, that's good too.</p>
+</blockquote>
+<p>I guess it is debatable. If you have a vulnerability it may be easier to trigger if it is in the hot path. Or it might not be. I don't think it is black and white.</p>
+
+
+
+<a name="570652454"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652454" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Gomez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652454">(Jan 28 2026 at 20:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570652242">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="737725">Daniel Gomez</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570651944">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570651417">said</a>:</p>
+<blockquote>
+<p>I think Dani was saying that even if we move the unsafe code out of the data structure implementation, if it is still in the hot path of page management, it will have a very high execution count. So moving the unsafe code out is no help.</p>
+<p>I don' t agree in this observation (correct me if I'm wrong about the interpretation Dani) for a few reasons. First, I don't think it matters too much if the code is in hot path or not. If it is flawed, it might be exploitable no matter the placement. </p>
+<p>Second, the code will be in the hot path no matter if we write it or if the compiler writes it. We just want the compiler to write it for us. The code will be more or less the same.</p>
+</blockquote>
+<p>Agree on both. On the first part, I guess I though it was even more critical when code is in the hot path. If not, that's good too.</p>
+</blockquote>
+<p>I guess it is debatable. If you have a vulnerability it may be easier to trigger if it is in the hot path. Or it might not be. I don't think it is black and white.</p>
+</blockquote>
+<p>I guess it'd be worse when that macro is flawed/exploitable and have multiple users.</p>
+
+
+
+<a name="570652548"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652548" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652548">(Jan 28 2026 at 20:19)</a>:</h4>
+<p>because if the problem really is only the <code>unsafe</code> code, then I don't agree with the argument. All Rust code ultimately relies on <code>unsafe</code> code being correct, most rust drivers will be using <code>pin-init</code>, which generates unsafe code, but we don't distrust code using it</p>
+
+
+
+<a name="570652580"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652580" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652580">(Jan 28 2026 at 20:20)</a>:</h4>
+<p>moving unsafe code to the compiler also isn't 100% foolproof, the compiler could have a bug</p>
+
+
+
+<a name="570652730"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652730" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652730">(Jan 28 2026 at 20:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570652177">said</a>:</p>
+<blockquote>
+<p>are you saying that the manual code is not optimal and the compiler would do better?</p>
+</blockquote>
+<p>I think the reasoning is that unsafe blocks yields options to make mistakes. The thing is, the compiler is one big unsafe block. I don't think it matters much whether the compiler does this for us, or if we do it by hand. Both need to be right. But stuff is not correct, just because it is in the compiler.</p>
+
+
+
+<a name="570652971"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570652971" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570652971">(Jan 28 2026 at 20:22)</a>:</h4>
+<p>I'm not saying the compiler should not do this for us. Eventually it should. But having a hand coded thing for now is not the end of the world.</p>
+
+
+
+<a name="570653044"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570653044" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570653044">(Jan 28 2026 at 20:23)</a>:</h4>
+<p>I think we should do the macro library before you write an RFC</p>
+
+
+
+<a name="570653091"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570653091" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570653091">(Jan 28 2026 at 20:23)</a>:</h4>
+<p>because that can just live in <code>rust/macros</code> or a new crate</p>
+
+
+
+<a name="570654285"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570654285" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570654285">(Jan 28 2026 at 20:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570653044">said</a>:</p>
+<blockquote>
+<p>I think we should do the macro library before you write an RFC</p>
+</blockquote>
+<p>Then we could also allow the use of the unstable features only in this crate, right? Otherwise it would be enabled in all of <code>kernel</code>?</p>
+
+
+
+<a name="570666549"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570666549" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570666549">(Jan 28 2026 at 21:50)</a>:</h4>
+<p>which unstable feature do we need? <span class="user-mention silent" data-user-id="519727">Alice Ryhl</span>'s suggestion above works on stable IIRC</p>
+
+
+
+<a name="570752197"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752197" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752197">(Jan 29 2026 at 10:09)</a>:</h4>
+<p>If we want to play around with <code>rustc_layout_scalar_valid_range_start</code> or pattern types, when they appear.</p>
+
+
+
+<a name="570752482"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752482" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752482">(Jan 29 2026 at 10:10)</a>:</h4>
+<p>We already implemented a solution similar to what Alice suggested. Neither ours or Alice is generic enough to put it in an external crate though.</p>
+
+
+
+<a name="570752622"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752622" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752622">(Jan 29 2026 at 10:11)</a>:</h4>
+<p>But we can probably write something generic with a macro.</p>
+
+
+
+<a name="570752628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752628">(Jan 29 2026 at 10:11)</a>:</h4>
+<p>I'm saying it's not difficult to take Alice's code and make it the output of a macro</p>
+
+
+
+<a name="570752768"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752768" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752768">(Jan 29 2026 at 10:11)</a>:</h4>
+<p>I'm not sure you even need a macro. We can make a generic container over any <code>ForeignOwnable</code></p>
+
+
+
+<a name="570752770"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570752770" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570752770">(Jan 29 2026 at 10:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570752628">said</a>:</p>
+<blockquote>
+<p>I'm saying it's not difficult to take Alice's code and make it the output of a macro</p>
+</blockquote>
+<p>Right, I agree. That is probably the shortest path to chart.</p>
+
+
+
+<a name="570753094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570753094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570753094">(Jan 29 2026 at 10:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570752768">said</a>:</p>
+<blockquote>
+<p>I'm not sure you even need a macro. We can make a generic container over any <code>ForeignOwnable</code></p>
+</blockquote>
+<p>Maybe. I'd like to be able to adjust the alignment constraint as well, but I guess that can be done.</p>
+
+
+
+<a name="570753181"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570753181" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570753181">(Jan 29 2026 at 10:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects/near/570752768">said</a>:</p>
+<blockquote>
+<p>I'm not sure you even need a macro. We can make a generic container over any <code>ForeignOwnable</code></p>
+</blockquote>
+<p>I don't understand how that would look like though</p>
+
+
+
+<a name="570753848"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570753848" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570753848">(Jan 29 2026 at 10:15)</a>:</h4>
+<p>A quick sketch:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">enum</span><span class="w"> </span><span class="nc">Unpacked</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignOwnable</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">T</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Tagged</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">tag</span><span class="p">:</span><span class="w"> </span><span class="nc">Bounded</span><span class="o">&lt;</span><span class="n">NonNull</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">align_to_bits</span><span class="p">(</span><span class="n">T</span><span class="p">::</span><span class="n">FOREIGN_ALIGN</span><span class="p">)}</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="nc">Bounded</span><span class="o">&lt;</span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="kt">usize</span><span class="p">::</span><span class="n">BITS</span><span class="o">-</span><span class="n">align_to_bits</span><span class="p">(</span><span class="n">T</span><span class="p">::</span><span class="n">FOREIGN_ALIGN</span><span class="p">)}</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">Packed</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignOwnable</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">packed</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">c_void</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="570754184"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570754184" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570754184">(Jan 29 2026 at 10:17)</a>:</h4>
+<p>Does <code>Bounded</code> exist?</p>
+
+
+
+<a name="570754221"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570754221" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570754221">(Jan 29 2026 at 10:17)</a>:</h4>
+<p>Yes, see <code>rust/kernel/num/bounded.rs</code></p>
+
+
+
+<a name="570754289"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570754289" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570754289">(Jan 29 2026 at 10:17)</a>:</h4>
+<p>though I don't think it supports using <code>NonNull&lt;usize&gt;</code> as the underlying integer type right now - but it could be added</p>
+
+
+
+<a name="570754751"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570754751" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570754751">(Jan 29 2026 at 10:19)</a>:</h4>
+<p>Ok, cool. We can give that a try. I am curious about how the generated code will be.</p>
+
+
+
+<a name="570754985"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570754985" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570754985">(Jan 29 2026 at 10:20)</a>:</h4>
+<p>Though it probably has to look like this to avoid needing unstable features for const generics:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">enum</span><span class="w"> </span><span class="nc">Unpacked</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignOwnable</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">N</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">M</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">T</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Tagged</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">tag</span><span class="p">:</span><span class="w"> </span><span class="nc">Bounded</span><span class="o">&lt;</span><span class="n">NonNull</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="nc">Bounded</span><span class="o">&lt;</span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// inside conversion from Unpacked to Packed:</span>
+<span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">assert!</span><span class="p">((</span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">T</span><span class="p">::</span><span class="n">FOREIGN_ALIGN</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">assert!</span><span class="p">(</span><span class="n">N</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="kt">usize</span><span class="p">::</span><span class="n">BITS</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="570755009"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570755009" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570755009">(Jan 29 2026 at 10:20)</a>:</h4>
+<p>I think the macro approach is much more ergonomic, you just write</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[packed_pointer]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">Node</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Pointer</span><span class="p">(</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Internal</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Value</span><span class="p">(</span><span class="kt">u8</span><span class="p">),</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>And then you get a <code>PackedNode</code> type that has all the constructors you need</p>
+
+
+
+<a name="570755184"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570755184" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570755184">(Jan 29 2026 at 10:21)</a>:</h4>
+<p>I think my approach is easier to validate the unsafe code of. One can have a macro that outputs fully safe code to convert between the two versions of the unpacked struct.</p>
+
+
+
+<a name="570755247"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570755247" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570755247">(Jan 29 2026 at 10:21)</a>:</h4>
+<p>by that is a matter of taste</p>
+
+
+
+<a name="570755373"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570755373" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570755373">(Jan 29 2026 at 10:22)</a>:</h4>
+<p>right that's also a good option for doing things</p>
+
+
+
+<a name="570755618"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Optimisation%20%20for%20enums%20of%20pointers%20to%20aligned%20objects/near/570755618" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Optimisation.20.20for.20enums.20of.20pointers.20to.20aligned.20objects.html#570755618">(Jan 29 2026 at 10:23)</a>:</h4>
+<p>AFAIK const generics is also progressing a lot, so it's only a matter of time until we can get some of those nice improvements</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

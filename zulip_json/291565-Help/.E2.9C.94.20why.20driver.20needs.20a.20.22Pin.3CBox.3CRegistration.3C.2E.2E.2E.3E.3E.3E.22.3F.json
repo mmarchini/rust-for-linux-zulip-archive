@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>Hi. I recently need to write a driver capable of creating some chrdevs. I find I need to add all the <code>registration</code> items to the struct implementing kernel::Module trait if I want to see these chrdevs in the /proc/devices. The name of the <code>registration</code> items has no influence, but the content matters. It needs to be <code>Pin&lt;Box&lt;chrdev::Registration&lt;N&gt;&gt;&gt;</code>. </p>\n<p>The struct should be</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">RustChrdev</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">_dev</span>: <span class=\"nc\">Pin</span><span class=\"o\">&lt;</span><span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">chrdev</span>::<span class=\"n\">Registration</span><span class=\"o\">&lt;</span><span class=\"n\">N</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<p>rather than</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">RustChrdev</span><span class=\"p\">;</span><span class=\"w\"></span>\n</code></pre></div>\n<p>I read the source code of the macro in the function <code>module</code>. The driver struct is matched as __MOD as follows.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span> <span class=\"nf\">__init</span><span class=\"p\">()</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">kernel</span>::<span class=\"n\">c_types</span>::<span class=\"n\">c_int</span><span class=\"w\"> </span><span class=\"p\">{{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"p\">{</span><span class=\"n\">type_</span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">kernel</span>::<span class=\"n\">Module</span><span class=\"o\">&gt;</span>::<span class=\"n\">init</span><span class=\"p\">(</span><span class=\"n\">kernel</span>::<span class=\"n\">c_str</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"err\">\\</span><span class=\"s\">\"{name}</span><span class=\"se\">\\\"</span><span class=\"s\">), &amp;THIS_MODULE) {{</span>\n<span class=\"s\">        Ok(m) =&gt; {{</span>\n<span class=\"s\">            unsafe {{</span>\n<span class=\"s\">                __MOD = Some(m);</span>\n<span class=\"s\">            }}</span>\n<span class=\"s\">            return 0;</span>\n<span class=\"s\">        }}</span>\n<span class=\"s\">        Err(e) =&gt; {{</span>\n<span class=\"s\">            return e.to_kernel_errno();</span>\n<span class=\"s\">        }}</span>\n<span class=\"s\">    }}</span>\n<span class=\"s\">}}</span>\n</code></pre></div>\n<p>I don't find any other routines about <code>__MOD</code> instead of drop. I don't understand why we need to put the <code>Registration</code> in the driver struct. The <code>alloc_chrdev_region</code> and  <code>cdev_add</code> are already called, so the chrdev should be created. Thanks for your help!</p>",
+        "id": 279067013,
+        "sender_full_name": "Hongyu Li",
+        "timestamp": 1650017170
+    },
+    {
+        "content": "<p><code>__exit</code> will drop <code>__MOD</code>, which in turn recursively drops things. <code>chrdev::Registration</code> has a <code>Drop</code> implementation which de-registers the device.</p>",
+        "id": 279073835,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1650023857
+    },
+    {
+        "content": "<p>I notice the <code>__MOD</code> is dropped in the <code>__exit()</code> function. What I don't understand is why the <code>rust_chrdev</code> does not show up in the /proc/devices file if we don't put the <code>chrdev::Registration</code> in the struct. </p>\n<p>I use the sample/rust_chrdev.rs to do an experiment. I comment the <code>chrdev::Registration</code> in the RustChrdev and return <code>OK()</code>. Then, the <code>rust_chrdev</code> can not be  seen from the /proc/devices file. I originally  think this will only influence the drop part. Because the <code>alloc_chrdev_region</code> and <code>cdev_add</code> are already called. So the rust_chrdev should show up in the /proc/devices file. But the result is far from what I expected. I don't have a clue about the reason.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">RustChrdev</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// _dev: Pin&lt;Box&lt;chrdev::Registration&lt;2&gt;&gt;&gt;, The first commented line</span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">kernel</span>::<span class=\"n\">Module</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">RustChrdev</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">init</span><span class=\"p\">(</span><span class=\"n\">name</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">CStr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">module</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">ThisModule</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">pr_info</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"Rust character device sample (init)</span><span class=\"se\">\\n</span><span class=\"s\">\"</span><span class=\"p\">);</span><span class=\"w\"></span>\n\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">chrdev_reg</span>: <span class=\"nc\">Pin</span><span class=\"o\">&lt;</span><span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">chrdev</span>::<span class=\"n\">Registration</span><span class=\"o\">&lt;</span><span class=\"mi\">2</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">chrdev</span>::<span class=\"n\">Registration</span>::<span class=\"n\">new_pinned</span><span class=\"p\">(</span><span class=\"n\">name</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">module</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"></span>\n\n<span class=\"w\">        </span><span class=\"c1\">// Register the same kind of device twice, we're just demonstrating</span>\n<span class=\"w\">        </span><span class=\"c1\">// that you can use multiple minors. There are two minors in this case</span>\n<span class=\"w\">        </span><span class=\"c1\">// because its type is `chrdev::Registration&lt;2&gt;`</span>\n<span class=\"w\">        </span><span class=\"n\">chrdev_reg</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">register</span>::<span class=\"o\">&lt;</span><span class=\"n\">RustFile</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">chrdev_reg</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">register</span>::<span class=\"o\">&lt;</span><span class=\"n\">RustFile</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"></span>\n\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">RustChrdev</span><span class=\"w\"> </span><span class=\"p\">{})</span><span class=\"w\"> </span><span class=\"c1\">// The added line</span>\n<span class=\"w\">        </span><span class=\"c1\">// Ok(RustChrdev { _dev: chrdev_reg }) The second commented line</span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>",
+        "id": 279087953,
+        "sender_full_name": "Hongyu Li",
+        "timestamp": 1650034822
+    },
+    {
+        "content": "<p>If you don't put it in the struct then <code>chrdev_reg</code> is dropped as soon as <code>init</code> returns, and dropping that struct deregisters the value.</p>",
+        "id": 279089283,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1650035617
+    },
+    {
+        "content": "<p>Your <code>chrdev_reg</code> is dropped after <code>init</code> returns, no?</p>",
+        "id": 279089287,
+        "sender_full_name": "Wei Liu",
+        "timestamp": 1650035621
+    },
+    {
+        "content": "<p>Thank you both very much! I'm bothered by this for a long while. I did not consider how long will <code>chrdev_reg</code> live.</p>",
+        "id": 279091164,
+        "sender_full_name": "Hongyu Li",
+        "timestamp": 1650036799
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"468757\">Hongyu Li</span> has marked this topic as resolved.</p>",
+        "id": 279091192,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1650036809
+    },
+    {
+        "content": "<p>I have some questions further upon <code>Pin&lt;Box&lt;T&gt;&gt;</code>. Why must <code>Registration</code> be pinned? Could it just be on the stack without allocation?</p>",
+        "id": 283210637,
+        "sender_full_name": "Wu Yu Wei",
+        "timestamp": 1653194357
+    },
+    {
+        "content": "<p>The <code>Registration</code> has a member of the C struct <code>cdev</code>, with the <code>list-head</code> inside. Therefore the struct <code>Registration</code> is self-referential. This requires <code>Registration</code> to be pinned. Wedson explained in detail why using <code>Pin</code> in this <a href=\"https://www.youtube.com/watch?v=fVEeqo40IyQ\">video</a>.</p>",
+        "id": 283222992,
+        "sender_full_name": "Hongyu Li",
+        "timestamp": 1653211862
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"468757\">@Hongyu Li</span> Thanks!  The video just explained all I need!</p>",
+        "id": 283299898,
+        "sender_full_name": "Wu Yu Wei",
+        "timestamp": 1653302824
+    }
+]

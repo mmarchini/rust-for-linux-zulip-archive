@@ -1,0 +1,175 @@
+<html>
+<head><meta charset="utf-8"><title>ForeignOwnable for CString · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html">ForeignOwnable for CString</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="521403287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521403287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521403287">(May 31 2025 at 03:43)</a>:</h4>
+<p>Hi folks, I have a requirement where I need to transfer the ownership of a <code>CString</code> to C code, but I found that implementing <code>ForeignOwnable</code> for <code>CString</code> is quite difficult.</p>
+<p>I want <code>into_foreign</code> to return a C <code>char *</code>, but if we only have a C <code>char *</code>, then <code>from_foreign</code> doesn’t have enough information to take back the <code>CString</code>.</p>
+<p><code>CString</code> is based on <code>KVec</code> and requires the pointer, length, and capacity in order to take back the <code>CString</code>. How should I handle this?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="n">ForeignOwnable</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">CString</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">PointedTo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">ffi</span><span class="p">::</span><span class="n">c_char</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Borrowed</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">CStr</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">BorrowedMut</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">CStr</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_foreign</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">PointedTo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Returns a c_char *</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">from_foreign</span><span class="p">(</span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">PointedTo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Converts a c_char * back to a Rust-owned CString</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="521412189"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521412189" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521412189">(May 31 2025 at 05:53)</a>:</h4>
+<p>In <code>into_foreign</code> we could make the allocation fit exactly to the length of the string and then in <code>from_foreign</code> we search for the nul byte</p>
+
+
+
+<a name="521415076"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521415076" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521415076">(May 31 2025 at 06:46)</a>:</h4>
+<p>What if we do not fit the length, just ignore <code>buf[len..capacity]</code> in <code>from_foreign</code>, it work well with current <code>CString</code>. If we fit the allocation length in <code>into_foreign</code>, it cost a little due to realloc.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_foreign</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">PointedTo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span><span class="w"> </span><span class="n">_</span><span class="p">,</span><span class="w"> </span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">buf</span><span class="p">.</span><span class="n">into_raw_parts</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">ptr</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">from_foreign</span><span class="p">(</span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">::</span><span class="n">PointedTo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">strlen</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// capacity &gt;= len, just ignore `buf[len..capacity]`</span>
+<span class="w">        </span><span class="n">CString</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">buf</span><span class="p">:</span><span class="w"> </span><span class="nc">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">KVec</span><span class="p">::</span><span class="n">from_raw_parts</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span><span class="w"> </span><span class="n">len</span><span class="p">,</span><span class="w"> </span><span class="n">len</span><span class="p">)</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="521419157"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521419157" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521419157">(May 31 2025 at 07:31)</a>:</h4>
+<p><code>free</code> and <code>realloc</code> need to know the current size of the allocation</p>
+
+
+
+<a name="521421487"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521421487" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521421487">(May 31 2025 at 08:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/291565-Help/topic/ForeignOwnable.20for.20CString/near/521419157">said</a>:</p>
+<blockquote>
+<p><code>free</code> and <code>realloc</code> need to know the current size of the allocation</p>
+</blockquote>
+<p>Yeah, but in this case, I think the behavior is predictable and correct. we <code>drop</code> it have two step:</p>
+<ol>
+<li>call <code>drop_in_place</code> in range <code>buf[..len]</code>,  <em>It's fine, we restore the len</em></li>
+<li>call <code>free</code> on <code>buf[..len]</code>, <em>and it's fine too, realloc will free <code>buf[..capacity]</code></em></li>
+</ol>
+<p>So even if we ignore <code>buf[len..capacity]</code>, it will be freed correctly. But it's dangerous. <span aria-label="eyes" class="emoji emoji-1f440" role="img" title="eyes">:eyes:</span></p>
+
+
+
+<a name="521421577"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521421577" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521421577">(May 31 2025 at 08:12)</a>:</h4>
+<p>I don't understand your argument why it's fine.</p>
+
+
+
+<a name="521428444"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521428444" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521428444">(May 31 2025 at 09:58)</a>:</h4>
+<p>I am also not following. Do you perhaps mean to change how the <code>Allocator</code> trait works (i.e. the requirements of e.g. <code>free</code>)?  Or perhaps modifying how <code>CString</code> (or <code>KVec</code>) allocate etc. internally instead?</p>
+<p>What <span class="user-mention" data-user-id="546447">@Benno Lossin</span> is trying to say is that currently, if you don't change anything, then e.g. what you pass to <code>free</code> is a <code>Layout</code>, not just a pointer, and that the pointer passed needs to be one that was previously returned by the allocator and so on.</p>
+
+
+
+<a name="521428638"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521428638" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521428638">(May 31 2025 at 10:01)</a>:</h4>
+<p>Edited -- I misread <code>..len</code>, so the first part didn't make sense, sorry.</p>
+
+
+
+<a name="521429955"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521429955" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521429955">(May 31 2025 at 10:22)</a>:</h4>
+<p>Even if you have <code>into_foreign</code> shrink the allocation or otherwise make it work, you also have to call <code>strlen</code> in <code>from_foreign</code>, but that method is suppose to be cheap.</p>
+
+
+
+<a name="521431310"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521431310" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521431310">(May 31 2025 at 10:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/ForeignOwnable.20for.20CString/near/521429955">said</a>:</p>
+<blockquote>
+<p>Even if you have <code>into_foreign</code> shrink the allocation or otherwise make it work, you also have to call <code>strlen</code> in <code>from_foreign</code>, but that method is suppose to be cheap.</p>
+</blockquote>
+<p>Oh right, the performance overhead is too high. It’s difficult to implement <code>ForeignOwnable</code> for <code>CString</code> with zero cost.</p>
+<p>I had an idea — embedding the length at the beginning of the string might reduce the overhead.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w"> </span><span class="c1">//   +--------------------+-----------------------+------------+</span>
+<span class="w"> </span><span class="c1">//   |  length            |   character data      |   '\0'     |</span>
+<span class="w"> </span><span class="c1">//   +--------------------+-----------------------+------------+</span>
+<span class="c1">//                         ^</span>
+</code></pre></div>
+
+
+
+<a name="521433018"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521433018" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521433018">(May 31 2025 at 11:09)</a>:</h4>
+<p>Sounds like <code>ThinBox</code></p>
+
+
+
+<a name="521433258"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521433258" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521433258">(May 31 2025 at 11:13)</a>:</h4>
+<p>But even if you have the length, i.e. no need to find the <code>\0</code>, you still need something that allows you to free it or a <code>realloc</code> that requires less.</p>
+
+
+
+<a name="521433387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521433387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521433387">(May 31 2025 at 11:15)</a>:</h4>
+<p>You could keep both the length and the capacity behind, I guess :)</p>
+
+
+
+<a name="521434567"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521434567" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521434567">(May 31 2025 at 11:32)</a>:</h4>
+<p>Storing length and capacity behind the pointer would work.</p>
+
+
+
+<a name="521434581"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521434581" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521434581">(May 31 2025 at 11:32)</a>:</h4>
+<p>But maybe that should be a new type? Not sure ...</p>
+
+
+
+<a name="521434992"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521434992" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521434992">(May 31 2025 at 11:39)</a>:</h4>
+<p>Yeah, my feeling is that we would probably want to have another type/name for that, especially since <code>CString</code> is well-known in the stdlib (and C developers wouldn't expect that anyway)</p>
+
+
+
+<a name="521435703"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521435703" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521435703">(May 31 2025 at 11:48)</a>:</h4>
+<p>It is also worth considering whether your specific use case requires it to be mutable after creation.</p>
+
+
+
+<a name="521436014"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/ForeignOwnable%20for%20CString/near/521436014" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/ForeignOwnable.20for.20CString.html#521436014">(May 31 2025 at 11:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/ForeignOwnable.20for.20CString/near/521434581">said</a>:</p>
+<blockquote>
+<p>But maybe that should be a new type? Not sure ...</p>
+</blockquote>
+<p>yeah think so too.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

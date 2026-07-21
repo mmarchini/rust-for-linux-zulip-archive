@@ -1,0 +1,929 @@
+<html>
+<head><meta charset="utf-8"><title>DmaFence discussions · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html">DmaFence discussions</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="590188544"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590188544" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590188544">(Apr 22 2026 at 12:06)</a>:</h4>
+<p>I open this thread to capsule more or less all DmaFence discussions so they are easy to find.</p>
+<p>Note that I recently opened a <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/merge_requests/1">new draft</a> for DmaFence that took much previous design goals and feedback into account.</p>
+<p>You must not allocate in a fence signalling section, which is often the case when trying to register a callback, for instance in JobQueue.</p>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span> has rightfully pointed out that my callback registration is still broken. An idea I had which might solve this seems largely identical <a href="https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/61/diffs#a5a71f917ff65cfe4c1a341fa7e55ae149d22863_0_172">with one that</a> <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> had, too.</p>
+<p>I suppose what Daniel presents looks like I good solution, but if folks like <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> <span class="user-mention" data-user-id="413824">@Gary Guo</span> or <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> could take a look, too, I think that would be good.</p>
+<p>An ideal and ellegant solution in my mind would probably look ca. like that:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">cb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FenceCallback</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">mem</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">cb</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="err">…</span>
+<span class="n">fence</span><span class="p">.</span><span class="n">register_callback</span><span class="p">(</span><span class="n">mem</span><span class="p">);</span>
+</code></pre></div>
+
+
+
+<a name="590214314"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590214314" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590214314">(Apr 22 2026 at 13:45)</a>:</h4>
+<p>I think I have an idea.</p>
+<p>The thing with the code presented by and Daniel is that we would basically store the same information that the C backend already has another time, in another allocation, in Rust.</p>
+<p>But this information is already stored deep down in the C dma_fence: </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">dma_fence</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">union</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">spinlock_t</span><span class="w"> </span><span class="o">*</span><span class="n">extern_lock</span><span class="p">;</span>
+<span class="w">        </span><span class="n">spinlock_t</span><span class="w"> </span><span class="n">inline_lock</span><span class="p">;</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">dma_fence_ops</span><span class="w"> </span><span class="n">__rcu</span><span class="w"> </span><span class="o">*</span><span class="n">ops</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">union</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">struct</span><span class="w"> </span><span class="nc">list_head</span><span class="w"> </span><span class="n">cb_list</span><span class="p">;</span>
+</code></pre></div>
+<p>There's a list of all callbacks that are waiting for this fence to be signalled. The fence  knows which callbacks are registered and which are signalled already.</p>
+<p>Now, if we were able to port the C backend so that the backend uses an XArray instead of a list, we might benefit twice. Once because the backend gets a bit faster since the xarray is more cache-friendly when iterating the callbacks.</p>
+<p>Twice because it might be possible to replace Daniel's <code>FenceCallbackRegistration</code> with some sort of ID wrapper</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">FenceRegistration</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">fence</span><span class="p">:</span><span class="w"> </span><span class="nc">ARef</span><span class="o">&lt;</span><span class="n">Fence</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="c1">// no new memory, does not need allocation</span>
+<span class="w">  </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>whose <code>id</code> would be used to obtain the correct callback through the XArray in the C fence. And then we could do <code>container_of</code>, if we can derive what generic data a callback data contains</p>
+<p>So we might end up with:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">cb_object</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FenceCallback</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// allocates</span>
+
+<span class="o">..</span><span class="p">.</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">registration</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fence</span><span class="p">.</span><span class="n">register_callback</span><span class="p">(</span><span class="n">cb_object</span><span class="p">);</span><span class="w"> </span><span class="c1">// does not need allocation</span>
+</code></pre></div>
+<p>If you'd drop your registration, you'd look into the C backend whether it's still there, if yes, you get it back and can drop it – if not, it's signaled already (ownership over data being transferred back to the driver). </p>
+<p>Just had the idea a few mins ago. Not sure if I'm missing something, but it could be very clean because we'd rely on the C backend, who already has all the relevant information, doing the work? <span class="user-mention" data-user-id="929978">@Boris Brezillon</span></p>
+
+
+
+<a name="590215124"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590215124" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590215124">(Apr 22 2026 at 13:48)</a>:</h4>
+<p><span class="user-mention" data-user-id="692273">@Philipp Stanner</span> fyi the reason why I am taking a bit to reply is because I am rebasing all that code on 7.0 and it’s taking a while</p>
+
+
+
+<a name="590224338"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590224338" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590224338">(Apr 22 2026 at 14:21)</a>:</h4>
+<p>xarray for the cb list comes with the extra annoyance that the xarray might allocate, and C users are potentially in a path where certain kind of allocations might not be possible</p>
+
+
+
+<a name="590227774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590227774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590227774">(Apr 22 2026 at 14:34)</a>:</h4>
+<p>by "the same information", you mean the fact we encode whether it's been called or not through an Option&lt;T&gt;, which we also know that from the drm_fence_callback object (list_empty vs !list_empty)?</p>
+
+
+
+<a name="590228279"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228279" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228279">(Apr 22 2026 at 14:35)</a>:</h4>
+<p>I believe the Option&lt;T&gt; was here so your FenceCallbackRegistration can give up its inner T (with a ::take()), and pass it to the ::signaled() method.</p>
+
+
+
+<a name="590228431"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228431" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228431">(Apr 22 2026 at 14:36)</a>:</h4>
+<p>Please no</p>
+
+
+
+<a name="590228480"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228480" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228480">(Apr 22 2026 at 14:36)</a>:</h4>
+<p>Consume the registration instead</p>
+
+
+
+<a name="590228610"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228610" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228610">(Apr 22 2026 at 14:36)</a>:</h4>
+<p>It’s way simpler than producing a &amp;mut to call “take()”</p>
+
+
+
+<a name="590228878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228878">(Apr 22 2026 at 14:37)</a>:</h4>
+<p>I had the take approach at first, and it was hard to make lockdep happy</p>
+
+
+
+<a name="590228884"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590228884" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590228884">(Apr 22 2026 at 14:37)</a>:</h4>
+<p>WDYM?</p>
+
+
+
+<a name="590229436"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590229436" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590229436">(Apr 22 2026 at 14:39)</a>:</h4>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span> The registration object, created through that closure, basically exists for the sole purpose of you being able to re-obtain your dma_fence_cb, to ask the dma_fence backend about the state.</p>
+<p>So the problem we are trying to solve is: How can we access our callback again, without allocating something when registering it?</p>
+<p>And my argument is that we already have the fence, so we could re-obtain it from the fence.</p>
+
+
+
+<a name="590229687"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590229687" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590229687">(Apr 22 2026 at 14:41)</a>:</h4>
+<p>dma_fence_cb has to come from somewhere, so where would that be?</p>
+
+
+
+<a name="590230019"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590230019" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590230019">(Apr 22 2026 at 14:42)</a>:</h4>
+<p>You mean where it is initially created?</p>
+
+
+
+<a name="590230160"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590230160" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590230160">(Apr 22 2026 at 14:42)</a>:</h4>
+<p>where is dma_fence_cb living, yes</p>
+
+
+
+<a name="590230351"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590230351" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590230351">(Apr 22 2026 at 14:43)</a>:</h4>
+<p>The Rust driver allocates it.<br>
+When registering it, memory ownership is given to the C backend, who keeps it in its cb_list</p>
+<p>If Rust needs it again, you access it via the Fence -&gt; dma_fence -&gt; cb_list -&gt; container_of</p>
+
+
+
+<a name="590230383"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590230383" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590230383">(Apr 22 2026 at 14:43)</a>:</h4>
+<p>has to be embedded in some object, and you need to get back to some user-specific T</p>
+
+
+
+<a name="590230553"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590230553" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590230553">(Apr 22 2026 at 14:44)</a>:</h4>
+<p>can you describe what this object containing dma_fence_cb looks like?</p>
+
+
+
+<a name="590231088"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590231088" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590231088">(Apr 22 2026 at 14:46)</a>:</h4>
+<p>I mean, that's pretty much how <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> does it, isn't it? The FenceCallbackRegistration has a dma_fence_cb, plus an Option&lt;T&gt;</p>
+
+
+
+<a name="590231131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590231131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590231131">(Apr 22 2026 at 14:46)</a>:</h4>
+<p>It would be the same as currently</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">FenceCb</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">FenceCbFunc</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// C struct needed for the backend.</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">dma_fence_cb</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="sd">/// Driver data.</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">T</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The part I'm unsure about is whether we could make container_of work, IOW where to obtain the generic info from, considering that <code>Fence</code> cannot be generic</p>
+
+
+
+<a name="590231715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590231715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590231715">(Apr 22 2026 at 14:48)</a>:</h4>
+<p>Well, not quite, Daniel's version keeps all the data stored in Rust and needs to allocate for <code>T</code></p>
+
+
+
+<a name="590232643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590232643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590232643">(Apr 22 2026 at 14:52)</a>:</h4>
+<p>this "get back to FenceCb from dma_fence_cb" works (it's basically what we do for DriverFenceData), it's not really the problem. I think this gets tricky if T is pinned, because then you can't take the value, and pass ownership to the ::signaled() method</p>
+
+
+
+<a name="590232995"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590232995" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590232995">(Apr 22 2026 at 14:54)</a>:</h4>
+<p>as for Daniel's version allocating memory separately, I don't think that's true, is it?</p>
+
+
+
+<a name="590234456"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590234456" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590234456">(Apr 22 2026 at 14:59)</a>:</h4>
+<p>It's the entire point, no?<br>
+You want some sort of handle returned by <code>let handle = fence.register_callback(cb)</code>, so that you can deregister that cb again.<br>
+And that handle needs to be allocated, which is why an <code>impl PinInit</code> is returned</p>
+
+
+
+<a name="590235105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590235105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590235105">(Apr 22 2026 at 15:01)</a>:</h4>
+<p>that's the FenceCallbackRegistration you're talking about?</p>
+
+
+
+<a name="590235190"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590235190" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590235190">(Apr 22 2026 at 15:01)</a>:</h4>
+<p><a href="https://gitlab.freedesktop.org/panfrost/linux/-/blob/2ea570482a0439532e8fbcc846fedc819c62d4b3/rust/kernel/dma_fence.rs#L172">Yes</a></p>
+
+
+
+<a name="590237003"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590237003" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590237003">(Apr 22 2026 at 15:07)</a>:</h4>
+<p>okay, let's take it one field at a time:</p>
+<ul>
+<li>dma_fence_cb, you can't really get rid of, it's what gets registered to the C object</li>
+<li>Option&lt;T&gt; is just the size of T wrapped into an enum that encodes the state. So it's likely something like sizeof(T) + align(1bit, align_of(T)), since there's only two variants to encode (None and Some)</li>
+<li>ARef&lt;Fence&gt;, this one we "could" get rid of, but it would become a mess in term of lifetime control and who owns who (like, how do you deregister, if the fence you registered to is gone, and callback has been consumed)</li>
+</ul>
+
+
+
+<a name="590238710"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590238710" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590238710">(Apr 22 2026 at 15:13)</a>:</h4>
+<p>is the problem the overhead of Option?</p>
+
+
+
+<a name="590239885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590239885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590239885">(Apr 22 2026 at 15:17)</a>:</h4>
+<p>just to be clear, what I mean is that the allocation of a <code>FenceCallbackRegistration</code> object is still one block that contains everything for the callback to run <strong>and</strong> for the registration object to be dropped before this callback has run</p>
+
+
+
+<a name="590241003"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590241003" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590241003">(Apr 22 2026 at 15:21)</a>:</h4>
+<p>if you were to dissociate the "run" from the "unsubscribe" aspects, you'd need <a class="message-link" href="/#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/590231131">#DRM &gt; DmaFence discussions @ 💬</a> for the callback execution side of things, plus another Registration object containing an opaque u32 ID plus the ARef&lt;Fence&gt;, so I'm not too sure we'd be saving memory. Am I missing something?</p>
+
+
+
+<a name="590423885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590423885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590423885">(Apr 23 2026 at 10:50)</a>:</h4>
+<p>We're misunderstanding each other a bit. Let's agree on a few things first:</p>
+<ul>
+<li>Our problem is that we must be able to deregister callbacks</li>
+<li>If we didn't need that, we could design <code>fence.register_callback()</code> so that it does not allocate and would be 'done'</li>
+<li>The pin_init_from_closure is his way to give the driver the ability to allocate when it deems it appropriate / without violating the fence contract</li>
+</ul>
+<p>Right?</p>
+
+
+
+<a name="590449835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590449835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590449835">(Apr 23 2026 at 12:06)</a>:</h4>
+<blockquote>
+<p>we must be able to deregister callbacks</p>
+</blockquote>
+<p>Yes</p>
+<blockquote>
+<p>If we didn't need that, we could design <code>fence.register_callback()</code> so that it does not allocate and would be 'done'</p>
+</blockquote>
+<p>Not really, you need the dma_fence_cb+T to live somewhere, so this memory has to be allocated. Where/when it's allocated is an implementation decision, and that's, I think, what we were discussing yesterday.</p>
+<blockquote>
+<p>The pin_init_from_closure is his way to give the driver the ability to allocate when it deems it appropriate / without violating the fence contract</p>
+</blockquote>
+<p>You can allocate uninitialized memory and initialize the FenceCallbackRegistration late thanks to PinInit approach, though it's still something you'd have to do explicitly (<code>KBox::new_uninit()</code> at alloc time + <code>KBox::??</code> to initialize in-place from the PinInit implementation? =&gt; that's a question for <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> or <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> )</p>
+
+
+
+<a name="590450474"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590450474" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590450474">(Apr 23 2026 at 12:09)</a>:</h4>
+<blockquote>
+<p>Not really, you need the dma_fence_cb+T to live somewhere, so this memory has to be allocated. </p>
+</blockquote>
+<p>Yes, of course. I never disputed that.</p>
+
+
+
+<a name="590451453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590451453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590451453">(Apr 23 2026 at 12:13)</a>:</h4>
+<p>okay, you meant  <code>fence.register_callback()</code> takes ownership of your FenceCallback object and the fence has to signal for this FenceCallback to be dropped</p>
+
+
+
+<a name="590451769"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590451769" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590451769">(Apr 23 2026 at 12:15)</a>:</h4>
+<p>Yes.</p>
+<p>The <strong>only thing</strong> I am arguing about is that a <code>fence.deregister_callback(id)</code> could be <strong>possible</strong>, where that function re-obtains the memory, for example by searching C's <code>cb_list</code> for the associated callback</p>
+<p>Doesn't mean we have to aim for that, I'm just saying that I am considering that option</p>
+
+
+
+<a name="590452717"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590452717" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590452717">(Apr 23 2026 at 12:19)</a>:</h4>
+<p>if producing the opaque ID doesn't involve allocating memory (so no xarray, I guess), yes. But my question then is, what do we save by not having the <code>register_callback()</code> return a Registration object that has this dma_fence_cb embedded (no search needed, and we don't have to change the C API).</p>
+
+
+
+<a name="590453086"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590453086" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590453086">(Apr 23 2026 at 12:20)</a>:</h4>
+<p>We need to add some extra machinery to pin-init to reinitialize the Box in this case, but I already talked to Benno about it and he cleared it</p>
+
+
+
+<a name="590453442"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590453442" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590453442">(Apr 23 2026 at 12:22)</a>:</h4>
+<p>We specifically need this, for the record:</p>
+<p><code>fn drop_contents_pinned(this: Pin&lt;Box&lt;T&gt;&gt;) -&gt; Box&lt;MaybeUninit&lt;T&gt;&gt;</code></p>
+
+
+
+<a name="590453792"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590453792" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590453792">(Apr 23 2026 at 12:23)</a>:</h4>
+<p>From that we would reinitialize the box with </p>
+<p><code>&lt;Box&lt;MaybeUninit&lt;_&gt;&gt; as InPlaceWrite&gt;::write_pin_init(self, init: impl PinInit&lt;T, E&gt;) -&gt; Result&lt;Pin&lt;Box&lt;T&gt;&gt;, E&gt;</code></p>
+
+
+
+<a name="590454061"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590454061" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590454061">(Apr 23 2026 at 12:24)</a>:</h4>
+<p>I think this might result in a more readable and a bit more logical API:</p>
+<p>With the pin solution it is:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">waker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DependencyWaker</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">jobq</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="n">job_ptr</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FenceCbRegistration</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dep</span><span class="p">.</span><span class="n">fence</span><span class="p">,</span><span class="w"> </span><span class="n">waker</span><span class="p">);</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">reg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">callback</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// does the actual registering + allocation</span>
+</code></pre></div>
+<p>Whereas with my idea it would be:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">waker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DependencyWaker</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">jobq</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="n">job_ptr</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">callback</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FenceCbRegistration</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">waker</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// does the allocation</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">reg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fence</span><span class="p">.</span><span class="n">register_callback</span><span class="p">(</span><span class="n">callback</span><span class="p">);</span><span class="w"> </span><span class="c1">// no alloc</span>
+</code></pre></div>
+<p>I don't have super hard feelings about it, I think Daniel's solution does work.</p>
+<p>But I believe that a callback registration is an operation <strong>on</strong> the fence.</p>
+<p>Just like I would not expect a fence to get signalled like that:  <code>KBox::pin_init(f);</code>, but like so: <code>fence.signal()</code></p>
+
+
+
+<a name="590454600"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590454600" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590454600">(Apr 23 2026 at 12:26)</a>:</h4>
+<p>The <code>Box::write_pin_init()</code> is something internal to <code>FenceCbRegistration::new()</code> BTW</p>
+
+
+
+<a name="590454758"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590454758" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590454758">(Apr 23 2026 at 12:27)</a>:</h4>
+<p>I mean, it can even be a method of Fence</p>
+
+
+
+<a name="590455274"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590455274" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590455274">(Apr 23 2026 at 12:28)</a>:</h4>
+<p>(though I'm not too sure we can get back to ARef&lt;Fence&gt; from &amp;Fence, so that wouldn't really be a method taking &amp;self...)</p>
+
+
+
+<a name="590455767"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590455767" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590455767">(Apr 23 2026 at 12:29)</a>:</h4>
+<p>if it's just about ergonomics, we can probably find something</p>
+
+
+
+<a name="590456405"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590456405" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590456405">(Apr 23 2026 at 12:32)</a>:</h4>
+<p>You can do ArcBorrow to get the ref I think</p>
+
+
+
+<a name="590456686"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590456686" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590456686">(Apr 23 2026 at 12:33)</a>:</h4>
+<p>ArcBorrow if for Arc not ARef. But I see a bunch of From implementations for ARef&lt;xxx&gt; taking a ref and turning it into an ARef, so that's doable</p>
+
+
+
+<a name="590457113"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590457113" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590457113">(Apr 23 2026 at 12:35)</a>:</h4>
+<p>yep, it's there =&gt; <a href="https://rust.docs.kernel.org/src/kernel/sync/aref.rs.html#158-164">https://rust.docs.kernel.org/src/kernel/sync/aref.rs.html#158-164</a></p>
+
+
+
+<a name="590461141"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590461141" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590461141">(Apr 23 2026 at 12:49)</a>:</h4>
+<p>OK.</p>
+<p>I guess this solution is fine. Maybe we can pretty up the API a bit like that, but since it solves the problem, I'm OK with going with it</p>
+
+
+
+<a name="590463424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590463424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590463424">(Apr 23 2026 at 12:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/590449835">said</a>:</p>
+<blockquote>
+<p><code>KBox::new_uninit()</code> at alloc time + <code>KBox::??</code> to initialize in-place from the PinInit implementation?</p>
+</blockquote>
+<p><code>KBox::new_uninit()</code> gives you a <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code>, since we have an <code>InPlaceWrite&lt;T&gt;</code> impl for <code>Box&lt;MaybeUninit&lt;T&gt;, A&gt;</code>, you can call <code>write_pin_init()</code> on a <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code>. This call will consume the <code>KBox&lt;MaybeUninit&lt;T&gt;&gt;</code> and return a new <code>Pin&lt;KBox&lt;T&gt;&gt;</code> object.</p>
+
+
+
+<a name="590463636"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590463636" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590463636">(Apr 23 2026 at 12:59)</a>:</h4>
+<p>^ needs drop_contents_pinned() as I said</p>
+
+
+
+<a name="590464263"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/590464263" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#590464263">(Apr 23 2026 at 13:01)</a>:</h4>
+<p>It's not really that this is needed for the above to work, but you need this if you want to recycle a pinned box, yes.</p>
+
+
+
+<a name="591786286"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/591786286" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#591786286">(Apr 29 2026 at 12:51)</a>:</h4>
+<p>I have updated my <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/merge_requests/1">discussion merge request</a></p>
+<p><span class="user-mention" data-user-id="582628">@Daniel Almeida</span> <span class="user-mention" data-user-id="929978">@Boris Brezillon</span> </p>
+<p>Important news:</p>
+<ul>
+<li>Allow for pre-allocating fence callbacks (stolen from Daniel)</li>
+<li>Allow for pre-allocating fences</li>
+<li>Have fences refcount the fctx</li>
+</ul>
+<p>I gave it a quick test run with my unit test.</p>
+<p>The JobQueue in this branch is currently not operational; I want to fully port it next to the pre-allocated fences.</p>
+<p>Please take a look and tell me whether you deem it ready enough for a wider discussion</p>
+
+
+
+<a name="597832911"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597832911" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597832911">(May 26 2026 at 12:37)</a>:</h4>
+<p>I come to think that we will <strong>always</strong> need to wait a grace period before dropping a <code>DriverFence</code></p>
+<p><a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-dma-fence-v1/rust/kernel/dma_buf/dma_fence.rs?ref_type=heads#L663">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-dma-fence-v1/rust/kernel/dma_buf/dma_fence.rs?ref_type=heads#L663</a></p>
+<p>What we achieved so far is that data is freed through <code>call_rcu()</code> so that no <code>drop()</code> needs to be called from atomic context, which is what <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> was keen on.</p>
+<p>We agreed that in case of <code>core::memory::needs_drop()</code>, we want to drop with <code>call_rcu()</code>, otherwise can drop immediately.</p>
+<p>However, something that does not need drop could still be accessing <code>data</code> right now, even if data is just <code>i32</code>.</p>
+<p>The memory the <code>i32</code> resides in could not be freed thanks to refcounting. However, data could be accessed that Rust believes is dropped.</p>
+<p>I'm not entirely sure whether that is illegal?</p>
+
+
+
+<a name="597833094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597833094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597833094">(May 26 2026 at 12:38)</a>:</h4>
+<p>What we sort of have here is basically our own <code>Revocable</code>, where the fence's signalled-flag is the <code>revoked</code> boolean</p>
+
+
+
+<a name="597836791"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597836791" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597836791">(May 26 2026 at 12:55)</a>:</h4>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span>  <span class="user-mention" data-user-id="413824">@Gary Guo</span>  ^</p>
+
+
+
+<a name="597842925"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597842925" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597842925">(May 26 2026 at 13:19)</a>:</h4>
+<blockquote>
+<p>However, something that does not need drop could still be accessing <code>data</code> right now, even if data is just <code>i32</code>.</p>
+</blockquote>
+<p>You mean one of the dma_fence_ops::xxx implementation accessing data?</p>
+
+
+
+<a name="597843069"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597843069" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597843069">(May 26 2026 at 13:19)</a>:</h4>
+<p>Aren't those calls protected with the rcu read lock?</p>
+
+
+
+<a name="597843958"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597843958" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597843958">(May 26 2026 at 13:23)</a>:</h4>
+<p>Yes, that's what I mean.</p>
+<p>They are protected by the RCU read lock, but our plan so far was to only defer dropping with RCU <em>if</em> <code>data</code> needs drop.</p>
+<p>The question boils down to:<br>
+Is it illegal to access something that was dropped, no matter whether dropping it deallocates the backing memory?</p>
+<p>If it is illegal, we would have to do </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="n">needs_drop</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">call_rcu</span><span class="p">(</span><span class="nb">drop</span><span class="p">(</span><span class="n">data</span><span class="p">))</span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="n">synchronize_rcu</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="597845606"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597845606" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597845606">(May 26 2026 at 13:29)</a>:</h4>
+<p>If <code>needs_drop</code> returns false, you do not need to drop it at all.</p>
+
+
+
+<a name="597846524"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597846524" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597846524">(May 26 2026 at 13:33)</a>:</h4>
+<p>But what if someone does. Is that undefined behavior?</p>
+
+
+
+<a name="597847363"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597847363" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597847363">(May 26 2026 at 13:36)</a>:</h4>
+<p>does what? I think needs_drop() tells you if there's anything to be executed on drop()</p>
+
+
+
+<a name="597847463"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597847463" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597847463">(May 26 2026 at 13:36)</a>:</h4>
+<p>so if it returns false, the drop() implementation for this object is considered to be a NOP</p>
+
+
+
+<a name="597847635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597847635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597847635">(May 26 2026 at 13:37)</a>:</h4>
+<p>Invoking drop on a type for which <code>needs_drop()</code> returns false is always a no-op.</p>
+
+
+
+<a name="597847756"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597847756" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597847756">(May 26 2026 at 13:37)</a>:</h4>
+<p>Cool. Then we should be good I suppose</p>
+
+
+
+<a name="597847955"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597847955" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597847955">(May 26 2026 at 13:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> <a href="#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597832911">said</a>:</p>
+<blockquote>
+<p>What we achieved so far is that data is freed through <code>call_rcu()</code> so that no <code>drop()</code> needs to be called from atomic context, which is what @Danilo Krummrich was keen on.</p>
+</blockquote>
+<p>I remember being told that <code>call_rcu()</code> closures may also be invoked in atomic context, so unless I misremember or have been told incorrectly, this doesn't help with the atomic context part.</p>
+
+
+
+<a name="597850205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597850205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597850205">(May 26 2026 at 13:46)</a>:</h4>
+<p>Who said that? Paul?</p>
+<p>If there were restrictions for what you can execute for <code>rcu_callback_t</code>, I'd expect that to be documented very explicitly, but can't see any such warning</p>
+
+
+
+<a name="597850292"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597850292" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597850292">(May 26 2026 at 13:46)</a>:</h4>
+<p>By default <code>call_rcu()</code> callbacks run in softirq context (i.e. non-sleepable), but may be offloaded to a kthread. Obviously, for PREEMPT_RT it is always a kthread. For the "don't exectute in atomic context" part queue_rcu_work() is the correct tool.</p>
+
+
+
+<a name="597850648"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597850648" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597850648">(May 26 2026 at 13:47)</a>:</h4>
+<p>I don't remember who said it, but I recall the part about softirq context as well, which is the reason for it being non-sleepable.</p>
+
+
+
+<a name="597850803"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597850803" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597850803">(May 26 2026 at 13:48)</a>:</h4>
+<p>Then we need to rethink <code>rcu::RcuBox</code>, whose purpose would then probably be a pure <code>defer free()</code></p>
+
+
+
+<a name="597851718"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597851718" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597851718">(May 26 2026 at 13:51)</a>:</h4>
+<p>Or anything else that is non-sleepable.</p>
+
+
+
+<a name="597852583"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597852583" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597852583">(May 26 2026 at 13:55)</a>:</h4>
+<p>Am I the only one who is afraid that our "don't trust the driver" approach comes at a higher and higher burden?</p>
+<p>We would now delegate all drop operations for fence data to a workqueue, because we don't trust the driver to do non-sleepable things in <strong>Fence data</strong>.</p>
+<p>We  would, however, provide <code>RcuBox</code> in which we <em>just as well</em> would have to document "Driver, the data inside this box must not sleep when dropping. If it needs to sleep, use this other drop container that we wrote for DmaFence (originallry"</p>
+<p>So in part, we just move the burden / documentation around</p>
+
+
+
+<a name="597852923"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597852923" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597852923">(May 26 2026 at 13:56)</a>:</h4>
+<p>What about do a <code>call_srcu</code>?</p>
+
+
+
+<a name="597852995"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597852995" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597852995">(May 26 2026 at 13:56)</a>:</h4>
+<p>SRCU callbacks are always invoked from workqueue</p>
+
+
+
+<a name="597853008"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597853008" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597853008">(May 26 2026 at 13:56)</a>:</h4>
+<p>We could define a new trait <code>AtomicDrop</code> with a derive macro that lets drivers say that their type is safe to drop in atomic context.</p>
+
+
+
+<a name="597853058"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597853058" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597853058">(May 26 2026 at 13:57)</a>:</h4>
+<p>Then require it for <code>RcuBox</code> and <code>Fence</code></p>
+
+
+
+<a name="597853185"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597853185" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597853185">(May 26 2026 at 13:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597853008">said</a>:</p>
+<blockquote>
+<p>We could define a new trait <code>AtomicDrop</code> with a derive macro that lets drivers say that their type is safe to drop in atomic context.</p>
+</blockquote>
+<p>It'll be huge pain to do this if this isn't auto trait.</p>
+
+
+
+<a name="597853397"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597853397" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597853397">(May 26 2026 at 13:58)</a>:</h4>
+<p>Eh, I don't think it's too bad. We can have a derive macro.</p>
+
+
+
+<a name="597855148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597855148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597855148">(May 26 2026 at 14:04)</a>:</h4>
+<p>I guess whether A or B is good for Fence depends on the question whether we actually <em>want</em> to allow Fence::data::drop() to sleep</p>
+
+
+
+<a name="597855205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597855205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597855205">(May 26 2026 at 14:04)</a>:</h4>
+<p>Well, I think the cost/benefit ratio is a not worth it for this case, given that you can still easily take a spinlock and drop something that is not <code>AtomicDrop</code> and there's no language mechanism to prevent that. Doing such trait require you to implement it for a lot of types in <code>core</code> and <code>kernel</code>, and just be able to use it for <code>RcuBox</code> feels an overkill.</p>
+<p><code>DmaFence</code> can be solved with SRCU, which I think isn't really an issue as DRM is already using SRCU in a few places.</p>
+<p>I'd rather implement a auto-trait-like stuff in klint and use that instead, at least then I can still use it to do some best effort analysis for spinlock case. Klint already has some mechanisms in analyzing sleep behaviours; if we're not aiming for no-false-negative then it shouldn't be that tricky to implement something specifically for RcuBox.</p>
+
+
+
+<a name="597855791"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597855791" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597855791">(May 26 2026 at 14:06)</a>:</h4>
+<p>If we can't prevent the driver from taking locks etc, then we could just as well use normal RCU</p>
+<p>Reason being that you would then still rely on documentation: "Don't implement fence::data::drop() like this or like that"</p>
+
+
+
+<a name="597856072"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856072" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856072">(May 26 2026 at 14:07)</a>:</h4>
+<p>Quick question, would an ARef&lt;Something&gt; in T, with Something::drop() being detected as sleepable be caught by this mechanism?</p>
+
+
+
+<a name="597856351"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856351" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856351">(May 26 2026 at 14:08)</a>:</h4>
+<p>That logic has to depend on what <code>Something</code> is.</p>
+
+
+
+<a name="597856427"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856427" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856427">(May 26 2026 at 14:08)</a>:</h4>
+<p>A trait could let each inner type declare whether its drop is sleepable or not.</p>
+
+
+
+<a name="597856455"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856455" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856455">(May 26 2026 at 14:08)</a>:</h4>
+<p>You mean <code>Arc</code>? Both the trait approach or klint can detect that.</p>
+
+
+
+<a name="597856488"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856488" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856488">(May 26 2026 at 14:08)</a>:</h4>
+<p>I'm of course worried about explicit ::drop() implementations doing something that's not allowed, but I'm even more worried about implicit drop()s on contained types, because those are the ones the user doesn't necessarily pay attention to</p>
+
+
+
+<a name="597856492"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597856492" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597856492">(May 26 2026 at 14:08)</a>:</h4>
+<p>If the read-side critical section does not require to be sleepable, then SRCU is not the way to go. If we don't want the trait Alice proposed, we should either document it, or if sleepable Drop is a reasonable use-case, use queue_rcu_work(). Also, can't we catch violations with <code>klint</code>?</p>
+
+
+
+<a name="597857466"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597857466" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597857466">(May 26 2026 at 14:12)</a>:</h4>
+<p><code>queue_rcu_work</code> does not work, as it is really just <code>call_rcu</code> + <code>queue_work</code>. Only the RCU part orders with RCU barriers, and now you have the issue that you cannot guarantee the work to be complete when barrier completes in FenceCtx drop.</p>
+
+
+
+<a name="597858886"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597858886" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597858886">(May 26 2026 at 14:16)</a>:</h4>
+<p>Oh well, if additionally the code relies on an <code>rcu_barrier()</code> then <code>queue_rcu_work()</code> does indeed not work; I thought it was exclusively about deferring <code>drop()</code> until all callbacks did complete.</p>
+
+
+
+<a name="597859082"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859082" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859082">(May 26 2026 at 14:17)</a>:</h4>
+<p>That <strong>and</strong> doing something about the possiblilty that a DriverFence can drop in atomic context</p>
+
+
+
+<a name="597859101"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859101" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859101">(May 26 2026 at 14:17)</a>:</h4>
+<p>Instead of the <code>rcu_barrier()</code>the code could wait for the RCU work though.</p>
+
+
+
+<a name="597859264"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859264" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859264">(May 26 2026 at 14:18)</a>:</h4>
+<p>Not sure how would you implement that in <code>FenceCtx</code>; could be done but the complexity is growing even more now :)</p>
+
+
+
+<a name="597859343"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859343" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859343">(May 26 2026 at 14:18)</a>:</h4>
+<p>In any case, we don't want an SRCU read-side critical section in a hot path where it is not required for the read-side.</p>
+
+
+
+<a name="597859474"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859474" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859474">(May 26 2026 at 14:19)</a>:</h4>
+<p>How would the <code>klint</code> idea work, what would need to be done for that?</p>
+
+
+
+<a name="597859592"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597859592" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597859592">(May 26 2026 at 14:19)</a>:</h4>
+<p>Well, I need to actually implement it :)</p>
+
+
+
+<a name="597860125"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597860125" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597860125">(May 26 2026 at 14:22)</a>:</h4>
+<p>I mean, the rest of the kernel so far solves this through documentation + <code>might_sleep()</code> et al, warning on runtime.</p>
+<p>If we need to get it water tight on compile time.. seems there is then a bit of work to be done</p>
+
+
+
+<a name="597860906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597860906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597860906">(May 26 2026 at 14:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597859343">said</a>:</p>
+<blockquote>
+<p>In any case, we don't want an SRCU read-side critical section in a hot path where it is not required for the read-side.</p>
+</blockquote>
+<p>Which path is hot enough that you think the SRCU overhead (basically 1 per-cpu counter increment + 1 memory barrier) is too much?</p>
+
+
+
+<a name="597861002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597861002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597861002">(May 26 2026 at 14:25)</a>:</h4>
+<p>Currently, we seem to have two users in-tree that have sleepable code in release(), so there are cases.</p>
+
+
+
+<a name="597861009"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597861009" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597861009">(May 26 2026 at 14:25)</a>:</h4>
+<p>If we're stuck with normal RCU, then I think documenting that drop must not sleep is the first reasonable step.</p>
+
+
+
+<a name="597861381"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597861381" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597861381">(May 26 2026 at 14:27)</a>:</h4>
+<p>But they do not seem unavoidable.</p>
+
+
+
+<a name="597861915"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597861915" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597861915">(May 26 2026 at 14:29)</a>:</h4>
+<p>Submitting jobs to the GPU / accelerator is rather performance critical, srcu_read_lock() / srcu_read_unlock() add two smp_mb() which are avoidable.</p>
+
+
+
+<a name="597862390"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597862390" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597862390">(May 26 2026 at 14:31)</a>:</h4>
+<p>When submitting jobs you have a <code>DriverFence</code> which doesn't need this, though? Only callbacks that cannot ascertain that <code>DriverFence</code> is not yet destroyed need to use SRCU to protect.</p>
+
+
+
+<a name="597862715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597862715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597862715">(May 26 2026 at 14:33)</a>:</h4>
+<p>Could we maybe start with a compile-time FenceData::needs_drop() == false check?</p>
+
+
+
+<a name="597862886"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597862886" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597862886">(May 26 2026 at 14:33)</a>:</h4>
+<p>With the FenceCtx design, I'd assume that most resources would be attached to the FenceCtx anyway</p>
+
+
+
+<a name="597864779"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597864779" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597864779">(May 26 2026 at 14:41)</a>:</h4>
+<p>Need to check what <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> put in his FenceData</p>
+
+
+
+<a name="597865029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597865029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597865029">(May 26 2026 at 14:42)</a>:</h4>
+<p>IIRC nothing, since we can derive the current syncobj value from the GPU itself, but apparently that is not the case for all drivers?</p>
+
+
+
+<a name="597865231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597865231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597865231">(May 26 2026 at 14:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/415254-DRM/topic/DmaFence.20discussions/near/597862390">said</a>:</p>
+<blockquote>
+<p>When submitting jobs you have a <code>DriverFence</code> which doesn't need this, though? Only callbacks that cannot ascertain that <code>DriverFence</code> is not yet destroyed need to use SRCU to protect.</p>
+</blockquote>
+<p>Fair enough, not a concern for me if it is not in a hot path.</p>
+
+
+
+<a name="597867389"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597867389" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597867389">(May 26 2026 at 14:52)</a>:</h4>
+<blockquote>
+<p>IIRC nothing, since we can derive the current syncobj value from the GPU itself, but apparently that is not the case for all drivers?</p>
+</blockquote>
+<p>Yep, I just checked those structs are empty indeed</p>
+
+
+
+<a name="597867577"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597867577" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597867577">(May 26 2026 at 14:53)</a>:</h4>
+<p>OK. So we shall do SRCU and then the "only" thing we need to tell the driver is to be careful with taking locks in fence::data::drop()?</p>
+
+
+
+<a name="597867813"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597867813" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597867813">(May 26 2026 at 14:54)</a>:</h4>
+<p>I mean, that's basically the same issue</p>
+
+
+
+<a name="597867891"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597867891" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597867891">(May 26 2026 at 14:54)</a>:</h4>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span>  I asked a llm to do a research on the other drivers back then, to see if we could remove this FenceData thing completely, and it said no and pointed to amdgpu</p>
+
+
+
+<a name="597868059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868059">(May 26 2026 at 14:55)</a>:</h4>
+<p>All sorts of C drivers do container_of on their fence. That is their equivalent of Rust's <code>data: T</code></p>
+
+
+
+<a name="597868250"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868250" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868250">(May 26 2026 at 14:55)</a>:</h4>
+<p>yeah, but notion of context was lacking there</p>
+
+
+
+<a name="597868341"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868341" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868341">(May 26 2026 at 14:56)</a>:</h4>
+<p>in your design, all callbacks basically go back to the context</p>
+
+
+
+<a name="597868475"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868475" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868475">(May 26 2026 at 14:56)</a>:</h4>
+<p>in which you can store additional stuff</p>
+
+
+
+<a name="597868872"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868872" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868872">(May 26 2026 at 14:58)</a>:</h4>
+<p>Anyways.</p>
+<p>So then we enforce <code>must_not_need_drop() == true</code> and can remove the RCU code from <code>DriverFence::drop()</code>, aye?</p>
+<p>I need to keep the rcu_barrier, though, since the fence context name parameters need to be guarded.</p>
+
+
+
+<a name="597868959"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597868959" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597868959">(May 26 2026 at 14:58)</a>:</h4>
+<p>just to be clear, the real trouble come as soon as FenceData holds on external shared resources which might be dropped as part of the DriverFence::drop() if and only if the FenceData instance is the last owner</p>
+
+
+
+<a name="597869579"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597869579" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597869579">(May 26 2026 at 15:00)</a>:</h4>
+<blockquote>
+<p>I need to keep the rcu_barrier, though, since the fence context name parameters need to be guarded.</p>
+</blockquote>
+<p>Yep, you need it to make sure the context is not dropped before all callbacks have returned</p>
+
+
+
+<a name="597869923"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/597869923" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#597869923">(May 26 2026 at 15:02)</a>:</h4>
+<p>or something along those lines (sorry, I just paged everything DmaFence related out)</p>
+
+
+
+<a name="598014271"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/598014271" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#598014271">(May 27 2026 at 07:20)</a>:</h4>
+<p>Mhm, thinking about it, if we really prohibit anything that needs Drop(), then the driver couldn't even store anything allocated, like even a string for debugging, in their fences anymore</p>
+<p>I feel that this might provoke people into using raw pointers as data. They don't need drop.</p>
+
+
+
+<a name="603641460"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/603641460" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#603641460">(Jun 16 2026 at 08:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="929978">@Boris Brezillon</span> </p>
+<p>It would seem that the "drop in atomic context" problem goes even a few centimeters deeper than expected</p>
+<p>If we now indeed drop <code>DriverFenceData</code> with <code>call_rcu()</code>, then the last reference to <code>FenceCtx</code> can also drop in atomic context.</p>
+<p>It is illegal to do both <code>rcu_barrier()</code> and <code>synchronize_rcu()</code> in atomic context. So I think we can do neither in <code>FenceCtx::drop()</code>.</p>
+<p>For dma_fence itself, this is fine, since the <code>call_rcu()</code> already guarantees that there can be no UAF. However, you still need some synchronization to guard against module unload.</p>
+<p>Do Rust kernel modules execute a <code>rcu_barrier()</code> before unloading?</p>
+
+
+
+<a name="603647602"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/603647602" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#603647602">(Jun 16 2026 at 08:23)</a>:</h4>
+<p>So, first off, I wonder why the DriverFenceData::fctx needs to be an Arc&lt;FenceCtx&gt;. Can't we define that FenceCtx outlives any of the DriverFenceData is instantiated with lifetimes, and have <code>fctx: &amp;FenceCtx</code>? If we go for this, this means that there's no 'DriverFenceData can release the last Arc&lt;FenceCtx&gt;" and thus we can't end up with FenceCtx being destroyed from the DriverFenceData::drop() path</p>
+
+
+
+<a name="611102229"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/611102229" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#611102229">(Jul 16 2026 at 15:33)</a>:</h4>
+<p><span class="user-mention" data-user-id="582628">@Daniel Almeida</span> self-refential pin-init wip: <a href="https://github.com/nbdd0121/linux/tree/dev/selfref">https://github.com/nbdd0121/linux/tree/dev/selfref</a></p>
+
+
+
+<a name="611345302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/611345302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#611345302">(Jul 17 2026 at 18:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> ok, assuming this solves the self-referential issue, how about the T: 'static bound in XArray?</p>
+
+
+
+<a name="611345440"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DmaFence%20discussions/near/611345440" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DmaFence.20discussions.html#611345440">(Jul 17 2026 at 18:00)</a>:</h4>
+<p>What bound?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

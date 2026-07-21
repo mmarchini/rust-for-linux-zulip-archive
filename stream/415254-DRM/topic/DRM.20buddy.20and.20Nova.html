@@ -1,0 +1,252 @@
+<html>
+<head><meta charset="utf-8"><title>DRM buddy and Nova · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html">DRM buddy and Nova</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="558067656"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558067656" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558067656">(Nov 18 2025 at 21:13)</a>:</h4>
+<p>I just realized thanks to <span class="user-mention" data-user-id="782725">@John Hubbard</span> that since <code>CONFIG_DRM_BUDDY</code> depends on <code>CONFIG_DRM</code>,  and since <code>nova-core</code> has a hard dependency on not depending on <code>CONFIG_DRM</code> (since it can be used for other usecases like vGPU) ;  we cannot use <code>DRM_BUDDY</code> as it is for the <code>nova-core</code> driver.</p>
+<p>This leaves us with a couple of options:</p>
+<ol>
+<li>
+<p>Refactor <code>DRM_BUDDY</code> so that the buddy algorithm it uses is extracted into external  code(say in /lib/ or something along those lines).<br>
+    or,</p>
+</li>
+<li>
+<p>Implement the buddy allocator in Rust (say in rust/mm/).</p>
+</li>
+</ol>
+<p>The drawback of <a href="https://github.com/Rust-for-Linux/linux/issues/2">#2</a> is fragmentation and duplication.<br>
+The drawback of <a href="https://github.com/Rust-for-Linux/linux/issues/1">#1</a> is the logging dependencies of DRM_BUDDY on DRM devices will still live in <code>drm/</code> so DRM drivers still need to call into DRM_BUDDY though the actual buddy allocator will be in common C code.</p>
+<p>What do people think we should do? If Rust was supported by all architectures supporting DRM, then we could even make the common code as Rust code, but unfortunately we're not there yet.</p>
+<p>CC <span class="user-mention" data-user-id="670868">@Dave Airlie</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> (input from everyone welcomed).</p>
+
+
+
+<a name="558067820"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558067820" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558067820">(Nov 18 2025 at 21:14)</a>:</h4>
+<p>One option could be the maple tree? I know it's a different algorithm, but still ...</p>
+
+
+
+<a name="558067957"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558067957" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558067957">(Nov 18 2025 at 21:14)</a>:</h4>
+<p>Refactoring sounds perfect to me.</p>
+
+
+
+<a name="558068073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068073">(Nov 18 2025 at 21:15)</a>:</h4>
+<p>For nova, I really wanted the buddy algorithm, switching from maple tree to buddy later might be additional work (and maybe risk breaking working things).</p>
+
+
+
+<a name="558068310"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068310" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068310">(Nov 18 2025 at 21:17)</a>:</h4>
+<p>We are now observing “DRM buddy allocator is desirable in non-DRM situations “. That’s a classic scenario that calls for refactoring out the drm-specific bits.</p>
+
+
+
+<a name="558068781"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068781" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068781">(Nov 18 2025 at 21:20)</a>:</h4>
+<p>I think the plan was to move drm_buddy up to GPU except for the one place it uses drm</p>
+
+
+
+<a name="558068879"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068879" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068879">(Nov 18 2025 at 21:21)</a>:</h4>
+<p><span class="user-mention" data-user-id="670868">@Dave Airlie</span> is someone working on that already?</p>
+
+
+
+<a name="558068906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068906">(Nov 18 2025 at 21:21)</a>:</h4>
+<p>it has no actual drm dependencies apart from printing debug msgs I don't think</p>
+
+
+
+<a name="558068977"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558068977" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558068977">(Nov 18 2025 at 21:22)</a>:</h4>
+<p>no but it should be a pretty trivial bump, to move it and maybe just wrap the current drm_buddy interfaces in the moved one</p>
+
+
+
+<a name="558069067"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558069067" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558069067">(Nov 18 2025 at 21:22)</a>:</h4>
+<p><span class="user-mention" data-user-id="670868">@Dave Airlie</span> shall we call it <code>gpu_buddy</code> once moved one level up?</p>
+
+
+
+<a name="558069132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558069132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558069132">(Nov 18 2025 at 21:22)</a>:</h4>
+<p>yeah drm_buddy_print is the only thing that is there. I'm not sure renaming it all is worth it, but it might be cleaner</p>
+
+
+
+<a name="558069270"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558069270" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558069270">(Nov 18 2025 at 21:23)</a>:</h4>
+<p>Cleaner is good<span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="558069403"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558069403" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558069403">(Nov 18 2025 at 21:24)</a>:</h4>
+<p>I think it would just live as a separate module, or maybe it's small enough to just make part of the core kernel</p>
+
+
+
+<a name="558069885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558069885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558069885">(Nov 18 2025 at 21:27)</a>:</h4>
+<p>We could keep existing drm interface as wrappers which uses the common module (either in <code>drivers/gpu/</code> or core kernel say <code>lib/</code>). And write a rust module to use it from <code>lib/</code> for <code>nova-core</code> driver and other future Rust drivers to use.  Let me know if I missed something.</p>
+
+
+
+<a name="558070196"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070196" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070196">(Nov 18 2025 at 21:29)</a>:</h4>
+<p>Personally I prefer <code>drivers/gpu/</code> in case the buddy algorithm gets any GPU-specific extensions (at the moment I can't think of any though).</p>
+
+
+
+<a name="558070203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070203">(Nov 18 2025 at 21:29)</a>:</h4>
+<p>Just to be clear, the new module should not have any drm naming in in whatsoever.</p>
+
+
+
+<a name="558070233"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070233" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070233">(Nov 18 2025 at 21:29)</a>:</h4>
+<p>yes, that's the plan.</p>
+
+
+
+<a name="558070427"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070427" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070427">(Nov 18 2025 at 21:30)</a>:</h4>
+<p>drivers/gpu makes sense— unless drivers/accel wants to use it!</p>
+
+
+
+<a name="558070464"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070464" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070464">(Nov 18 2025 at 21:30)</a>:</h4>
+<p>I think gpu is fine, also fine for accel stuff to use stuff in gpu</p>
+
+
+
+<a name="558070504"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070504" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070504">(Nov 18 2025 at 21:31)</a>:</h4>
+<p>accel already relies on drm</p>
+
+
+
+<a name="558070506"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558070506" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558070506">(Nov 18 2025 at 21:31)</a>:</h4>
+<p>Sounds good</p>
+
+
+
+<a name="558071346"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558071346" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558071346">(Nov 18 2025 at 21:36)</a>:</h4>
+<p>I will work on some patches this week to move this up to <code>drivers/gpu/</code> and try to post it for feedback. Meanwhile any feedback on my rust <code>clist</code> <a href="https://lore.kernel.org/all/CANiq72nuHUFGMsEYr-KhCB4oMjX72YskG0s7uCB8dcVtTGW-jQ@mail.gmail.com/">patches</a> related to this, are more than welcomed.</p>
+
+
+
+<a name="558750844"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558750844" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558750844">(Nov 21 2025 at 21:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="670868">@Dave Airlie</span> , all, When we move drm_buddy one level up to GPU (now called gpu_buddy), I am going to keep the old API as well so that existing drivers don't break (and also as we have custom drm printer functionality in the old API). For nova-core, we'd not use the printer functionality and just use the gpu buddy allocator directly. Hope that sounds Ok and let me know what you think.</p>
+
+
+
+<a name="558751977"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558751977" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558751977">(Nov 21 2025 at 21:12)</a>:</h4>
+<p>Alternatively, I'll get rid of the printer and just let print outs goto pr_info. And then migrate each existing driver over to gpu_buddy. Advantage being no more drm_buddy and its cleaner. Thoughts?</p>
+
+
+
+<a name="558752631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558752631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558752631">(Nov 21 2025 at 21:17)</a>:</h4>
+<p>(Unless there's an objection, I'll stick to the latter, better for the kernel overall).</p>
+
+
+
+<a name="558752802"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558752802" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558752802">(Nov 21 2025 at 21:19)</a>:</h4>
+<p>also <code>include/drm/drm_buddy.h</code> now becomes <code>include/linux/gpu_buddy.h</code>.</p>
+
+
+
+<a name="558752924"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558752924" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558752924">(Nov 21 2025 at 21:20)</a>:</h4>
+<p>sounds good to me, the printer is fine to keep in drm_buddy on it's own if you want</p>
+
+
+
+<a name="558752978"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558752978" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558752978">(Nov 21 2025 at 21:20)</a>:</h4>
+<p>so either have drm buddy call gpu buddy and keep the API, or just have an extra helper function for printing in drm</p>
+
+
+
+<a name="558753049"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558753049" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558753049">(Nov 21 2025 at 21:21)</a>:</h4>
+<p>ok cool, let me see which way is better, either sounds good, thanks.</p>
+
+
+
+<a name="558755714"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558755714" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558755714">(Nov 21 2025 at 21:44)</a>:</h4>
+<p>On printing: I don't know how much printing drm_buddy is doing today, but it is best to simply NOT print at all, from lower level libraries, in the first place.</p>
+<p>Use tracing and tracepoints and such, instead.</p>
+<p>Low level libraries and allocators are called by a wide variety of things, and they lack the context to intelligently filter the printing.</p>
+
+
+
+<a name="558755797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558755797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558755797">(Nov 21 2025 at 21:45)</a>:</h4>
+<p>I don't want to change the behavior of existing drivers during migration though (like Xe). If needed, it could be a follow-up patch since that is orthogonal to this effort.</p>
+
+
+
+<a name="558755862"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558755862" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558755862">(Nov 21 2025 at 21:45)</a>:</h4>
+<p>For nova-core, we wouldn't use the drm printer.</p>
+
+
+
+<a name="558755927"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558755927" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558755927">(Nov 21 2025 at 21:46)</a>:</h4>
+<p>Are we able to avoid "the drm printer" entirely, somehow? OK...</p>
+
+
+
+<a name="558755993"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558755993" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558755993">(Nov 21 2025 at 21:46)</a>:</h4>
+<p>If you don't want to do it "during" the migration, you could delete it first, then do the migration afterwards?</p>
+
+
+
+<a name="558756013"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558756013" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558756013">(Nov 21 2025 at 21:46)</a>:</h4>
+<p>yeah, just don't call <code>*_buddy_print</code> ;-)</p>
+
+
+
+<a name="558756136"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558756136" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558756136">(Nov 21 2025 at 21:48)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> I meant for their usage of drm_buddy printer. That they expect the printing happen via <code>drm_printf</code></p>
+
+
+
+<a name="558756160"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/DRM%20buddy%20and%20Nova/near/558756160" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/DRM.20buddy.20and.20Nova.html#558756160">(Nov 21 2025 at 21:48)</a>:</h4>
+<p>OK. So yes, let's not call it. :)</p>
+<p>If there is support for fixing (deleting) the drm printing (Alice is an early indicator, haha), then we should not fail to follow through on that, imho</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

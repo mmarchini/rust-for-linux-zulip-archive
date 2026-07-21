@@ -1,0 +1,224 @@
+<html>
+<head><meta charset="utf-8"><title>Verifying Binder&#x27;s parsing of userspace input in Lean 4 · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html">Verifying Binder&#x27;s parsing of userspace input in Lean 4</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="608417743"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608417743" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608417743">(Jul 06 2026 at 10:57)</a>:</h4>
+<p>We're a formal verification group (Runtime Verification) looking into whether kernel Rust parsing code can be verified post hoc in Lean 4. The toolchain is Charon/Aeneas, which extracts Rust into a form a proof assistant can reason about. Short intro to the pipeline: <a href="https://runtimeverification.com/blog/from-rust-source-code-to-mathematical-proof">https://runtimeverification.com/blog/from-rust-source-code-to-mathematical-proof</a></p>
+<p>As a feasibility test we took the BinderObject deserializer from drivers/android/binder/allocation.rs (v7.2-rc2): read_from, as_ref, type_to_size, and the size_check bounds logic. Charon extracted it on the first attempt with zero changes to the parsing logic. Only the environment (kernel crate, bindgen'd UAPI, UserSliceReader) needed thin stubs. The union type-punning, MaybeUninit and the raw pointer cast all survive extraction. </p>
+<p>Report and reproduction steps: <a href="https://github.com/runtimeverification/kernel-rust-verification-spike">https://github.com/runtimeverification/kernel-rust-verification-spike</a></p>
+<p>Next step is Aeneas into Lean 4, with first proofs that invalid type tags are rejected and the bounds checks are correct. Longer term we want the offset-validation loop in copy_transaction_data.</p>
+<p>A question for people who know this code: if parts of Binder's input parsing carried machine-checked proofs, which properties would actually be worth having?</p>
+
+
+
+<a name="608423197"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608423197" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608423197">(Jul 06 2026 at 11:30)</a>:</h4>
+<p>These properties would be useful:</p>
+<ol>
+<li>For all possible inputs from userspace, the code must not panic.</li>
+<li>When <code>Allocation::cleanup_object</code> is called, it must clean up exactly the same set of objects as what was successfully translated by <code>translate_object</code> calls.</li>
+</ol>
+
+
+
+<a name="608428758"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608428758" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608428758">(Jul 06 2026 at 12:01)</a>:</h4>
+<blockquote>
+<p>We're a formal verification group (Runtime Verification)</p>
+</blockquote>
+<p>Is it an academic research group or a company?</p>
+<blockquote>
+<p>Report and reproduction steps: <a href="https://github.com/runtimeverification/kernel-rust-verification-spike">https://github.com/runtimeverification/kernel-rust-verification-spike</a></p>
+</blockquote>
+<p>If I understand correctly, you hard-copied a bit of Binder code into that crate and ran Charon on it using an LLM, right?</p>
+<p>That is fine, but the Aeneas side is going to be the more interesting part (assuming it translates successfully already), and especially maintaining it over time. Do you plan on keeping it up to date on both Binder's and Aeneas' side?</p>
+<blockquote>
+<p>Only the environment (kernel crate, bindgen'd UAPI, UserSliceReader) needed thin stubs.</p>
+</blockquote>
+<p>Having to stub the <code>kernel</code> crate bits is not ideal, yeah.</p>
+<p>If you truly want to maintain this over time, then it may be worth it to look into extracting the pure parsing logic into a separate crate and automating the extraction of the rest of the bits that are needed like <code>Error</code> without keeping a hard copy.</p>
+
+
+
+<a name="608429793"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608429793" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608429793">(Jul 06 2026 at 12:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204/near/608423197">said</a>:</p>
+<blockquote>
+<p>These properties would be useful:</p>
+<ol>
+<li>For all possible inputs from userspace, the code must not panic.</li>
+<li>When <code>Allocation::cleanup_object</code> is called, it must clean up exactly the same set of objects as what was successfully translated by <code>translate_object</code> calls.</li>
+</ol>
+</blockquote>
+<p>Thanks, this is exactly the kind of input we were hoping for. The no-panic property for all userspace inputs fits our pipeline well: Aeneas models panics explicitly, so "no reachable panic" is a natural theorem to state. The cleanup_object / translate_object symmetry is harder since it relates two functions through shared state, but it's a good target precisely because it's the kind of invariant that's easy to break in refactoring and hard to test exhaustively. We can start with no-panic on the deserializer.</p>
+
+
+
+<a name="608430249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608430249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608430249">(Jul 06 2026 at 12:10)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204/near/608428758">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>We're a formal verification group (Runtime Verification)</p>
+</blockquote>
+<p>Is it an academic research group or a company?</p>
+<blockquote>
+<p>Report and reproduction steps: <a href="https://github.com/runtimeverification/kernel-rust-verification-spike">https://github.com/runtimeverification/kernel-rust-verification-spike</a></p>
+</blockquote>
+<p>If I understand correctly, you hard-copied a bit of Binder code into that crate and ran Charon on it using an LLM, right?</p>
+<p>That is fine, but the Aeneas side is going to be the more interesting part (assuming it translates successfully already), and especially maintaining it over time. Do you plan on keeping it up to date on both Binder's and Aeneas' side?</p>
+<blockquote>
+<p>Only the environment (kernel crate, bindgen'd UAPI, UserSliceReader) needed thin stubs.</p>
+</blockquote>
+<p>Having to stub the <code>kernel</code> crate bits is not ideal, yeah.</p>
+<p>If you truly want to maintain this over time, then it may be worth it to look into extracting the pure parsing logic into a separate crate and automating the extraction of the rest of the bits that are needed like <code>Error</code> without keeping a hard copy.</p>
+</blockquote>
+<p>A company, US-based, formal verification is what we do commercially (we also maintain some open verification infrastructure, e.g. contributions to Aeneas itself).</p>
+<p>On the LLM question, to be precise: Charon is a deterministic rustc driver, no LLM involved in extraction. An LLM assisted with the mechanical part of preparing the stub crate. Down the pipeline we do use AI provers to discharge proof obligations, but every proof is checked by the Lean kernel, so nothing AI-generated is trusted.</p>
+<p>On maintenance: agreed, the hard copy is a dead end, the spike was deliberately throwaway to measure feasibility. Your suggestion is roughly where we were heading: keep the pure parsing logic in a form both the kernel build and Charon can consume, and generate the environment bindings instead of copying them. If we get the Aeneas/Lean side producing useful proofs, maintaining the extraction path is exactly the part we'd want to invest in, and we'd rather build it in a way Binder's maintainers are comfortable with than off to the side.</p>
+
+
+
+<a name="608432486"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608432486" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608432486">(Jul 06 2026 at 12:22)</a>:</h4>
+<blockquote>
+<p>A company, US-based, formal verification is what we do commercially</p>
+</blockquote>
+<p>Sounds good, thanks! That helps clarifying.</p>
+<blockquote>
+<p>An LLM assisted with the mechanical part of preparing the stub crate.</p>
+</blockquote>
+<p>Yeah, I am aware of what Charon does, thanks! I was trying to summarize the work done and how it was performed.</p>
+<blockquote>
+<p>the spike was deliberately throwaway to measure feasibility</p>
+</blockquote>
+<p>To be honest, I think you need the whole chain to measure feasibility, not just Charon -- the Charon step is typically the easier one.</p>
+<p>Or at least that has been my experience so far -- I have done a bit of experimentation in this area, proving simple kernel code.</p>
+
+
+
+<a name="608434387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608434387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608434387">(Jul 06 2026 at 12:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204/near/608432486">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>A company, US-based, formal verification is what we do commercially</p>
+</blockquote>
+<p>Sounds good, thanks! That helps clarifying.</p>
+<blockquote>
+<p>An LLM assisted with the mechanical part of preparing the stub crate.</p>
+</blockquote>
+<p>Yeah, I am aware of what Charon does, thanks! I was trying to summarize the work done and how it was performed.</p>
+<blockquote>
+<p>the spike was deliberately throwaway to measure feasibility</p>
+</blockquote>
+<p>To be honest, I think you need the whole chain to measure feasibility, not just Charon -- the Charon step is typically the easier one.</p>
+<p>Or at least that has been my experience so far -- I have done a bit of experimentation in this area, proving simple kernel code.</p>
+</blockquote>
+<p>I agree and report itself flags that the unsafe/union invariants only come due on the Lean side. Charon-first was about ruling out a cheap early blocker, not claiming feasibility. The Aeneas step is what we're doing next, starting with the no-panic property on the deserializer.</p>
+<p>We used Aeneas (and Hax) on production zkVM code (Plonky3, RISC Zero primitives) with kernel-checked proofs in Lean, these are some PoCs we built:</p>
+<p><a href="https://github.com/Verified-zkEVM/rust-lean">https://github.com/Verified-zkEVM/rust-lean</a></p>
+<p>Very interested in your experiments, if you're willing to share: what did you prove, with which toolchain, and where did it get painful? Knowing where you got stuck would save us from rediscovering it.</p>
+
+
+
+<a name="608640073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/608640073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#608640073">(Jul 07 2026 at 06:59)</a>:</h4>
+<p>We're now running the rest of the kernel's Rust through the pipeline to map what extracts and what breaks, at both the Charon and Aeneas stages. To have the map of supported code, to see the whole picture, what can be verified.</p>
+
+
+
+<a name="609427623"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/609427623" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#609427623">(Jul 10 2026 at 10:56)</a>:</h4>
+<p>An update, and <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span>, you called it: Aeneas rejects the <code>union</code> type-punning at the core of the Binder deserializer, so the parsing functions get no Lean at all. Filed upstream: <a href="https://github.com/AeneasVerif/aeneas/issues/1199">https://github.com/AeneasVerif/aeneas/issues/1199</a> the Aeneas author already responded and we're discussing how to model the pun.</p>
+<p>Some no-panic progress though. The union-free validators translate, and three theorems are proved, machine-checked and sorry-free: <code>size_check</code> (the overflow+bounds validator) never panics, unconditionally; <code>is_aligned</code> never panics given a nonzero divisor, with a companion theorem showing it genuinely panics on zero; <code>type_to_size</code> never panics modulo one axiom about <code>size_of</code>. Theorems: <a href="https://github.com/runtimeverification/kernel-rust-verification-spike/blob/main/lean/NoPanic.lean">https://github.com/runtimeverification/kernel-rust-verification-spike/blob/main/lean/NoPanic.lean</a></p>
+<p>Next: re-model <code>BinderObject</code> as <code>[u8; 40]</code> with typed accessors and prove the pun invariants as explicit Lean propositions instead of SAFETY comments, the path to no-panic on the full deserializer.</p>
+
+
+
+<a name="609458002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/609458002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#609458002">(Jul 10 2026 at 13:36)</a>:</h4>
+<p>Thanks for letting me know, and for filling the issue! That is useful, and yeah, the maintainers are responsive indeed :)</p>
+
+
+
+<a name="610756254"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610756254" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610756254">(Jul 15 2026 at 09:09)</a>:</h4>
+<p>Updates:</p>
+<p>The no-panic property is proved. For all byte inputs from userspace, the Binder deserializer (parse_one) returns cleanly, a valid object or EINVAL, never a panic. Machine-checked end-to-end: Rust, Charon, Aeneas, Lean 4, no sorry, one opaque axiom about size_of. <span class="user-mention" data-user-id="519727">@Alice Ryhl</span>  this is property 1 from your list, on the deserializer fragment. Property 2 (cleanup/translate symmetry) needs the heavier half of <a href="http://allocation.rs">allocation.rs</a>, that's next.</p>
+<p>The union blocker didn't go away, we went around it: the deserializer re-modelled as [u8; 40] with typed accessors, per the design the Aeneas authors suggested in the issue. Compile-time assertions pin every accessor offset to the real #[repr(C)] layout, so the proof is about the kernel's actual byte format. Theorem and write-up: <a href="https://github.com/runtimeverification/kernel-rust-verification-spike">https://github.com/runtimeverification/kernel-rust-verification-spike</a> (lean/NoPanicRemodel.lean, REMODEL-REPORT.md)</p>
+<p>And the coverage map of all kernel Rust: <a href="https://github.com/runtimeverification/kernel-rust-coverage-map">https://github.com/runtimeverification/kernel-rust-coverage-map</a>. 92k LOC, 117 units. Findings: zero language-feature failures, everything that compiles extracts through Charon. Whole crates fail for one reason, the unstubbed kernel crate surface, 27 of 28 failures. So reaching the rest of the tree is one shared stub cost, not a per-driver problem.  <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span> relevant to your maintenance point: the map argues for growing one shared kernel-surface model instead of per-target hand-copies. The four biggest untrusted-input targets (nova-core, binder, drm ioctl, iov) all carry the same union pattern, so the re-model approach transfers.</p>
+<p>On the toolchain gaps themselves: we contribute to Aeneas upstream, and as verification work surfaces things Aeneas doesn't support, our default is to fix them upstream rather than accumulate local workarounds.</p>
+<p>Short version: kernel Rust parsing code can be verified today. The toolchain doesn't take everything, but the gaps have workarounds that don't weaken the result, and the map shows where the effort goes.</p>
+
+
+
+<a name="610756496"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610756496" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610756496">(Jul 15 2026 at 09:10)</a>:</h4>
+<p>Could you clarify exactly which subset of Binder was proved to be panic free?</p>
+
+
+
+<a name="610760826"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610760826" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610760826">(Jul 15 2026 at 09:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204/near/610756496">said</a>:</p>
+<blockquote>
+<p>Could you clarify exactly which subset of Binder was proved to be panic free?</p>
+</blockquote>
+<p>The <code>BinderObject</code> deserializer from <a href="http://allocation.rs">allocation.rs</a>: <code>read_from</code> / <code>read_from_inner</code> (reading the object from the userspace buffer, tag check, EINVAL on unknown types), the per-variant field accessors (replacing <code>as_ref</code> in the re-model), <code>size</code> / <code>type_to_size</code>, and the validators <code>size_check</code> and <code>is_aligned</code> (the latter given a nonzero divisor, which all kernel call sites pass). Entry point covered by the theorem: <code>parse_one</code>, one object from a byte slice.</p>
+<p>Not covered: <code>copy_transaction_data</code>'s offset loop, <code>translate_object</code> / <code>cleanup_object</code>, and everything on the translate side. So: single-object deserialization, not the full transaction path.</p>
+
+
+
+<a name="610761093"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610761093" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610761093">(Jul 15 2026 at 09:33)</a>:</h4>
+<p>Ok. The <code>copy_transaction_data</code> loop would also be cool to prove no-panic for.</p>
+
+
+
+<a name="610764462"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610764462" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610764462">(Jul 15 2026 at 09:52)</a>:</h4>
+<p>It's on the list, right after the cleanup/translate property. It's a heavier extraction: the loop pulls in <code>Process</code>, <code>ScatterGatherState</code> and friends, so the kernel-surface stub has to grow first (that's the shared cost the coverage map quantifies). The loop's validation logic itself (alignment checks, checked arithmetic, monotonic offsets) is exactly the kind of code the pipeline already handles well.</p>
+
+
+
+<a name="610765280"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610765280" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610765280">(Jul 15 2026 at 09:57)</a>:</h4>
+<p>Have you thought about proving that no sleeping occurs in atomic context? There is klint which is able to handle this to some extent, but its analysis is based just on control flow and it can't really handle methods that attempt to enter atomic context but might fail to do so because it has a using an analysis that depends on the return value.</p>
+<p><a href="https://www.memorysafety.org/blog/gary-guo-klint-rust-tools/">https://www.memorysafety.org/blog/gary-guo-klint-rust-tools/</a></p>
+
+
+
+<a name="610769083"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610769083" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610769083">(Jul 15 2026 at 10:19)</a>:</h4>
+<p>We hadn't. It's a good fit though: klint's limit is control-flow-only analysis, and reasoning about return values is what a semantic approach does natively. A <code>try_lock</code>-style method where atomicity depends on the result is straightforward to state as a theorem.</p>
+<p>And this is a different class of property than no-panic. Sleep-in-atomic is about the execution context, so we'd need to model preemption state through the translation plus a spec of which calls sleep. Research-sized, not an increment. On the list after cleanup/translate. Thanks for the klint pointer.</p>
+
+
+
+<a name="610790631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610790631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610790631">(Jul 15 2026 at 12:15)</a>:</h4>
+<p>One difficulty I encounter in trying to implement <code>try_lock</code> support for klint is reasoning about  <code>is_some()</code>. When looking at a single function MIR level it is very difficulty to know that it is equivalent to <code>matches!(.., Some(_))</code> while this is rather straightforward in lean.</p>
+
+
+
+<a name="610805718"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Verifying%20Binder%27s%20parsing%20of%20userspace%20input%20in%20Lean%204/near/610805718" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Natasha Klaus <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204.html#610805718">(Jul 15 2026 at 13:22)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Verifying.20Binder.27s.20parsing.20of.20userspace.20input.20in.20Lean.204/near/610790631">said</a>:</p>
+<blockquote>
+<p>One difficulty I encounter in trying to implement <code>try_lock</code> support for klint is reasoning about  <code>is_some()</code>. When looking at a single function MIR level it is very difficulty to know that it is equivalent to <code>matches!(.., Some(_))</code> while this is rather straightforward in lean.</p>
+</blockquote>
+<p>That's a precise example of the boundary. In Lean this is definitional: <code>is_some</code> unfolds, and the equivalence with <code>matches!(.., Some(_))</code> is a <code>simp</code>/<code>rfl</code>-level fact, so return-value-dependent atomicity flows through the proof without special handling. So klint runs over the whole tree cheaply, and we pay per-function proof effort. It is a division of labor: klint for breadth, proofs for the call sites where its analysis has to give up (<code>try_lock</code> and friends). If you can point at the patterns klint bails on most, that's a ready-made worklist for us.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

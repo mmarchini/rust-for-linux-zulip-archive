@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>I've got a rather special problem. I have described it in detail <a href=\"https://lore.kernel.org/dri-devel/e06228542e663bd8020cc91d7646bb7838a3a273.camel@mailbox.org/\">here</a>.</p>\n<p>Basically:<br>\nI have an <code>Opaque&lt;T&gt;</code>,  where that Opaque gets dropped at some point. But the memory backing both <code>Opaque</code> and <code>T</code> itself remains valid. And the  <code>T</code> within remains being accessible through different parties (the memory is kept alive through refcounting).</p>\n<p>Am I guaranteed that the Rust compiler will not invent any writes to that <code>Opaque</code>?</p>\n<p>I have read through the documentations of <code>Opaque</code>, <code>UnsafeCell</code> and <code>MaybeUninit</code> and none of them seem to make any guarantee regarding what happens after <code>drop()</code>.</p>",
+        "id": 604440856,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781771689
+    },
+    {
+        "content": "<p>What kind of writes are you concerned about? Compiler does not invent out of thin air writes. Drop will not run for <code>T</code> because of <code>MaybeUninit</code>.</p>",
+        "id": 604463970,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1781776345
+    },
+    {
+        "content": "<p>I need the guarantee that no byte will be changed for my <code>T</code> by anyone except for myself through my well defined API functions, even if I do <code>unsafe { drop_in_place(struct_that_contains_that_opaque) };</code></p>",
+        "id": 604486453,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781780981
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> told me that, <em>hypothetically</em>, the compiler can write into the memory of dropped data, if I understood him correctly.</p>",
+        "id": 604486659,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781781027
+    },
+    {
+        "content": "<p>If the <code>Opaque</code> is on the stack, sure that will be a problem. But if it is heap allcoated and not reclaimed, I don't see how the compiler would reuse the space without getting it from an allocator.</p>",
+        "id": 604496139,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1781783035
+    },
+    {
+        "content": "<p>Bytes under <code>Opaque</code> are truly opaque and they are not considered to be dereferenceable by LLVM</p>",
+        "id": 604497607,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783354
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/288089-General/topic/Opaque.3A.20Does.20it.20guarantee.20no.20writes.20after.20drop.28.29/near/604486659\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> told me that, <em>hypothetically</em>, the compiler can write into the memory of dropped data, if I understood him correctly.</p>\n</blockquote>\n<p>The compiler can do it <em>during</em> the drop, just like any function that takes mutable references (and the bytes not covered by <code>UnsafePinned</code> (or <code>Opaque</code>)</p>",
+        "id": 604497856,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783403
+    },
+    {
+        "content": "<p>Typo? You mean \"Bytes under <code>Opaque</code> are truly opaque\"?</p>",
+        "id": 604498130,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781783462
+    },
+    {
+        "content": "<p>Oops</p>",
+        "id": 604498345,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783507
+    },
+    {
+        "content": "<p>BTW, why are you dropping the <code>DriverFenceData</code>, rather than just dropping the data fields?</p>",
+        "id": 604498423,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783522
+    },
+    {
+        "content": "<p>OK ^^<br>\nSo the only way through which LLVM can change / touch those bytes is through <code>opaque.get()</code>, ack?</p>",
+        "id": 604498701,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781783571
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Opaque.3A.20Does.20it.20guarantee.20no.20writes.20after.20drop.28.29/near/604498423\">said</a>:</p>\n<blockquote>\n<p>BTW, why are you dropping the <code>DriverFenceData</code>, rather than just dropping the data fields?</p>\n</blockquote>\n<p>Why does it matter? When you drop a struct, you typically just drop the entire struct.</p>\n<p>I suppose you mean dropping the fields is a good idea to make \"this does not drop\" very explicit?</p>",
+        "id": 604498995,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781783637
+    },
+    {
+        "content": "<p>Or when the entire allocation is gone, but that is observable by LLVM level for strack variables as Andreas pointed out (technically free functions too, but LLVM only recognizes specific ones for such and not the kfree).</p>",
+        "id": 604499195,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783684
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/288089-General/topic/Opaque.3A.20Does.20it.20guarantee.20no.20writes.20after.20drop.28.29/near/604498995\">said</a>:</p>\n<blockquote>\n<p>Why does it matter? When you drop a struct, you typically just drop the entire struct.</p>\n<p>I suppose you mean dropping the fields is a good idea to make \"this does not drop\" very explicit?</p>\n</blockquote>\n<p>Yes, because that part of the struct stays for longer. I think it's probably not the best for the <code>DriverFenceData::drop</code> to be only sound because <code>Fence</code> is <code>Opaque&lt;...&gt;</code>, that reasoning chain is a bit convoluted so is better avoided</p>",
+        "id": 604499591,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781783767
+    },
+    {
+        "content": "<p>Yeah, good idea, that sounds fare more robust. And it should eliminate the problem even in the hypothetical.<br>\nWill do <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 604500607,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1781783972
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> has marked this topic as resolved.</p>",
+        "id": 606207687,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1782297580
+    }
+]

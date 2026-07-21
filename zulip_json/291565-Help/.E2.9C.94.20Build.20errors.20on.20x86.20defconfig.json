@@ -1,0 +1,188 @@
+[
+    {
+        "content": "<p>I get the following error when building x86_64 defconfig:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>error[E0602]: unknown lint: `l,__fatal_warnings`\n  |\n  = note: requested on the command line with `-W l,__fatal_warnings`\n  = note: `-D unknown-lints` implied by `-D warnings`\n  = help: to override `-D warnings` add `#[allow(unknown_lints)]`\n</code></pre></div>\n<p>Did anyone see that before? It is when running HOSTRUSTC:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>HOSTRUSTC scripts/generate_rust_target\n</code></pre></div>",
+        "id": 561693969,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764777979
+    },
+    {
+        "content": "<p>Which tag/branch etc.?</p>",
+        "id": 561731079,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1764788209
+    },
+    {
+        "content": "<p>v6.18. It is probably something in my setup?</p>",
+        "id": 561732340,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764788615
+    },
+    {
+        "content": "<p>It only happens with defconfig though. Not my usual smaller config.</p>",
+        "id": 561732395,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764788630
+    },
+    {
+        "content": "<p>I just tried locally with v6.18 just in case, <code>LLVM=1 defconfig rust.config</code> and I don't see it.</p>\n<p>There is no <code>__fatal_warnings</code> in the repository either. Do you have some custom env vars or similar?</p>",
+        "id": 561734968,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1764789529
+    },
+    {
+        "content": "<p>I'll dig some more. I don't usually build defconfig, so maybe I just broke something in my setup.</p>",
+        "id": 561735126,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764789587
+    },
+    {
+        "content": "<p>It is this one:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code># HOSTRUSTC scripts/generate_rust_target\n  rustc --out-dir scripts/ --emit=dep-info=scripts/.generate_rust_target.d -Clinker-flavor=gcc -Clinker=/nix/store/0z4q9scnxa3pbnw86pigxp6l7j43bawm-clang-wrapper-18.1.8/bin/clang -Clink-args='  -Wl,--fatal-warnings' --edition=2021 -Zbinary_dep_depinfo=y -Astable_features -Dnon_ascii_idents -Dunsafe_op_in_unsafe_fn -Wmissing_docs -Wrust_2018_idioms -Wunreachable_pub -Wclippy::all -Wclippy::as_ptr_cast_mut -Wclippy::as_underscore -Wclippy::cast_lossless -Wclippy::ignored_unit_patterns -Wclippy::mut_mut -Wclippy::needless_bitwise_bool -Aclippy::needless_lifetimes -Wclippy::no_mangle_with_rust_abi -Wclippy::ptr_as_ptr -Wclippy::ptr_cast_constness -Wclippy::ref_as_ptr -Wclippy::undocumented_unsafe_blocks -Wclippy::unnecessary_safety_comment -Wclippy::unnecessary_safety_doc -Wrustdoc::missing_crate_level_docs -Wrustdoc::unescaped_backticks -O -Cstrip=debuginfo -Zallow-features=  -Dwarnings   --emit=link=scripts/generate_rust_target /home/aeh/src/linux-rust/xarray-entry/scripts/generate_rust_target.rs\nerror[E0602]: unknown lint: `l,__fatal_warnings`\n  |\n  = note: requested on the command line with `-W l,__fatal_warnings`\n  = note: `-D unknown-lints` implied by `-D warnings`\n  = help: to override `-D warnings` add `#[allow(unknown_lints)]`\n\nerror: aborting due to 1 previous error\n</code></pre></div>\n<p>It is probably nixos related.</p>",
+        "id": 561743183,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764792451
+    },
+    {
+        "content": "<p>This looks like shell escaping issue</p>",
+        "id": 561746516,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764793843
+    },
+    {
+        "content": "<p>The flag is parsed by rustc instead of carried to clang</p>",
+        "id": 561746547,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764793854
+    },
+    {
+        "content": "<p>This fixes my issue:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/scripts/Makefile.host b/scripts/Makefile.host</span>\n<span class=\"gh\">index c1dedf646a39f..4ba0ad6f5a412 100644</span>\n<span class=\"gd\">--- a/scripts/Makefile.host</span>\n<span class=\"gi\">+++ b/scripts/Makefile.host</span>\n<span class=\"gu\">@@ -92,7 +92,7 @@ hostcxx_flags  = -Wp,-MMD,$(depfile) \\</span>\n<span class=\"w\"> </span># modules case.\n<span class=\"w\"> </span>hostrust_flags = --out-dir $(dir $@) --emit=dep-info=$(depfile) \\\n<span class=\"w\"> </span>        -Clinker-flavor=gcc -Clinker=$(HOSTCC) \\\n<span class=\"gd\">-        -Clink-args='$(call escsq,$(KBUILD_HOSTLDFLAGS))' \\</span>\n<span class=\"gi\">+        -Clink-args='$(strip $(call escsq,$(KBUILD_HOSTLDFLAGS)))' \\</span>\n<span class=\"w\"> </span>                 $(KBUILD_HOSTRUSTFLAGS) $(HOST_EXTRARUSTFLAGS) \\\n<span class=\"w\"> </span>                 $(HOSTRUSTFLAGS_$(target-stem))\n</code></pre></div>",
+        "id": 561748432,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764794558
+    },
+    {
+        "content": "<p>I don't know why, but the extra space in front of <code>-Wl</code> is confusing the tools. Probably the nixos compiler wrapper script.</p>",
+        "id": 561748559,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764794607
+    },
+    {
+        "content": "<p>My setup also has the extra space at front. Tried with oxalica's rust-overlay and cannot reproduce the issue</p>",
+        "id": 561750598,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795444
+    },
+    {
+        "content": "<p>What are you passing as linker to this command?</p>",
+        "id": 561750666,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795478
+    },
+    {
+        "content": "<p>That is, what is your HOSTCC?</p>",
+        "id": 561750712,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795499
+    },
+    {
+        "content": "<p>I don't think it is <code>rustc</code> misunderstanding, I think, it is the wrapped <code>clang</code>.</p>",
+        "id": 561750778,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795531
+    },
+    {
+        "content": "<p><code>-Clinker=clang -Clink-args='  -Wl,--fatal-warnings'</code></p>",
+        "id": 561750783,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795533
+    },
+    {
+        "content": "<p>and my <code>clang</code> is a wrapped clang</p>",
+        "id": 561750844,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795557
+    },
+    {
+        "content": "<p>So clang from PATH? What does it resolve to?</p>",
+        "id": 561750847,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795558
+    },
+    {
+        "content": "<p><code>/nix/store/jf9ad61205k4700ckrwf3wqxfynkdfap-clang-wrapper-18.1.8/bin/clang</code></p>",
+        "id": 561750865,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795567
+    },
+    {
+        "content": "<p>Ok, very similar.</p>",
+        "id": 561750929,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795595
+    },
+    {
+        "content": "<p>Let me rebuild my direnv. I think I might have not rebuilt it since NixOS 25.11</p>",
+        "id": 561750961,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795608
+    },
+    {
+        "content": "<p>I got clang from nixos-25.11.</p>",
+        "id": 561751023,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795637
+    },
+    {
+        "content": "<p>I think the env I was using was still using NixOS-25.05. Rebuilding env now</p>",
+        "id": 561751188,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795679
+    },
+    {
+        "content": "<p>which LLVM version are you using?</p>",
+        "id": 561751648,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795852
+    },
+    {
+        "content": "<p>18.1.8</p>",
+        "id": 561751710,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764795874
+    },
+    {
+        "content": "<p>cannot reproduce</p>",
+        "id": 561751888,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1764795955
+    },
+    {
+        "content": "<p>I'll dig some more after LPC</p>",
+        "id": 561751979,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764796001
+    },
+    {
+        "content": "<p>Thanks for testing.</p>",
+        "id": 561752013,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1764796015
+    },
+    {
+        "content": "<p>I made my devShell available here in case you want to compare against yours: <a href=\"https://github.com/nbdd0121/nix-collection/blob/trunk/dev/linux.nix\">https://github.com/nbdd0121/nix-collection/blob/trunk/dev/linux.nix</a></p>",
+        "id": 562507162,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1765210413
+    },
+    {
+        "content": "<p>Whatever this was, I cannot reproduce it any longer <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 581121805,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1774274470
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> has marked this topic as resolved.</p>",
+        "id": 581121828,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1774274475
+    }
+]

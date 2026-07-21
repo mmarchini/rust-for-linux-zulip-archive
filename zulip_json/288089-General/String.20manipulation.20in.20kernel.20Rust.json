@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>Are there any ideas about how string manipulation will be done with kernel Rust? I suppose std:<span aria-label=\"string\" class=\"emoji emoji-1f9f5\" role=\"img\" title=\"string\">:string:</span>:String wasn't pulled in - I'd guess it contains some panic!(), e.g. when failing to allocate memory.</p>\n<p>To throw in one specific example, I was trying to generate firmware paths depending on the chipset, where the chipset is represented by an enum. Since strum_macros isn't available, I thought I just go with derive(Debug) and format!(). But we don't have format!() (cause we don't have std:<span aria-label=\"string\" class=\"emoji emoji-1f9f5\" role=\"img\" title=\"string\">:string:</span>:String I guess). I can use fmt!() instead, but this does give me a CString, which doesn't seem to support any string manipulations like to_lowercase(), etc.</p>",
+        "id": 416587190,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1705589515
+    },
+    {
+        "content": "<p>Have you tried <code>format_args</code>?</p>",
+        "id": 416587687,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705589646
+    },
+    {
+        "content": "<p>String is not supported because it doesn't allow for fallible allocations, but I don't see why we can't add a <code>to_lowercase</code> for CString.</p>",
+        "id": 416588594,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705589909
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/288089-General/topic/String.20manipulation.20in.20kernel.20Rust/near/416587687\">said</a>:</p>\n<blockquote>\n<p>Have you tried <code>format_args</code>?</p>\n</blockquote>\n<p>IIUC, this doesn't provide anything additional to me than using fmt!() directly, does it?</p>",
+        "id": 416589029,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1705590022
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/288089-General/topic/String.20manipulation.20in.20kernel.20Rust/near/416588594\">said</a>:</p>\n<blockquote>\n<p>String is not supported because it doesn't allow for fallible allocations, but I don't see why we can't add a <code>to_lowercase</code> for CString.</p>\n</blockquote>\n<p>Sure, I'm happy to do that. I just want to see if there are any plans already.</p>",
+        "id": 416589177,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1705590064
+    },
+    {
+        "content": "<p>I remember having some issues with<code>fmt!</code>, but it seems to do the same thing as <code>format_args</code>.</p>",
+        "id": 416591585,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705590714
+    },
+    {
+        "content": "<p>I wonder if we care about the full UTF-8 conversion for upper- / lowercase?  ASCII should be enough I guess?</p>",
+        "id": 416631242,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1705604189
+    },
+    {
+        "content": "<p>CString is ASCII, though, so I'm not sure where UTF-8 comes into discussion</p>",
+        "id": 416635967,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705606147
+    },
+    {
+        "content": "<blockquote>\n<p>I suppose std:<span aria-label=\"string\" class=\"emoji emoji-1f9f5\" role=\"img\" title=\"string\">:string:</span>:String wasn't pulled in</p>\n</blockquote>\n<p>We had <code>String</code> in the <code>rust</code> branch, but unless/until someone needs it, we don't need to add it upstream.</p>\n<blockquote>\n<p>I wonder if we care about the full UTF-8 conversion for upper- / lowercase? ASCII should be enough I guess?</p>\n</blockquote>\n<p><code>CString</code> may not be UTF-8. In any case, it perhaps could be called <code>to_ascii_lowercase</code>/ <code>make_ascii_lowercase</code> like in <code>str</code> if needed.</p>\n<p>However, what would you think the use case would be? i.e. we typically need a use case (or ideally a user) to upstream code.</p>",
+        "id": 416636033,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1705606183
+    },
+    {
+        "content": "<blockquote>\n<p>We had String in the rust branch, but unless/until someone needs it, we don't need to add it upstream.</p>\n</blockquote>\n<p>Dealing with strings and doing some kind of String manipulation is probably a common enough use case.</p>\n<p>Plus there may be use cases like [1] and [2].</p>\n<blockquote>\n<p>CString may not be UTF-8. In any case, it perhaps could be called to_ascii_lowercase/ make_ascii_lowercase like in str if needed.</p>\n</blockquote>\n<p>Yeah, that's what I thought of as well.</p>\n<blockquote>\n<p>However, what would you think the use case would be? i.e. we typically need a use case (or ideally a user) to upstream code.</p>\n</blockquote>\n<p>As mentioned above I want to generate firmware paths from enum values representing the chipset. It's for the Nova driver project (Nouveau successor for GSP based GPUs) which we're ramping up currently. E.g.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[derive(Debug)]</span><span class=\"w\"> </span><span class=\"c1\">// TODO use strum_macros instead?</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">enum</span> <span class=\"nc\">Chipset</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">TU102</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mh\">0x162</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">[</span><span class=\"o\">..</span><span class=\"p\">.]</span>\n<span class=\"p\">}</span>\n\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">chip_name</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">CString</span>::<span class=\"n\">try_from_fmt</span><span class=\"p\">(</span><span class=\"n\">fmt</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"{:?}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">spec</span><span class=\"p\">.</span><span class=\"n\">chipset</span><span class=\"p\">))</span><span class=\"o\">?</span><span class=\"p\">.</span><span class=\"n\">to_lowercase</span><span class=\"p\">();</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">fw_gsp_path</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">CString</span>::<span class=\"n\">try_from_fmt</span><span class=\"p\">(</span><span class=\"n\">fmt</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"nvidia/{}/gsp/gsp-535.113.01.bin\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;*</span><span class=\"n\">chip_name</span><span class=\"p\">))</span><span class=\"o\">?</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>Personally, I'm fine with just expanding CString. Though, maybe we want to define whether we see it as <em>the</em> way to deal with strings in kernel Rust in general, or just a (lightweight) wrapper for c strings to avoid duplicate infrastructure.</p>\n<p>[1] <a href=\"https://godbolt.org/z/EddYPEfc1\">https://godbolt.org/z/EddYPEfc1</a><br>\n[2] <a href=\"https://godbolt.org/z/b3cTvMbqj\">https://godbolt.org/z/b3cTvMbqj</a></p>\n<p>Disclaimer: Never wrote Rust code before, hence I might just not know what I'm doing.</p>",
+        "id": 416782697,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1705672522
+    },
+    {
+        "content": "<blockquote>\n<p>Dealing with strings and doing some kind of String manipulation is probably a common enough use case.</p>\n<p>Plus there may be use cases like [1] and [2].</p>\n</blockquote>\n<p>Yeah, I was talking about <code>String</code> specifically, not general/basic string manipulation.</p>\n<blockquote>\n<p>As mentioned above I want to generate firmware paths from enum values representing the chipset. It's for the Nova driver project (Nouveau successor for GSP based GPUs) which we're ramping up currently. </p>\n</blockquote>\n<p>Nice!</p>\n<blockquote>\n<p>Personally, I'm fine with just expanding CString. Though, maybe we want to define whether we see it as the way to deal with strings in kernel Rust in general, or just a (lightweight) wrapper for c strings to avoid duplicate infrastructure.</p>\n</blockquote>\n<p>I guess we will probably use/need both.</p>",
+        "id": 416840074,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1705688279
+    },
+    {
+        "content": "<p>Have you seen bstr crate from Andrew Gallant ? It's just a wrapper over [u8] (or Vec&lt;u8&gt;) which expects utf-8 but doesn't assume it's valid, I think something like that may be useful in the kernel rather than a full utf8 String.</p>",
+        "id": 416842847,
+        "sender_full_name": "Vadzim Dambrouski",
+        "timestamp": 1705689145
+    },
+    {
+        "content": "<p>We added <code>BStr</code>: <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust-next/rust/kernel/str.rs#L18\">https://github.com/Rust-for-Linux/linux/blob/rust-next/rust/kernel/str.rs#L18</a></p>",
+        "id": 416843902,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1705689523
+    },
+    {
+        "content": "<p>Oh! Sorry, I missed it!</p>",
+        "id": 416848575,
+        "sender_full_name": "Vadzim Dambrouski",
+        "timestamp": 1705691158
+    }
+]

@@ -1,0 +1,312 @@
+<html>
+<head><meta charset="utf-8"><title>Mutex&lt;T&gt; where T is pinned · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html">Mutex&lt;T&gt; where T is pinned</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="523945083"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523945083" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523945083">(Jun 13 2025 at 13:21)</a>:</h4>
+<p>This appears to not be supported. In other words, it's impossible to have a mutex (which needs to be pinned) wrap something that also needs to be pinned.</p>
+<p>This makes the following pattern impossible to implement:</p>
+<p><code>Mutex&lt;Opaque&lt;bindings::foo&gt;&gt;</code> where <code>bindings::foo</code> contains e.g.: a <code>list_head</code> or similar.</p>
+<p>Having a mutex wrap a bindgen type might be handy if we want to enforce that all access to the bindgen field be serialized, because it makes it impossible to get a <code>*mut Foo</code> otherwise. </p>
+<p>A similar (but much worse) solution would be:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Foo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="cp">#[pin]</span>
+<span class="w">  </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindgen</span><span class="p">::</span><span class="n">foo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">  </span><span class="cp">#[pin]</span>
+<span class="w">  </span><span class="n">protects_inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Mutex</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>That is clearly inferior, as we now must manually make sure that <code>protects_inner</code> is locked before accessing <code>inner</code>, instead of relying on the type system.</p>
+<p>cc <span class="user-mention" data-user-id="546447">@Benno Lossin</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span></p>
+
+
+
+<a name="523945255"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523945255" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523945255">(Jun 13 2025 at 13:22)</a>:</h4>
+<p>we at some point talked about making the <code>T</code> in <code>Mutex&lt;T&gt;</code> structurally pinned, but didn't follow through with it</p>
+
+
+
+<a name="523945280"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523945280" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523945280">(Jun 13 2025 at 13:22)</a>:</h4>
+<p>most likely because there was no user</p>
+
+
+
+<a name="523946604"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523946604" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523946604">(Jun 13 2025 at 13:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523945255">said</a>:</p>
+<blockquote>
+<p>we at some point talked about making the <code>T</code> in <code>Mutex&lt;T&gt;</code> structurally pinned, but didn't follow through with it</p>
+</blockquote>
+<blockquote>
+<p>most likely because there was no user</p>
+</blockquote>
+<p>Yeah, this is not the first time I face this situation, which is what pushed me to finally start this thread. So if there wasn't a user, there is one now :)</p>
+<p>If the result of this discussion turns out to be that we'd like to get this supported, let me know how I can help.</p>
+
+
+
+<a name="523946731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523946731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523946731">(Jun 13 2025 at 13:30)</a>:</h4>
+<p>let's hear from the rest of the <span class="user-group-mention" data-user-group-id="436926">@team</span> and see if anyone has any objections</p>
+
+
+
+<a name="523946833"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523946833" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523946833">(Jun 13 2025 at 13:31)</a>:</h4>
+<p>we'd probably have to change <code>Lock</code> &amp; make all locks pin their inner value, or split the locking API back into the different parts</p>
+
+
+
+<a name="523946860"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523946860" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523946860">(Jun 13 2025 at 13:31)</a>:</h4>
+<p>wait, <code>structurally pinned</code> means <code>if Mutex&lt;T&gt; is pinned, so is T</code> right? But I don't think we need T to _always_ be pinned? We'd just like to support having it be pinned if needed</p>
+
+
+
+<a name="523946954"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523946954" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523946954">(Jun 13 2025 at 13:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523946833">said</a>:</p>
+<blockquote>
+<p>we'd probably have to change <code>Lock</code> &amp; make all locks pin their inner value, or split the locking API back into the different parts</p>
+</blockquote>
+<p>or introduce a new <code>PinMutex&lt;T&gt;</code>, but that is most likely confusing...</p>
+
+
+
+<a name="523947062"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523947062" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523947062">(Jun 13 2025 at 13:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523946860">said</a>:</p>
+<blockquote>
+<p>wait, <code>structurally pinned</code> means <code>if Mutex&lt;T&gt; is pinned, so is T</code> right? But I don't think we need T to _always_ be pinned? We'd just like to support having it be pinned if needed</p>
+</blockquote>
+<p>how would you differentiate between two instances of <code>Mutex&lt;T&gt;</code>, one of which pins T and the other doesn't?</p>
+
+
+
+<a name="523947643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523947643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523947643">(Jun 13 2025 at 13:35)</a>:</h4>
+<p>I guess it is fine to pin <code>T</code>. If <code>T: Unpin</code> everything should work as before, right?</p>
+
+
+
+<a name="523947675"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523947675" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523947675">(Jun 13 2025 at 13:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523947643">said</a>:</p>
+<blockquote>
+<p>I guess it is fine to pin <code>T</code>. If <code>T: Unpin</code> everything should work as before, right?</p>
+</blockquote>
+<p>yes</p>
+
+
+
+<a name="523947819"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523947819" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523947819">(Jun 13 2025 at 13:35)</a>:</h4>
+<blockquote>
+<p>If <code>T: Unpin</code> everything should work as before, right?</p>
+</blockquote>
+<p>Ah right, I missed this part.</p>
+
+
+
+<a name="523951539"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523951539" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523951539">(Jun 13 2025 at 13:55)</a>:</h4>
+<p>Structurally pinning data makes sense. In fact my v. early prototype of pin-init does that <a href="https://github.com/nbdd0121/pin-init/blob/trunk/examples/pthread_mutex.rs#L86">https://github.com/nbdd0121/pin-init/blob/trunk/examples/pthread_mutex.rs#L86</a></p>
+
+
+
+<a name="523951628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523951628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523951628">(Jun 13 2025 at 13:55)</a>:</h4>
+<p>should we then just do it for <code>Lock</code>?</p>
+
+
+
+<a name="523951682"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523951682" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523951682">(Jun 13 2025 at 13:55)</a>:</h4>
+<p>I think we should</p>
+
+
+
+<a name="523953957"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523953957" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523953957">(Jun 13 2025 at 14:06)</a>:</h4>
+<p>you will then make .lock() return a Pin&lt;Guard&gt; instead of a Guard, because Guard impl DerefMut</p>
+
+
+
+<a name="523959681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523959681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523959681">(Jun 13 2025 at 14:39)</a>:</h4>
+<p>That doesn't sound super ergnomic!</p>
+
+
+
+<a name="523959761"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523959761" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523959761">(Jun 13 2025 at 14:39)</a>:</h4>
+<p>how so? and what would you suggest instead?</p>
+
+
+
+<a name="523960072"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960072" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960072">(Jun 13 2025 at 14:41)</a>:</h4>
+<p>It's just generally I don't like to write out <code>Pin</code> very often. We could implement <code>DerefMut</code> conditionally if <code>T: Unpin</code> and provide a <code>as_mut()</code> that provides <code>Pin&lt;&amp;mut T&gt;</code>?</p>
+
+
+
+<a name="523960116"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960116" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960116">(Jun 13 2025 at 14:41)</a>:</h4>
+<p>I guess that's identical to <code>Pin&lt;Guard&gt;</code>..</p>
+
+
+
+<a name="523960234"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960234" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960234">(Jun 13 2025 at 14:42)</a>:</h4>
+<p>where would you have to write <code>Pin</code>?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">guard</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lock</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+</code></pre></div>
+
+
+
+<a name="523960346"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960346" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960346">(Jun 13 2025 at 14:43)</a>:</h4>
+<p>Good point, I guess type inference is good enough</p>
+
+
+
+<a name="523960411"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960411" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960411">(Jun 13 2025 at 14:43)</a>:</h4>
+<p>and if you have a function that takes a <code>Guard&lt;'_, T&gt;</code> now, that function should just take a <code>&amp;mut T</code> or <code>impl DerefMut&lt;Target = T&gt;</code> instead</p>
+
+
+
+<a name="523960504"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960504" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960504">(Jun 13 2025 at 14:44)</a>:</h4>
+<p>Taking <code>impl</code> feels like an overkill</p>
+
+
+
+<a name="523960575"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523960575" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523960575">(Jun 13 2025 at 14:44)</a>:</h4>
+<p>I think we should have more types that declare themselves to be pinned, just like <code>Arc</code></p>
+
+
+
+<a name="523961914"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523961914" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523961914">(Jun 13 2025 at 14:52)</a>:</h4>
+<p>note that Pin&lt;Guard&gt; is still DerefMut if T is Unpin.</p>
+
+
+
+<a name="523962043"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/523962043" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#523962043">(Jun 13 2025 at 14:53)</a>:</h4>
+<p>so I don’t think the change affect ergonomics when T is Unpin</p>
+
+
+
+<a name="524053794"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/524053794" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#524053794">(Jun 14 2025 at 09:51)</a>:</h4>
+<p>asahi has <a href="https://github.com/AsahiLinux/linux/commit/436c0916931a7f6321dfec089069a5bbf0997f78">Add Lock::pin_init()</a></p>
+
+
+
+<a name="524053849"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/524053849" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#524053849">(Jun 14 2025 at 09:52)</a>:</h4>
+<p>that is unsound</p>
+
+
+
+<a name="524053875"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/524053875" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#524053875">(Jun 14 2025 at 09:53)</a>:</h4>
+<p>it allows moving the value, because it's not pinning the guard</p>
+
+
+
+<a name="530614674"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530614674" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530614674">(Jul 24 2025 at 17:39)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> <span class="user-mention" data-user-id="546447">@Benno Lossin</span> I created an issue at <a href="https://github.com/Rust-for-Linux/linux/issues/1181">https://github.com/Rust-for-Linux/linux/issues/1181</a></p>
+<p>Let's keep the discussion focused here please.</p>
+<p>Can anyone assign that to me in Github btw? I can't.</p>
+
+
+
+<a name="530614854"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530614854" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530614854">(Jul 24 2025 at 17:40)</a>:</h4>
+<p>Benno beat me to it :)</p>
+
+
+
+<a name="530615530"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615530" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615530">(Jul 24 2025 at 17:44)</a>:</h4>
+<p>in the issue you say:</p>
+<blockquote>
+<p>Note that <code>Bar</code> is pinned, so having it in a <code>Mutex</code> will not compile at the moment. This is specially undesirable, since <code>Foo</code> is already pinned, and thus, it could trivially enforce that its <code>bar</code> field is pinned as well.</p>
+</blockquote>
+<p>What do you mean by "will not compile at the moment"? The example you gave above does compile and it has the <code>bar</code> field marked as pinned.</p>
+<p>You won't be able to instantiate a <code>Foo</code> that pins the <code>Bar</code> in <code>bar</code>, maybe that's what you meant?</p>
+
+
+
+<a name="530615647"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615647" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615647">(Jul 24 2025 at 17:45)</a>:</h4>
+<blockquote>
+<p>Furthermore, there is no support for pinned projections, so the following won't work:</p>
+</blockquote>
+<p>regarding that, I have some good news for you: <a href="https://github.com/Rust-for-Linux/pin-init/pull/75">https://github.com/Rust-for-Linux/pin-init/pull/75</a></p>
+
+
+
+<a name="530615738"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615738" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615738">(Jul 24 2025 at 17:45)</a>:</h4>
+<p>I will try to put that in v6.18</p>
+
+
+
+<a name="530615760"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615760" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615760">(Jul 24 2025 at 17:45)</a>:</h4>
+<blockquote>
+<p>You won't be able to instantiate a <code>Foo</code> that pins the <code>Bar</code> in <code>bar</code>, maybe that's what you meant?</p>
+</blockquote>
+<p>Yes, this means that in practice the example will not work, correct?</p>
+
+
+
+<a name="530615798"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615798" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615798">(Jul 24 2025 at 17:45)</a>:</h4>
+<p>so the wording was indeed bad on my end,  but hopefully the meaning is still valid</p>
+
+
+
+<a name="530615872"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530615872" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530615872">(Jul 24 2025 at 17:46)</a>:</h4>
+<p>yeah I just got confused and thought you meant it would trip up earlier (ie when just defining the types, which shouldn't happen)</p>
+
+
+
+<a name="530616328"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530616328" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530616328">(Jul 24 2025 at 17:49)</a>:</h4>
+<p>Edited to make it clearer</p>
+
+
+
+<a name="530616375"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Mutex%3CT%3E%20where%20T%20is%20pinned/near/530616375" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned.html#530616375">(Jul 24 2025 at 17:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/530615647">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>Furthermore, there is no support for pinned projections, so the following won't work:</p>
+</blockquote>
+<p>regarding that, I have some good news for you: <a href="https://github.com/Rust-for-Linux/pin-init/pull/75">https://github.com/Rust-for-Linux/pin-init/pull/75</a></p>
+</blockquote>
+<p>You can put a link to that PR at the issue that Daniel just created.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

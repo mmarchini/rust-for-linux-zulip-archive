@@ -1,0 +1,288 @@
+<html>
+<head><meta charset="utf-8"><title>class_create · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html">class_create</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="341796532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341796532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341796532">(Mar 14 2023 at 13:41)</a>:</h4>
+<p>Hi,<br>
+I currently try to register a new class, with this C macro: <a href="https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L260">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L260</a></p>
+<p>I can't find an implementation of this in the rust-for-linux for, and no issue related to this.</p>
+<p>So, right now I use some unsafe:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="n">bindings</span>::<span class="n">__class_create</span><span class="p">(</span><span class="n">module</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">.</span><span class="n">as_char_ptr</span><span class="p">(),</span><span class="w"> </span><span class="n">KEY</span><span class="p">.</span><span class="n">get</span><span class="p">())}</span>
+</code></pre></div>
+<p>But I have to made things public in ThisModule and LockClassKey to make this working.</p>
+<p>Did I miss the implementation of <code>class_create</code> ? If no, is there a better way to get <code>*mut module</code> and <code>*mut lock_class_key</code> than making things public in the kernel crate ?</p>
+
+
+
+<a name="341811620"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341811620" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341811620">(Mar 14 2023 at 14:33)</a>:</h4>
+<p>A tricky part for this is <code>class_create</code> macro allocates a static location for lock_class_key, so to behave as the same, you will need introduce a Rust macro, for example</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">class_create</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="p">(</span><span class="n">owner</span>:<span class="cp">$expr</span><span class="p">,</span><span class="w"> </span><span class="n">name</span>:<span class="cp">$expr</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{{</span>
+<span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">key</span>: <span class="nc">LockClassKey</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="w">    </span><span class="c1">// create local binding to avoid evaluate unknown expression in `unsafe`</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="cp">$owner</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="cp">$name</span><span class="p">;</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="n">bindings</span>::<span class="n">__class_create</span><span class="p">(</span><span class="n">owner</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">.</span><span class="n">as_char_ptr</span><span class="p">(),</span><span class="w"> </span><span class="n">KEY</span><span class="p">.</span><span class="n">get</span><span class="p">())}</span>
+<span class="w">  </span><span class="p">}}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="341813974"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341813974" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341813974">(Mar 14 2023 at 14:41)</a>:</h4>
+<p>Yes, but I still need to put LockClassKey.get and ThisModule.0 public to use this macro<br>
+I think I need to create some "safe" wrapper on class to avoid this, but I really don't know where and how to begin <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="341825275"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341825275" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341825275">(Mar 14 2023 at 15:16)</a>:</h4>
+<p>I think <code>LockClassKey::get()</code> is both public and safe, so maybe you can define a "constructor" for <code>Class</code>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">Class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">new</span><span class="p">(</span><span class="n">name</span>: <span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span> <span class="nc">CStr</span><span class="p">,</span><span class="w"> </span><span class="n">key</span>: <span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span> <span class="nc">LockClassKey</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Class</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="n">bindings</span>::<span class="n">__class_create</span><span class="p">(</span><span class="n">owner</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">.</span><span class="n">as_char_ptr</span><span class="p">(),</span><span class="w"> </span><span class="n">key</span><span class="p">.</span><span class="n">get</span><span class="p">())}</span>
+<span class="w">    </span><span class="n">owner</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="341826969"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341826969" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341826969">(Mar 14 2023 at 15:21)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">Class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">class</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">new</span><span class="p">(</span><span class="w"> </span><span class="n">owner</span>: <span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span> <span class="nc">ThisModule</span><span class="p">,</span><span class="w"> </span><span class="n">name</span>: <span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span> <span class="nc">CStr</span><span class="p">,</span><span class="n">key</span>: <span class="kp">&amp;</span><span class="o">'</span><span class="nb">static</span> <span class="nc">LockClassKey</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// SAFETY: all pointers are guaranteed valid by compiler</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">from_kernel_err_ptr</span><span class="p">(</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="n">bindings</span>::<span class="n">__class_create</span><span class="p">(</span><span class="n">owner</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">.</span><span class="n">as_char_ptr</span><span class="p">(),</span><span class="w"> </span><span class="n">key</span><span class="p">.</span><span class="n">get</span><span class="p">())}</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="n">ptr</span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Class</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// SAFETY: As the class can only be created with `new`, ptr is valid</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="n">bindings</span>::<span class="n">class_destroy</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">)}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Just before your message I come with this <span aria-label="smile" class="emoji emoji-1f642" role="img" title="smile">:smile:</span> <br>
+I added the destructor because I need to call it on module unloading<br>
+I'm not sure about the SAFETY justfication, but at least it seems to works</p>
+
+
+
+<a name="341832315"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341832315" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341832315">(Mar 14 2023 at 15:37)</a>:</h4>
+<p>Looks good to me ;-)</p>
+
+
+
+<a name="341832416"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341832416" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341832416">(Mar 14 2023 at 15:37)</a>:</h4>
+<p>See you at LKML I guess? ;-)</p>
+
+
+
+<a name="341833925"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341833925" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341833925">(Mar 14 2023 at 15:42)</a>:</h4>
+<p>Welllll, maybe, but I really don't know how to submit it <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> <br>
+Do you have a guide to do this properly ?</p>
+
+
+
+<a name="341834387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341834387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341834387">(Mar 14 2023 at 15:44)</a>:</h4>
+<p>Hmm.. I missed that you wrap a pointer instead of a struct, please consider</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(transparent)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">Class</span><span class="p">(</span><span class="n">bindings</span>::<span class="n">class</span><span class="p">);</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">ClassRef</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">ptr</span>: <span class="nc">NonNull</span><span class="o">&lt;</span><span class="n">Class</span><span class="o">&gt;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="341834509"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341834509" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341834509">(Mar 14 2023 at 15:44)</a>:</h4>
+<p>Thanks !</p>
+
+
+
+<a name="341835169"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341835169" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341835169">(Mar 14 2023 at 15:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="597162">Louis Chauvet</span> <a href="#narrow/stream/288089-General/topic/class_create/near/341833925">said</a>:</p>
+<blockquote>
+<p>Welllll, maybe, but I really don't know how to submit it <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> <br>
+Do you have a guide to do this properly ?</p>
+</blockquote>
+<p>There is <a href="https://docs.kernel.org/process/submitting-patches.html">https://docs.kernel.org/process/submitting-patches.html</a></p>
+
+
+
+<a name="341845167"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341845167" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341845167">(Mar 14 2023 at 16:21)</a>:</h4>
+<p>For the NonNull creation, should I use:</p>
+<ul>
+<li>new_unchecked (with unsafe), because I'm sure that the pointer is invalid after <code>from_kernel_err_ptr</code></li>
+<li>new with unwrap</li>
+<li>new and check that the Option really contains something</li>
+</ul>
+
+
+
+<a name="341845477"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341845477" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341845477">(Mar 14 2023 at 16:22)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/class_create/near/341835169">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="597162">Louis Chauvet</span> <a href="#narrow/stream/288089-General/topic/class_create/near/341833925">said</a>:</p>
+<blockquote>
+<p>Welllll, maybe, but I really don't know how to submit it <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> <br>
+Do you have a guide to do this properly ?</p>
+</blockquote>
+<p>There is <a href="https://docs.kernel.org/process/submitting-patches.html">https://docs.kernel.org/process/submitting-patches.html</a></p>
+</blockquote>
+<p>I'll have to check with my company's legal department, but I hope to have the right to submit it.</p>
+
+
+
+<a name="341845728"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341845728" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341845728">(Mar 14 2023 at 16:24)</a>:</h4>
+<p>I think <code>new_unchecked</code> here is OK</p>
+
+
+
+<a name="341874064"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/341874064" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#341874064">(Mar 14 2023 at 18:23)</a>:</h4>
+<p>Also please read <a href="https://rust-for-linux.com/contributing">https://rust-for-linux.com/contributing</a></p>
+
+
+
+<a name="360719602"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360719602" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360719602">(May 24 2023 at 08:17)</a>:</h4>
+<p>Hello,<br>
+I have the authorization from my company to submit patches <span aria-label="partying face" class="emoji emoji-1f973" role="img" title="partying face">:partying_face:</span> <br>
+On which branch should I base my work ? Latest mainstream or one of the rfl branch ? (which one in this case ?)</p>
+
+
+
+<a name="360719873"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360719873" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360719873">(May 24 2023 at 08:18)</a>:</h4>
+<p>You can base your patches on the rust-next branch, or on Linus' Linux 6.4-rc1 commit.</p>
+
+
+
+<a name="360735092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360735092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360735092">(May 24 2023 at 09:26)</a>:</h4>
+<p>Ho, I have a problem, I think my patch should go to this file: <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs</a>, but it's not yet upstream on linux 6.4</p>
+<p>(It's a wrapper around <a href="https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54</a>)</p>
+<p>Should I create this file with only my patch ? (It doesn't depend on <code>struct Device</code>, but as class is defined in the device folder in C, I think it's the "right" place. Or should I create <code>device.rs</code> to include <code>device/class.rs</code> ?)</p>
+
+
+
+<a name="360737704"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360737704" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360737704">(May 24 2023 at 09:38)</a>:</h4>
+<p>It needs to be upstreamed first.</p>
+
+
+
+<a name="360742378"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360742378" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360742378">(May 24 2023 at 09:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="597162">Louis Chauvet</span> <a href="#narrow/stream/288089-General/topic/class_create/near/360735092">said</a>:</p>
+<blockquote>
+<p>Ho, I have a problem, I think my patch should go to this file: <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs</a>, but it's not yet upstream on linux 6.4</p>
+<p>(It's a wrapper around <a href="https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54</a>)</p>
+<p>Should I create this file with only my patch ? (It doesn't depend on <code>struct Device</code>, but as class is defined in the device folder in C, I think it's the "right" place. Or should I create <code>device.rs</code> to include <code>device/class.rs</code> ?)</p>
+</blockquote>
+<p>Just submit your patch the way you feel is right and then we can talk about if it needs to be moved around when we do the review :) If you need to create a file or module, do that.</p>
+
+
+
+<a name="360746439"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360746439" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360746439">(May 24 2023 at 10:17)</a>:</h4>
+<p>No, please wait until dependencies are upstreamed (or submitted to the list).</p>
+<p>For <code>device.rs</code>,  <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> is working on submitting it as far as I understand, so as soon as he submits the patch(es), you can rebase on top of those and submit yours.</p>
+
+
+
+<a name="360747618"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360747618" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360747618">(May 24 2023 at 10:23)</a>:</h4>
+<p>However, if you are looking for early feedback, then you may want to create a branch somewhere with your dependencies, and then submit the patch based on your branch, and mark it as an RFC series for instance.</p>
+
+
+
+<a name="360747772"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360747772" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360747772">(May 24 2023 at 10:23)</a>:</h4>
+<p>Please see <a href="https://rust-for-linux.com/contributing#submitting-new-abstractions-and-modules">https://rust-for-linux.com/contributing#submitting-new-abstractions-and-modules</a> for some other tips on that.</p>
+
+
+
+<a name="360751663"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360751663" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360751663">(May 24 2023 at 10:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/288089-General/topic/class_create/near/360746439">said</a>:</p>
+<blockquote>
+<p>No, please wait until dependencies are upstreamed (or submitted to the list).</p>
+<p>For <code>device.rs</code>,  <span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> is working on submitting it as far as I understand, so as soon as he submits the patch(es), you can rebase on top of those and submit yours.</p>
+</blockquote>
+<p>He says it does not depend on anything in <code>device.rs</code> but that file would be a good place for his stuff as well. It goes without saying "don't submit other peoples stuff".</p>
+
+
+
+<a name="360752139"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360752139" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360752139">(May 24 2023 at 10:43)</a>:</h4>
+<p>I would encourage sending it to the list, slap an RFC badge on it and get some feedback sooner rather than later.</p>
+
+
+
+<a name="360763393"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360763393" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360763393">(May 24 2023 at 11:36)</a>:</h4>
+<p>Ah, I read it as upstreaming parts of the existing file (even if not <code>struct Device</code>).</p>
+<p>If it does not depend on anything that is not in <code>rust-next</code> and it is just a matter of placement, then Andreas is right -- definitely please go ahead!</p>
+
+
+
+<a name="360804588"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360804588" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Louis Chauvet <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360804588">(May 24 2023 at 14:19)</a>:</h4>
+<p>Ok, I tried to go ahead, but I didn't expect <code>from_kernel_err_ptr</code> to not be upstreamed <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+<ul>
+<li>If I look at rustforlinux/rust-next to create a class I need to use <code>bindings::class_create</code> (linux 6.4) (but I don't have <code>from_kerne_err_ptr</code>)</li>
+<li>If I look at rustforlinux/rust, I need to use <code>bindings::__class_create</code> (linux 6.3) (but this must be updated when you bump the linux version)<br>
+What should I do ? Wait the next version bump in rustforlinux/rust ?</li>
+</ul>
+
+
+
+<a name="360825979"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/360825979" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#360825979">(May 24 2023 at 15:35)</a>:</h4>
+<p>Regarding the Linux version, you can ignore the <code>rust</code> branch -- patches go for mainline. Indeed, Greg changed it recently in several ways (removed the <code>THIS_MODULE</code> parameter need from the macro, then made it a function and removed the key), which makes it a bit easier too.</p>
+<p>Regarding <code>from_kernel_err_ptr</code>: it got renamed to <code>from_err_ptr</code> when it got upstreamed recently, so you should have it.</p>
+
+
+
+<a name="369015058"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/class_create/near/369015058" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> riking <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/class_create.html#369015058">(Jun 23 2023 at 20:34)</a>:</h4>
+<p>There's an open patch for lock_class_key now so you should be able to base off that</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

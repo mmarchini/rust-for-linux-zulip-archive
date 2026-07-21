@@ -1,0 +1,195 @@
+<html>
+<head><meta charset="utf-8"><title>Storing driver-bound references into sub-devices · Nova · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/index.html">Nova</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html">Storing driver-bound references into sub-devices</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="599137882"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599137882" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599137882">(Jun 01 2026 at 11:55)</a>:</h4>
+<p>With the HRT series being merged, we now have the option of getting rid of a pattern we used in Nova since the beginning, namely the constant passing of a <code>&amp;Bar0</code> to every method that needs to perform I/O and, to a lesser extend, the passing of a bound <code>Device</code> to do things like allocating memory.</p>
+<p>Instead, we now can store references to these elements into each type that needs them, and access them from <code>self</code>, pretty much like what Nouveau does.</p>
+<p>The most obvious candidate is <code>Falcon</code>. If we do this, method invocations like</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">falcon</span><span class="p">.</span><span class="n">dma_load</span><span class="p">(</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">bar</span><span class="p">,</span><span class="w"> </span><span class="n">fw</span><span class="p">)</span>
+</code></pre></div>
+<p>can be simplified into</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">falcon</span><span class="p">.</span><span class="n">dma_load</span><span class="p">(</span><span class="n">fw</span><span class="p">)</span>
+</code></pre></div>
+<p>This makes a difference in the code: converting falcon to use this removes more than 50 LoCs in the codebase. On the other hand, <code>Falcon</code> gains a lifetime parameter, meaning that <code>Falcon&lt;Gsp&gt;</code> is now referred to as <code>Falcon&lt;'_, Gsp&gt;</code>.</p>
+<p>To summarize:</p>
+<p>Pros:</p>
+<ul>
+<li>Less distracting arguments to methods,</li>
+<li>Overall reduction of code,</li>
+<li>That's probably how we would have done it since the beginning, had we had the<br>
+  option.</li>
+</ul>
+<p>Cons:</p>
+<ul>
+<li>
+<p>Every structure gains a lifetime, both in their declaration and when referred<br>
+  to.</p>
+</li>
+<li>
+<p>Structures get slightly bigger (although we are talking 16 bytes on average<br>
+  for a very limited number of instances, so that's really negligible?).</p>
+</li>
+<li>
+<p><code>bar</code> becomes <code>self.bar</code> in methods' code.</p>
+</li>
+</ul>
+<p>I think we should only apply these to top types like <code>Falcon</code> and <code>Gsp</code> - HALs which are only called locally can work efficiently with arguments. But IMHO the global readability improvement is a win.</p>
+<p>Opinions? This sounds like a "good first issue", but since it is rather consequential for the direction of the project I'd like to see it done quickly if possible (but after merging Blackwell <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span> ) if we decide this is the right way to proceed.</p>
+<p>I can post a diff for <code>Falcon</code> somewhere if folks would like to see what it looks like in practice.</p>
+
+
+
+<a name="599139756"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599139756" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599139756">(Jun 01 2026 at 12:03)</a>:</h4>
+<p>It is expected that lifetimes propagate through and I don't think it is a bad thing. I considered whether I want to send a patch series that does those changes, but also figured it would be a good first task for a new contributor.</p>
+<p>In terms of where I would draw the line:</p>
+<ul>
+<li>If a type only needs it in the constructor or a single method that is always called from a context where the device resource is already available, don't store the device resource in the type.</li>
+<li>If a Device&lt;Bound&gt; is not needed, ARef&lt;Device&gt; can still be used.</li>
+</ul>
+
+
+
+<a name="599139882"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599139882" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599139882">(Jun 01 2026 at 12:04)</a>:</h4>
+<p>How quickly are you talking about, a few weeks? I'd love to work on this now that I have a lot of free time and it's a good second issue :)</p>
+
+
+
+<a name="599141080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599141080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599141080">(Jun 01 2026 at 12:09)</a>:</h4>
+<p><span class="user-mention" data-user-id="1020615">@Tim Kovalenko</span> I'd say wait at least one week as we will try to land the (large) Blackwell series, then it should be doable without too many conflicts. This can also be done incrementally; <code>Gsp</code> would be a first good, smaller candidate, then you can look at other types that would benefit from it. <code>Falcon</code> is likely to be the largest, but also the one that will benefit the most.</p>
+
+
+
+<a name="599141306"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599141306" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599141306">(Jun 01 2026 at 12:10)</a>:</h4>
+<blockquote>
+<p>If a Device&lt;Bound&gt; is not needed, ARef&lt;Device&gt; can still be used.</p>
+</blockquote>
+<p>What would be the benefit, especially if we need to add a lifetime to the type because it stores the <code>bar</code>?</p>
+
+
+
+<a name="599141973"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599141973" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599141973">(Jun 01 2026 at 12:13)</a>:</h4>
+<p>although I tend to agree that if we only need the <code>Device</code> for logging purposes, we should probably not expose more features that needed</p>
+
+
+
+<a name="599157271"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599157271" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599157271">(Jun 01 2026 at 13:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="890884">Alexandre Courbot</span> <a href="#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/599141080">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="1020615">Tim Kovalenko</span> I'd say wait at least one week as we will try to land the (large) Blackwell series, then it should be doable without too many conflicts. This can also be done incrementally; <code>Gsp</code> would be a first good, smaller candidate, then you can look at other types that would benefit from it. <code>Falcon</code> is likely to be the largest, but also the one that will benefit the most.</p>
+</blockquote>
+<p>Finally I can use my Blackwell card to test :) I'll start looking at the code and the places where I'll need to change it.<br>
+Once Blackwell is here, I'll start the incremental change. </p>
+<p>Do you think it could be helpful for me or others to also review the Blackwell patch?</p>
+
+
+
+<a name="599158025"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/599158025" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#599158025">(Jun 01 2026 at 13:23)</a>:</h4>
+<p>It has received some attention during the last few revisions (especially the first half, which I consider for merging very soon), but reviews (or fixes if the problem could not be flagged in time) are of course always welcome!</p>
+
+
+
+<a name="605886338"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605886338" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605886338">(Jun 23 2026 at 00:18)</a>:</h4>
+<p>Hello <span class="user-mention" data-user-id="1020615">@Tim Kovalenko</span>, are you still planning to work on this? <code>drm-rust-next</code> should be in good shape now. If you are busy with other stuff it is also fine, just want to know if someone else should take this over. <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+
+
+
+<a name="605887090"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887090" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887090">(Jun 23 2026 at 00:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="890884">Alexandre Courbot</span> <a href="#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/605886338">said</a>:</p>
+<blockquote>
+<p>Hello <span class="user-mention silent" data-user-id="1020615">Tim Kovalenko</span>, are you still planning to work on this? <code>drm-rust-next</code> should be in good shape now. If you are busy with other stuff it is also fine, just want to know if someone else should take this over. <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+</blockquote>
+<p>Hey, I'm actually working on it right now. It's a bit slower as I have issues with rust-analyzer in the editor. Should be done soon :)</p>
+
+
+
+<a name="605887186"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887186" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887186">(Jun 23 2026 at 00:20)</a>:</h4>
+<p>Sounds good! <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span> Thanks for following up</p>
+
+
+
+<a name="605887253"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887253" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887253">(Jun 23 2026 at 00:21)</a>:</h4>
+<p>Actully, quick question, does rust analyzer usually have issue on your setup with type errors and especially trait implementation?</p>
+
+
+
+<a name="605887309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887309">(Jun 23 2026 at 00:21)</a>:</h4>
+<p>it's working well generally speaking, with the occasional loss of track in <code>pin_init!</code> blocks</p>
+
+
+
+<a name="605887316"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887316" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887316">(Jun 23 2026 at 00:21)</a>:</h4>
+<p>I wrote a small nvim macro to kinda output compiler results into a trouble list but it's still a bit of a pain.</p>
+
+
+
+<a name="605887532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887532">(Jun 23 2026 at 00:23)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="890884">Alexandre Courbot</span> <a href="#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/605887309">said</a>:</p>
+<blockquote>
+<p>it's working well generally speaking, with the occasional loss of track in <code>pin_init!</code> blocks</p>
+</blockquote>
+<p>huh, so maybe it's an issue with my setup as it works well within the file but sometimes it doesn't catch errors. I did this <code>make LLVM=1 prepare rust-analyzer</code> and it helped but not fully.</p>
+
+
+
+<a name="605887720"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605887720" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605887720">(Jun 23 2026 at 00:23)</a>:</h4>
+<p>ah, now that you mention it some errors are indeed not always well reported by rust-analyzer</p>
+
+
+
+<a name="605888050"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/605888050" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#605888050">(Jun 23 2026 at 00:26)</a>:</h4>
+<p>Might be intersting to take a look, as who knows, maybe I could figure something out after this task</p>
+
+
+
+<a name="606623596"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/606623596" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#606623596">(Jun 26 2026 at 02:31)</a>:</h4>
+<p>Addressed the feedback and send a new version. After this is merged, I'll continue with other parts of the refactor. I'm moving this weekend, so I might not get much time until mid-next week.</p>
+<p>Also, unrelated; do you know why <code>b4 prep --auto-to-cc</code> generates a bigger send list than V1 eventhough the files changed are the same? The same happened on my previous Patch. Could it be due to another patch being merged between V1 and V2?</p>
+
+
+
+<a name="606647387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/606647387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#606647387">(Jun 26 2026 at 06:44)</a>:</h4>
+<p>Thanks, will take a look shortly!</p>
+
+
+
+<a name="606647602"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/606647602" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#606647602">(Jun 26 2026 at 06:45)</a>:</h4>
+<p>re: <code>--auto-to-cc</code>, I think the RISC-V maintainers get added whenever <code>riscv</code> appears in a patch - and yours touches fields that carry this name. What I usually do is remove the RISC-V maintainers when they get added like that</p>
+
+
+
+<a name="610714059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/509436-Nova/topic/Storing%20driver-bound%20references%20into%20sub-devices/near/610714059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tim Kovalenko <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices.html#610714059">(Jul 15 2026 at 04:14)</a>:</h4>
+<p>Hey <span class="user-mention" data-user-id="890884">@Alexandre Courbot</span>, I'm still spending a lot of time on moving, ie unpacking and stuff. I plan to continue working on the second patch soon ish. If it's needed before, please let me know and I'll find time sooner <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span> Apologies I didn't update earlier</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

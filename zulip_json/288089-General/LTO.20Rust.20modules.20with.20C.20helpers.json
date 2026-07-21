@@ -1,0 +1,974 @@
+[
+    {
+        "content": "<h1>LTO Rust modules with C helpers</h1>\n<p>I finally got some time to investigate about possible ways that we can LTO helpers together with Rust kernel modules at a crate level.</p>\n<p>Here are 3 possibilities:</p>\n<ol>\n<li>Have the LLVM IR of the helpers somehow available to rustc and then it gets used in compilation step.</li>\n<li>For each crate, invoke rustc, and then link it with helpers, and then use the object file for the final linking.</li>\n<li>Use linker plugin LTO and do a global LTO.</li>\n</ol>\n<p>We previously explored option 3 only. <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> reported that kernel doesn't boot on real machine with this, and <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> reported global LTO is not preferred because it's slow and offers little gain.</p>\n<p>I looked into option 1 today and I don't think there're any hacks that we can use to ask Rust to embed arbitrary LLVM IR/BC for compilation. It seems that <em>if</em> rustc is doing the linker, we can trick it into using non-Rust bitcode by make the file name end with .rcgu.o, but since we use <code>--emit</code>, rustc wouldn't run the linker stage at all (plus, this is a horrible hack).</p>\n<p>So option 2 looks like the only remaining solution. However since we need link helper multiple times, it will violate one-definition rule (ODR) and cause linker error on duplicate symbol. Using weak linkage avoids the ODR issue, but it also inhibits the inlining (because the symbol can be overriden)</p>\n<p>There is one way to workaround the issue, which is to use <code>linkonce_odr</code>. This is entirely LLVM internal and is not exposed to C code, but we can use some hacks:</p>\n<ol>\n<li>For helpers, define them using <code>extern inline</code>. This allows an inline hint to be generated, but also keep the method body in compilation result.</li>\n<li>Compile the helpers to LLVM IR: <code>clang -S helper.c -emit-llvm -o helper.ll -O2</code></li>\n<li>Replace <code>define dso_local</code> with <code>define linkonce_odr dso_local</code>: <code>sed -i 's/^define dso_local/define linkonce_odr dso_local/g' helper.ll</code></li>\n<li>For performance, convert the processed helper.ll to bitcode: <code>llvm-as helper.ll -o helper.bc</code></li>\n</ol>\n<p>Now for each Rust crate, we:</p>\n<ol>\n<li>Compile to LLVM bc: <code>rustc --crate-type=lib --emit=llvm-bc --emit=metadata b.rs -C opt-level=2 -L .</code></li>\n<li>Link with the helper with llvm-link: <code>llvm-link b.bc helper.bc -o b.m.bc</code> (for some reason helper.bc needs to go after b.bc, but not before)</li>\n<li>Perform the optimisation and generate an object file: <code>clang -c b.m.bc -o b.o -O2</code></li>\n</ol>\n<p>This way, if LLVM decided to inline the function, it will disappear from the object file entirely. If LLVM decided to not inline the function, it will generate a symbol with weak linkage so it's fine to have multiple copies.</p>",
+        "id": 425361365,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709833486
+    },
+    {
+        "content": "<p>What I am doing now is a mix of 1 an 3 I think. I compile the helpers to LLVM Bitcode but I link the module with linker plugin LTO.</p>",
+        "id": 425362099,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709833767
+    },
+    {
+        "content": "<p>I do want to point out here that you will likely want to be a little careful here - <code>clang</code> and <code>rustc</code> can only LTO x-lang <em>safely</em> if they share an LLVM. This may be a bit awkward to autodetect in the Linux kernel environment, as:</p>\n<ol>\n<li><code>rustc</code>-as-distributed-by-a-distro will frequently link against a different LLVM than upstream (whatever the distro is currently shipping)</li>\n<li>People using <code>clang</code> from host and <code>rustc</code> from <code>rustup</code> is probably a common configuration. This will frequently be a mismatch.</li>\n<li>Some major kernel build environments, (Android at a minimum) use LLVMs at head. This means you cannot even depend on the version number in the bitcode being a sufficient check.</li>\n</ol>\n<p>I would suggest that while this is a good feature, you should make this a default off config that people can switch on if they know they have paired compilers.</p>",
+        "id": 425362154,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709833785
+    },
+    {
+        "content": "<p>So I lower the Rust crate to Bitcode as well and then do LTO with the linker plugin across rust and helper inputs.</p>",
+        "id": 425362289,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709833829
+    },
+    {
+        "content": "<p>Well, any of the 3 options would require a matching LLVM.</p>",
+        "id": 425362346,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709833850
+    },
+    {
+        "content": "<p>Here's a very small example if you want to play around: <a href=\"https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c\">https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c</a></p>",
+        "id": 425362651,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709833950
+    },
+    {
+        "content": "<p>This does overall seem like a good scheme though. I wonder if in the larger ecosystem, <code>build.rs</code> could figure out how to use this to jam bindgen-generated-code into <code>.rlib</code>s. I suspect it would work.</p>",
+        "id": 425362956,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709834048
+    },
+    {
+        "content": "<p>Andreas, for your solution do you not require the <code>linkonce_odr</code> modification?</p>",
+        "id": 425364182,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709834420
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425362154\">said</a>:</p>\n<blockquote>\n<p>I do want to point out here that you will likely want to be a little careful here - <code>clang</code> and <code>rustc</code> can only LTO x-lang <em>safely</em> if they share an LLVM. This may be a bit awkward to autodetect in the Linux kernel environment, as:</p>\n<ol>\n<li><code>rustc</code>-as-distributed-by-a-distro will frequently link against a different LLVM than upstream (whatever the distro is currently shipping)</li>\n<li>People using <code>clang</code> from host and <code>rustc</code> from <code>rustup</code> is probably a common configuration. This will frequently be a mismatch.</li>\n<li>Some major kernel build environments, (Android at a minimum) use LLVMs at head. This means you cannot even depend on the version number in the bitcode being a sufficient check.</li>\n</ol>\n<p>I would suggest that while this is a good feature, you should make this a default off config that people can switch on if they know they have paired compilers.</p>\n</blockquote>\n<p>How much the same do they have to be ? Same major? Same major.minor.patch? Same build output binaries?</p>",
+        "id": 425367246,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709835459
+    },
+    {
+        "content": "<p>If you're using a released LLVM, then major.minor.</p>",
+        "id": 425368168,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709835776
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425362346\">said</a>:</p>\n<blockquote>\n<p>Well, any of the 3 options would require a matching LLVM.</p>\n</blockquote>\n<p>Thanks, I will check it out. What I do now might violate ODR (which I did not know about). I basically define the helpers twice. Once for inclusion in the kernel image as exported symbols, and once for the module without exporting. They are currently different functions in different C files, so technically there is no violation of ODR yet. I do not get name clashes, as the helpers linked into the modules do not exist in the final symbol table. </p>\n<p>But eventually I would like to not have the same C code twice. I would like to figure out a way to use the same helpers.c file for both the kernel image and the module. I was thinking about conditionally exporting the symbols if the file is being built as part of the kernel and not if built as part of a module. Would that be OK?</p>",
+        "id": 425368248,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709835816
+    },
+    {
+        "content": "<p>If you're using LLVMs that are not officially released stables, then you're not safe unless you're using the same git commit, because they don't bother to version changes to the bitcode format inside a release cycle</p>",
+        "id": 425368249,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709835816
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425368168\">said</a>:</p>\n<blockquote>\n<p>If you're using a released LLVM, then major.minor.</p>\n</blockquote>\n<p>We can just check for this in the build system in case Rust and LTO is enabled.</p>",
+        "id": 425368415,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709835893
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425368249\">said</a>:</p>\n<blockquote>\n<p>If you're using LLVMs that are not officially released stables, then you're not safe unless you're using the same git commit, because they don't bother to version changes to the bitcode format inside a release cycle</p>\n</blockquote>\n<p>I am currently using disto LLVM and rustup rustic. I didn’t check, but I think they are not same minor. I will have to fix that.</p>",
+        "id": 425368666,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709835975
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425361365\">said</a>:</p>\n<blockquote>\n<p>There is one way to workaround the issue, which is to use <code>linkonce_odr</code>. This is entirely LLVM internal and is not exposed to C code, but we can use some hacks:</p>\n<ol>\n<li>For helpers, define them using <code>extern inline</code>. This allows an inline hint to be generated, but also keep the method body in compilation result.</li>\n<li>Compile the helpers to LLVM IR: <code>clang -S helper.c -emit-llvm -o helper.ll -O2</code></li>\n<li>Replace <code>define dso_local</code> with <code>define linkonce_odr dso_local</code>: <code>sed -i 's/^define dso_local/define linkonce_odr dso_local/g' helper.ll</code></li>\n<li>For performance, convert the processed helper.ll to bitcode: <code>llvm-as helper.ll -o helper.bc</code></li>\n</ol>\n<p>Now for each Rust crate, we:</p>\n<ol>\n<li>Compile to LLVM bc: <code>rustc --crate-type=lib --emit=llvm-bc --emit=metadata b.rs -C opt-level=2 -L .</code></li>\n<li>Link with the helper with llvm-link: <code>llvm-link b.bc helper.bc -o b.m.bc</code> (for some reason helper.bc needs to go after b.bc, but not before)</li>\n<li>Perform the optimisation and generate an object file: <code>clang -c b.m.bc -o b.o -O2</code></li>\n</ol>\n<p>This way, if LLVM decided to inline the function, it will disappear from the object file entirely. If LLVM decided to not inline the function, it will generate a symbol with weak linkage so it's fine to have multiple copies.</p>\n</blockquote>\n<p>This is sort of what I am doing</p>\n<ul>\n<li>I go directly from helpers.c to helpers.bc. Not fix up of dso_local attributes.</li>\n<li>I change the program text of helpers.c to not export the symbols globally</li>\n<li>I link helpers Bitcode and module Bitcode with llvm-link</li>\n<li>After this I use the default kernel build flow to finish up and build .ko object</li>\n</ul>",
+        "id": 425369552,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709836304
+    },
+    {
+        "content": "<p>Yeah, the thing to be careful of here is that LLVM has something that looks like a backwards compatibility gaurantee - newer tools can always load older <em>released</em> bitcode outputs (so if you generate bitcode with LLVM 5.3, then a linker or optimizer running LLVM 8.2 can load it. If you generate bitcode with a git commit between 5.3 and 6.0, it may or may not load.).</p>\n<p><em>However</em>, the semantics are not gauranteed to be the same. This means that if you do any nontrivial transformations (for example, inlining then optimizing) after loading older bitcode, something may go wrong.</p>",
+        "id": 425369650,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709836341
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425369650\">said</a>:</p>\n<blockquote>\n<p>Yeah, the thing to be careful of here is that LLVM has something that looks like a backwards compatibility gaurantee - newer tools can always load older <em>released</em> bitcode outputs (so if you generate bitcode with LLVM 5.3, then a linker or optimizer running LLVM 8.2 can load it. If you generate bitcode with a git commit between 5.3 and 6.0, it may or may not load.).</p>\n<p><em>However</em>, the semantics are not gauranteed to be the same. This means that if you do any nontrivial transformations (for example, inlining then optimizing), something may go wrong.</p>\n</blockquote>\n<p>Yea, someone was theorizing that is why my builds could not boot on real HW. I plan to redo the experiment with aligned tools next week.</p>",
+        "id": 425369801,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709836424
+    },
+    {
+        "content": "<p>If you're willing to build your own rustc, if you provide it a path to <code>llvm-config</code>setting in <code>config.toml</code> you can use to point it to the LLVM that was used for your clang, which is the easiest way to be sure. Debian-likes usually provide <code>llvm-config</code> for the LLVM the <code>llvm-dev</code> package.</p>",
+        "id": 425369992,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709836501
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425369552\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425361365\">said</a>:</p>\n<blockquote>\n<p>There is one way to workaround the issue, which is to use <code>linkonce_odr</code>. This is entirely LLVM internal and is not exposed to C code, but we can use some hacks:</p>\n<ol>\n<li>For helpers, define them using <code>extern inline</code>. This allows an inline hint to be generated, but also keep the method body in compilation result.</li>\n<li>Compile the helpers to LLVM IR: <code>clang -S helper.c -emit-llvm -o helper.ll -O2</code></li>\n<li>Replace <code>define dso_local</code> with <code>define linkonce_odr dso_local</code>: <code>sed -i 's/^define dso_local/define linkonce_odr dso_local/g' helper.ll</code></li>\n<li>For performance, convert the processed helper.ll to bitcode: <code>llvm-as helper.ll -o helper.bc</code></li>\n</ol>\n<p>Now for each Rust crate, we:</p>\n<ol>\n<li>Compile to LLVM bc: <code>rustc --crate-type=lib --emit=llvm-bc --emit=metadata b.rs -C opt-level=2 -L .</code></li>\n<li>Link with the helper with llvm-link: <code>llvm-link b.bc helper.bc -o b.m.bc</code> (for some reason helper.bc needs to go after b.bc, but not before)</li>\n<li>Perform the optimisation and generate an object file: <code>clang -c b.m.bc -o b.o -O2</code></li>\n</ol>\n<p>This way, if LLVM decided to inline the function, it will disappear from the object file entirely. If LLVM decided to not inline the function, it will generate a symbol with weak linkage so it's fine to have multiple copies.</p>\n</blockquote>\n<p>This is sort of what I am doing</p>\n<ul>\n<li>I go directly from helpers.c to helpers.bc. Not fix up of dso_local attributes.</li>\n<li>I change the program text of helpers.c to not export the symbols globally</li>\n<li>I link helpers Bitcode and module Bitcode with llvm-link</li>\n<li>After this I use the default kernel build flow to finish up and build .ko object</li>\n</ul>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> I thought I would be able to pass helpers.bc and module.bc to the last steps that link up the module with global LTO and benefit from inlining with that. But for some reason, linking together the helper and module Bitcode with llvm-link first is required. I do not understand why this is. Do you have any idea?</p>",
+        "id": 425370108,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709836558
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425369992\">said</a>:</p>\n<blockquote>\n<p>If you're willing to build your own rustc, if you provide it a path to <code>llvm-config</code>setting in <code>config.toml</code> you can use to point it to the LLVM that was used for your clang, which is the easiest way to be sure. Debian-likes usually provide <code>llvm-config</code> for the LLVM the <code>llvm-dev</code> package.</p>\n</blockquote>\n<p>I am building on Debian now, with llvm-16 form llvm project PPA I think (on an ad-how dev system). But I just set up a CI job that builds a NixOS expression with a Rust enabled kernel, for running bare metal performance tests. I might as well leverage that tooling to control the compiler.</p>",
+        "id": 425370899,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709836865
+    },
+    {
+        "content": "<p>Upside of that is it would be easy for people to replicate the environment if they want to try it out.</p>",
+        "id": 425371114,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709836930
+    },
+    {
+        "content": "<p><a href=\"https://doc.rust-lang.org/rustc/linker-plugin-lto.html#toolchain-compatibility\">Note that the version number given here is only an approximation as Rust sometimes uses unstable revisions of LLVM.</a>. So you basically _have_ to build rustic yourself with a known LLVM to be absolutely sure that it works?</p>",
+        "id": 425371668,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837126
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425369552\">said</a>:</p>\n<blockquote>\n<ul>\n<li>I go directly from helpers.c to helpers.bc. Not fix up of dso_local attributes.</li>\n<li>I change the program text of helpers.c to not export the symbols globally</li>\n<li>I link helpers Bitcode and module Bitcode with llvm-link</li>\n<li>After this I use the default kernel build flow to finish up and build .ko object</li>\n</ul>\n</blockquote>\n<p>Yeah, this works for loadable modules, but not if you link it directly into vmlinux.</p>",
+        "id": 425371676,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837130
+    },
+    {
+        "content": "<p>Ah, I see. And the steps you suggest allow us to inline C functions into Rust code without enabling global LTO on the kernel image. Which is faster, and does not mess with boot code.</p>",
+        "id": 425372034,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837228
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425370108\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> I thought I would be able to pass helpers.bc and module.bc to the last steps that link up the module with global LTO and benefit from inlining with that. But for some reason, linking together the helper and module Bitcode with llvm-link first is required. I do not understand why this is. Do you have any idea?</p>\n</blockquote>\n<p>If you try to link them together using <code>clang</code> then then semantics would be each bc having their own translation unit, and <code>linkonce_odr</code> would then be discarded because it's not used inside the translation unit.</p>",
+        "id": 425372078,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837245
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425371668\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://doc.rust-lang.org/rustc/linker-plugin-lto.html#toolchain-compatibility\">Note that the version number given here is only an approximation as Rust sometimes uses unstable revisions of LLVM.</a>. So you basically _have_ to build rustic yourself with a known LLVM to be absolutely sure that it works?</p>\n</blockquote>\n<p>To be <em>absolutely</em> sure, yes. However, I think we've been at stable LLVM + a few minor bugfix patches for the last couple LLVMs.</p>",
+        "id": 425372095,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709837255
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372095\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425371668\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://doc.rust-lang.org/rustc/linker-plugin-lto.html#toolchain-compatibility\">Note that the version number given here is only an approximation as Rust sometimes uses unstable revisions of LLVM.</a>. So you basically _have_ to build rustic yourself with a known LLVM to be absolutely sure that it works?</p>\n</blockquote>\n<p>To be <em>absolutely</em> sure, yes. However, I think we've been at stable LLVM + a few minor bugfix patches for the last couple LLVMs.</p>\n</blockquote>\n<p>It would be nice if the rust project just shipped all the LLVM tools with their rust compiler. Even just as an extra rustup component.</p>",
+        "id": 425372393,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837365
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> your approach can still be used if we postprocess the .o file to make any non-inlined helper symbols weak.</p>",
+        "id": 425372652,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837466
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372393\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372095\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425371668\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://doc.rust-lang.org/rustc/linker-plugin-lto.html#toolchain-compatibility\">Note that the version number given here is only an approximation as Rust sometimes uses unstable revisions of LLVM.</a>. So you basically _have_ to build rustic yourself with a known LLVM to be absolutely sure that it works?</p>\n</blockquote>\n<p>To be <em>absolutely</em> sure, yes. However, I think we've been at stable LLVM + a few minor bugfix patches for the last couple LLVMs.</p>\n</blockquote>\n<p>It would be nice if the rust project just shipped all the LLVM tools with their rust compiler. Even just as an extra rustup component.</p>\n</blockquote>\n<p>There's been discussion of that, and it's the way Zig chooses to do it, but I don't think <code>rustup</code> is anywhere close to shipping a <code>clang</code> at the moment. You <em>can</em> get the LLVM tools - there's a <code>rust-lld</code> for example, which is just <code>lld</code>, as built by the LLVM Rust ships with.</p>",
+        "id": 425372992,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709837588
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372992\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372393\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425372095\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425371668\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://doc.rust-lang.org/rustc/linker-plugin-lto.html#toolchain-compatibility\">Note that the version number given here is only an approximation as Rust sometimes uses unstable revisions of LLVM.</a>. So you basically _have_ to build rustic yourself with a known LLVM to be absolutely sure that it works?</p>\n</blockquote>\n<p>To be <em>absolutely</em> sure, yes. However, I think we've been at stable LLVM + a few minor bugfix patches for the last couple LLVMs.</p>\n</blockquote>\n<p>It would be nice if the rust project just shipped all the LLVM tools with their rust compiler. Even just as an extra rustup component.</p>\n</blockquote>\n<p>There's been discussion of that, and it's the way Zig chooses to do it, but I don't think <code>rustup</code> is anywhere close to shipping a <code>clang</code> at the moment.</p>\n</blockquote>\n<p>Do you know what is holding them back? Seems like it should be no big deal.</p>",
+        "id": 425373095,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837626
+    },
+    {
+        "content": "<p>I don't think it makes much sense for rust to become a distro of clang, TBH</p>",
+        "id": 425373280,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837682
+    },
+    {
+        "content": "<p>They do this instead: <a href=\"https://github.com/rust-lang/rust/blob/master/src/doc/rustc/src/linker-plugin-lto.md#toolchain-compatibility\">https://github.com/rust-lang/rust/blob/master/src/doc/rustc/src/linker-plugin-lto.md#toolchain-compatibility</a></p>",
+        "id": 425373343,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709837708
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425373280\">said</a>:</p>\n<blockquote>\n<p>I don't think it makes much sense for rust to become a distro of LLVM, TBH</p>\n</blockquote>\n<p>Well, if LTO working depends on it, I think it makes sense.</p>",
+        "id": 425373373,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837722
+    },
+    {
+        "content": "<p>Eventually the goal should just be using distro shipped rustc</p>",
+        "id": 425373374,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837723
+    },
+    {
+        "content": "<p>They are under the impression that those pairings of clang/rustc should work for x-lang LTO</p>",
+        "id": 425373386,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709837728
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425373343\">said</a>:</p>\n<blockquote>\n<p>They do this instead: <a href=\"https://github.com/rust-lang/rust/blob/master/src/doc/rustc/src/linker-plugin-lto.md#toolchain-compatibility\">https://github.com/rust-lang/rust/blob/master/src/doc/rustc/src/linker-plugin-lto.md#toolchain-compatibility</a></p>\n</blockquote>\n<p>This is what I was using to select an LLVM, but you just told me it is not enough?</p>",
+        "id": 425373522,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837777
+    },
+    {
+        "content": "<p>I do not believe it to be enough. Android is going to use the exact same LLVM, as they say is needed for best results in that doc</p>",
+        "id": 425373578,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1709837793
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425373578\">said</a>:</p>\n<blockquote>\n<p>I do not believe it to be enough. Android is going to use the exact same LLVM, as they say is needed for best results in that doc</p>\n</blockquote>\n<p>Got it. I wonder what “best results” cover. I can live with 90% of the performance gain, but I cannot live with miscompilations.</p>",
+        "id": 425373895,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837886
+    },
+    {
+        "content": "<p>Have you tested out LTO without Rust to see if it boots?</p>",
+        "id": 425374008,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709837933
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425374008\">said</a>:</p>\n<blockquote>\n<p>Have you tested out LTO without Rust to see if it boots?</p>\n</blockquote>\n<p>I do not remember, but it is an easy test so I could do that tomorrow just to be sure.</p>",
+        "id": 425374220,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709837993
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425362651\">said</a>:</p>\n<blockquote>\n<p>Here's a very small example if you want to play around: <a href=\"https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c\">https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c</a></p>\n</blockquote>\n<p>Looks like it works with inline asm as well. Good job!</p>",
+        "id": 425378030,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709839198
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425373280\">said</a>:</p>\n<blockquote>\n<p>I don't think it makes much sense for rust to become a distro of clang, TBH</p>\n</blockquote>\n<p>But we can add the functionality (generating helpers.ll or helpers.bc) in <code>bindgen</code>? Maybe that makes sense?</p>",
+        "id": 425381611,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709840471
+    },
+    {
+        "content": "<p>Well, you still need a compatible version of llvm-link to use it</p>",
+        "id": 425382169,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1709840705
+    },
+    {
+        "content": "<p>In this way, it's probably OK if the llvm/clang that Rust toolchain uses is different than the llvm/clang that compiles C code (assume LTO is not enabled).</p>",
+        "id": 425386772,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709842367
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425369992\">said</a>:</p>\n<blockquote>\n<p>If you're willing to build your own rustc, if you provide it a path to <code>llvm-config</code>setting in <code>config.toml</code> you can use to point it to the LLVM that was used for your clang, which is the easiest way to be sure. Debian-likes usually provide <code>llvm-config</code> for the LLVM the <code>llvm-dev</code> package.</p>\n</blockquote>\n<p>We may have something soon for kernel development -- I am talking with Nathan about providing a LLVM+Rust toolchain at <a href=\"http://kernel.org\">kernel.org</a> (using the exact same LLVM they provide now), i.e. a package you can download with everything you need for a particular kernel branch (i.e. so one package for 6.1 LTS, another for 6.6 LTS, etc.) and that ensures the LLVM is the same and should work for LTO etc.</p>",
+        "id": 425407531,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1709850789
+    },
+    {
+        "content": "<p>So if we get that, at least LTO experiments and so on should be easy to set up on the toolchain side of things.</p>",
+        "id": 425407791,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1709850875
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425374220\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425374008\">said</a>:</p>\n<blockquote>\n<p>Have you tested out LTO without Rust to see if it boots?</p>\n</blockquote>\n<p>I do not remember, but it is an easy test so I could do that tomorrow just to be sure.</p>\n</blockquote>\n<p>I managed to get time to test this today, and the kernel booted just fine, without Rust enabled. I’ll try enabling rust next and see if that works as well. Last time I tried this was llvm-15 and kernel 6.4 I think. So maybe stuff was fixed <span aria-label=\"man shrugging\" class=\"emoji emoji-1f937-200d-2642\" role=\"img\" title=\"man shrugging\">:man_shrugging:</span></p>",
+        "id": 425545094,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709913239
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425378030\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425362651\">said</a>:</p>\n<blockquote>\n<p>Here's a very small example if you want to play around: <a href=\"https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c\">https://gist.github.com/nbdd0121/d4bf7dd7f9b6d6b50fa18b1092f45a3c</a></p>\n</blockquote>\n<p>Looks like it works with inline asm as well. Good job!</p>\n</blockquote>\n<p>One problem tho, seem with current kernel compiler flags, <code>extern inline</code> won't be generated to the <code>.ll</code> file. I haven't checked which compiler flag makes this.</p>",
+        "id": 425605110,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1709931058
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425545094\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425374220\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425374008\">said</a>:</p>\n<blockquote>\n<p>Have you tested out LTO without Rust to see if it boots?</p>\n</blockquote>\n<p>I do not remember, but it is an easy test so I could do that tomorrow just to be sure.</p>\n</blockquote>\n<p>I managed to get time to test this today, and the kernel booted just fine, without Rust enabled. I’ll try enabling rust next and see if that works as well. Last time I tried this was llvm-15 and kernel 6.4 I think. So maybe stuff was fixed <span aria-label=\"man shrugging\" class=\"emoji emoji-1f937-200d-2642\" role=\"img\" title=\"man shrugging\">:man_shrugging:</span></p>\n</blockquote>\n<p>My test machine is booting fine with rust enabled, the rust null block driver built in, and LTO enabled now. Something was fixed <span aria-label=\"clap\" class=\"emoji emoji-1f44f\" role=\"img\" title=\"clap\">:clap:</span></p>",
+        "id": 425654641,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709965309
+    },
+    {
+        "content": "<p>have you done any performance checks?</p>",
+        "id": 425671014,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709975967
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425671014\">said</a>:</p>\n<blockquote>\n<p>have you done any performance checks?</p>\n</blockquote>\n<p>I’m waiting for a time slot on the test bed. Probably later today.</p>",
+        "id": 425677288,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1709982107
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425671014\">said</a>:</p>\n<blockquote>\n<p>have you done any performance checks?</p>\n</blockquote>\n<p><a href=\"/user_uploads/35136/n6_v9sNFr_CWgV1N_k8CP70O/image.png\">image.png</a></p>\n<p>Whiskers are 95 percent confidence intervals for the sample mean of each configuration.</p>\n<p>The mean across all configurations:</p>\n<blockquote>\n<p>Without lto: -0.015<br>\nWith lto: -0.026</p>\n</blockquote>\n<p>So, built-in C null block is benefiting more from LTO than built-in Rust null block is. On average 1.1%.</p>",
+        "id": 425777312,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1710080498
+    },
+    {
+        "content": "<p>is this the performance you expect of LTO? so is it working as expected?</p>",
+        "id": 425786067,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1710088212
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/425786067\">said</a>:</p>\n<blockquote>\n<p>is this the performance you expect of LTO? so is it working as expected?</p>\n</blockquote>\n<p>Not sure what I expected. As far as I recall I did not see any big difference with I did LTO on the modules only earlier.</p>",
+        "id": 425789360,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1710091381
+    },
+    {
+        "content": "<p>Looks like I was missing the patch that set <code>-Clinker_plugin=lto</code> for rust code. I have to rerun the experiment <span aria-label=\"face palm\" class=\"emoji emoji-1f926\" role=\"img\" title=\"face palm\">:face_palm:</span></p>",
+        "id": 425789442,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1710091449
+    },
+    {
+        "content": "<p>This is my \"not working in progress\" <a href=\"https://github.com/fbq/linux/tree/dev/rust/lto\">https://github.com/fbq/linux/tree/dev/rust/lto</a> ;-)</p>",
+        "id": 426413146,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1710358426
+    },
+    {
+        "content": "<p>I've found that LLVM will not inline a <code>-fno-delete-null-pointer-checks</code> function into a <code>-fdelete-null-pointer-checks</code> function. I think filtering this option out for helpers should be fine?</p>",
+        "id": 435426286,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714062593
+    },
+    {
+        "content": "<p>what's the effect of filtering out?</p>",
+        "id": 435428320,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714063304
+    },
+    {
+        "content": "<p>If any of the helpers do a null pointer dereference then it becomes UB instead of trapping to exception handler.</p>",
+        "id": 435428477,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714063361
+    },
+    {
+        "content": "<p>It will trigger a page fault instead of a panic?</p>",
+        "id": 435428587,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063417
+    },
+    {
+        "content": "<p>But the page fault handler for the page at address 0 is also a stack dump</p>",
+        "id": 435428748,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063465
+    },
+    {
+        "content": "<p>So it should be the same?</p>",
+        "id": 435428773,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063476
+    },
+    {
+        "content": "<p>It's not guaranteed to trigger a page fault, because UB can do anything.</p>",
+        "id": 435428828,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714063502
+    },
+    {
+        "content": "<p>How?</p>",
+        "id": 435428978,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063562
+    },
+    {
+        "content": "<p>Currently with the option C code reliable trigger a page fault on null pointer dereference. with the option removed it becomes UB, so the compiler can assume a pointer is non-null after a dereference.</p>",
+        "id": 435429103,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714063610
+    },
+    {
+        "content": "<p>The C code <em>shouldn't</em> contain null pointer dereference, but the option is added to prevent any \"smart\" C compiler from optimising <code>struct bar* bar = &amp;foo-&gt;bar; if (!foo) do_sth();</code></p>",
+        "id": 435429243,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714063665
+    },
+    {
+        "content": "<p>Well, the classic example is <code>if (*ptr) { ... }</code> getting optimized out if <code>ptr</code> is known to be null. In that case, it skips the branch instead of doing a page fault. </p>\n<p>With the flag, null ptr dereference is guaranteed to trigger a page fault.</p>",
+        "id": 435429256,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714063670
+    },
+    {
+        "content": "<p>Cool <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 435429366,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063707
+    },
+    {
+        "content": "<p>Would that really skip the branch though?</p>",
+        "id": 435429719,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063828
+    },
+    {
+        "content": "<p>There are real world examples of things along these lines that inspired the addition of the flag.</p>",
+        "id": 435429775,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714063850
+    },
+    {
+        "content": "<p>You could have a valid pointer to data at address 0</p>",
+        "id": 435429776,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063851
+    },
+    {
+        "content": "<p>No you can't. C forbids data at 0</p>",
+        "id": 435429807,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714063866
+    },
+    {
+        "content": "<p>Oh</p>",
+        "id": 435429860,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063880
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/435426286\">said</a>:</p>\n<blockquote>\n<p>I've found that LLVM will not inline a <code>-fno-delete-null-pointer-checks</code> function into a <code>-fdelete-null-pointer-checks</code> function. I think filtering this option out for helpers should be fine?</p>\n</blockquote>\n<p>so is the issue is that <code>rustc</code> emits code with <code>-fdelete-null-pointer-checks</code>?</p>",
+        "id": 435429898,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1714063896
+    },
+    {
+        "content": "<p>Like in the C standard?</p>",
+        "id": 435429899,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714063896
+    },
+    {
+        "content": "<p>s/C/ISO C/ I think ;-)</p>",
+        "id": 435429921,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714063906
+    },
+    {
+        "content": "<p><a href=\"https://lwn.net/Articles/342420/\">https://lwn.net/Articles/342420/</a></p>",
+        "id": 435429948,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1714063917
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/435429898\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/435426286\">said</a>:</p>\n<blockquote>\n<p>I've found that LLVM will not inline a <code>-fno-delete-null-pointer-checks</code> function into a <code>-fdelete-null-pointer-checks</code> function. I think filtering this option out for helpers should be fine?</p>\n</blockquote>\n<p>so is the issue is that <code>rustc</code> emits code with <code>-fdelete-null-pointer-checks</code>?</p>\n</blockquote>\n<p>That's the default. <code>f-no-delete-null-pointer-checks</code> add a <code>null_is_valid</code> LLVM attribute to all functions.</p>",
+        "id": 435430368,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714064066
+    },
+    {
+        "content": "<p>would it be feasible to make <code>rustc</code> use <code>-f-no-delete-null-pointer-checks</code>?</p>",
+        "id": 435430485,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1714064116
+    },
+    {
+        "content": "<p>I guess that means we lose a few optimization</p>",
+        "id": 435430550,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714064138
+    },
+    {
+        "content": "<p>It doesn't make a lot sense to add it to Rust code TBH because in Rust you can't get null reference.</p>",
+        "id": 435430687,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714064179
+    },
+    {
+        "content": "<p>Niche optimisation for references is also impossible to turn off</p>",
+        "id": 435430725,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714064197
+    },
+    {
+        "content": "<p>So we shouldn't be worried about the null-pointer-dereference caused by Rust code, because that would mean a bug in Rust unsafe code, the only thing we worry is C code has a bug, and the behavior is different from a normal C function vs a helper C function?</p>",
+        "id": 435432424,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714064817
+    },
+    {
+        "content": "<p>Basically if the C code has a bug, the severity is then raised from kernel panic to a potentially exploitable UB. Although, I don't think there's many (if any?) null checks in these inline helpers.</p>",
+        "id": 435434028,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714065459
+    },
+    {
+        "content": "<p>well, there should be zero null-pointer-dereference in these inline helpers ;-)</p>",
+        "id": 435454081,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714073449
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/435429243\">said</a>:</p>\n<blockquote>\n<p>The C code <em>shouldn't</em> contain null pointer dereference, but the option is added to prevent any \"smart\" C compiler from optimising <code>struct bar* bar = &amp;foo-&gt;bar; if (!foo) do_sth();</code></p>\n</blockquote>\n<p>Would compiler optimize with \"delete-null-pointer-checks\" even if it's a volatile read? Like <code>if (!READ_ONCE(foo)) do_sth();</code>?</p>",
+        "id": 435455123,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1714073908
+    },
+    {
+        "content": "<p>In rust doing the equivalent of <code>`struct bar* bar = &amp;foo-&gt;bar; if (!READ_ONCE(foo)) do_sth();</code> could spuriously read the value behind <code>*bar</code> even if <code>!foo</code>. Creating a reference is a promise that the reference is dereferenceable. In both stacked borrows and tree borrows creating a shared reference will insert a fake read of the referenced memory. A fake read acts like a real read in that it causes UB when a real read would cause UB, but it just so happens to be lowered to a nop by the compiler unless the compiler decides that speculatively reading it would be advantageous.</p>",
+        "id": 435549671,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1714123747
+    },
+    {
+        "content": "<p>I've rebased my change on top the helper splitting and get it to a working state at <a href=\"https://github.com/nbdd0121/linux/tree/thin-lto\">https://github.com/nbdd0121/linux/tree/thin-lto</a>. <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span></p>",
+        "id": 436532478,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714580927
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436532478\">said</a>:</p>\n<blockquote>\n<p>I've rebased my change on top the helper splitting and get it to a working state at <a href=\"https://github.com/nbdd0121/linux/tree/thin-lto\">https://github.com/nbdd0121/linux/tree/thin-lto</a>. <span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span></p>\n</blockquote>\n<p>Awesome. Anything I need to enable in config, or is it enough to apply the patch and build?</p>",
+        "id": 436532825,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714581050
+    },
+    {
+        "content": "<p>CONFIG_RUST_LTO_HELPERS=y</p>",
+        "id": 436532872,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714581068
+    },
+    {
+        "content": "<p>There're 3 patches to apply</p>",
+        "id": 436532938,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714581096
+    },
+    {
+        "content": "<p>Ok. I will queue a run tomorrow. Runtime for the full thing is 55 hours, so I should have results maybe by Friday evening.</p>",
+        "id": 436533148,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714581177
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436532872\">said</a>:</p>\n<blockquote>\n<p>CONFIG_RUST_LTO_HELPERS=y</p>\n</blockquote>\n<p>Would it make sense to depend on <code>HAS_LTO_CLANG</code>? It is in <code>arch/Kconfig</code>.</p>",
+        "id": 436555500,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714589839
+    },
+    {
+        "content": "<p>This doesn't need full LTO support, it's just linking two LLVM BC modules</p>",
+        "id": 436555664,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714589910
+    },
+    {
+        "content": "<p>To check if __always_inline would make a difference, I think it's probably sufficient to do a build with <code>inline</code> and see if vmlinux contains any rust_helper_ symbols.</p>",
+        "id": 436555906,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714590010
+    },
+    {
+        "content": "<p>So it is OK to link with linker != <code>lld</code> after the bc has been patched into the rust crate for instance?</p>",
+        "id": 436555987,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714590035
+    },
+    {
+        "content": "<p>Yes</p>",
+        "id": 436556021,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714590051
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436555906\">said</a>:</p>\n<blockquote>\n<p>To check if __always_inline would make a difference, I think it's probably sufficient to do a build with <code>inline</code> and see if vmlinux contains any rust_helper_ symbols.</p>\n</blockquote>\n<p>I will take a look at the symbol tables of my module and the generated code also</p>",
+        "id": 436556314,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714590189
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> did you try building out of tree? I get this:</p>\n<div class=\"codehilite\" data-code-language=\"TeX\"><pre><span></span><code>rust/helpers/helpers<span class=\"nb\">_</span>combined.c:4:10: fatal error: 'helpers.h' file not found\n    4 | #include \"helpers.h\"\n      |          <span class=\"nb\">^</span>~~~~~~~~~~\n1 error generated.\n</code></pre></div>",
+        "id": 436717506,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714662891
+    },
+    {
+        "content": "<p>No, I haven't tried that</p>",
+        "id": 436718371,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714663154
+    },
+    {
+        "content": "<p>Is there a easy way to fix this?</p>",
+        "id": 436718398,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714663162
+    },
+    {
+        "content": "<p>Just add to cflags perhaps?</p>",
+        "id": 436718494,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714663201
+    },
+    {
+        "content": "<p>I’ll try later</p>",
+        "id": 436721588,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714664124
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436555906\">said</a>:</p>\n<blockquote>\n<p>To check if __always_inline would make a difference, I think it's probably sufficient to do a build with <code>inline</code> and see if vmlinux contains any rust_helper_ symbols.</p>\n</blockquote>\n<p>I got it to build, and it seems to work. There are no <code>rust_helper_..</code> in <code>vmlinux.o</code>, or in my rust module. Everything seems to be inlined correctly. I will send it off to test now.</p>",
+        "id": 436762840,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714678232
+    },
+    {
+        "content": "<p>Can you share the patch?</p>",
+        "id": 436762940,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714678271
+    },
+    {
+        "content": "<p><a href=\"https://github.com/nbdd0121/linux/tree/thin-lto\">https://github.com/nbdd0121/linux/tree/thin-lto</a></p>",
+        "id": 436763061,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714678314
+    },
+    {
+        "content": "<p>You can have my changes as well if you like. But it is on top of my very messy WIP bleeding edge thing.</p>",
+        "id": 436763205,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714678369
+    },
+    {
+        "content": "<p>Yes please</p>",
+        "id": 436763277,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714678387
+    },
+    {
+        "content": "<p><span aria-label=\"grimacing\" class=\"emoji emoji-1f62c\" role=\"img\" title=\"grimacing\">:grimacing:</span> <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 436763311,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714678409
+    },
+    {
+        "content": "<p><a href=\"https://github.com/metaspace/linux/tree/gary-thin-lto-SUPER-WIP-DONT-USE\">https://github.com/metaspace/linux/tree/gary-thin-lto-SUPER-WIP-DONT-USE</a></p>",
+        "id": 436763511,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714678483
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <code>clang</code> is complaining about some options that it does not use when lowering from bc to machine code. Not sure how to fix it. Perhap we should just filter out those options? Or maybe we should use link time flags instead?</p>",
+        "id": 436763875,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714678618
+    },
+    {
+        "content": "<p>Yeah, I am aware of the issue. I primarily want to get hold of the optimization flags</p>",
+        "id": 436764011,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714678670
+    },
+    {
+        "content": "<p>I got this error in CI:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>  EXPORTS rust/exports_core_generated.h\nmake[3]: *** No rule to make target 'rust/helpers_combined.o', needed by 'rust/exports_helpers_generated.h'.  Stop.\nmake[2]: *** [/build/linux-kernel-source/Makefile:1205: prepare] Error 2\nmake[1]: *** [/build/linux-kernel-source/Makefile:240: __sub-make] Error 2\nmake[1]: Leaving directory '/build/linux-kernel-source/build'\nmake: *** [Makefile:240: __sub-make] Error 2\nerror: builder for '/nix/store/mwcd6lnd3glwjk2kjcpggpcna6razhs7-linux-kernel.drv' failed with exit code 2;\n       last 10 log lines:\n       &gt;   CC      /build/linux-kernel-source/build/tools/objtool/librbtree.o\n       &gt;   LD      /build/linux-kernel-source/build/tools/objtool/objtool-in.o\n       &gt;   LINK    /build/linux-kernel-source/build/tools/objtool/objtool\n       &gt;   RUSTC L rust/core.o\n       &gt;   EXPORTS rust/exports_core_generated.h\n       &gt; make[3]: *** No rule to make target 'rust/helpers_combined.o', needed by 'rust/exports_helpers_generated.h'.  Stop.\n       &gt; make[2]: *** [/build/linux-kernel-source/Makefile:1205: prepare] Error 2\n       &gt; make[1]: *** [/build/linux-kernel-source/Makefile:240: __sub-make] Error 2\n       &gt; make[1]: Leaving directory '/build/linux-kernel-source/build'\n       &gt; make: *** [Makefile:240: __sub-make] Error 2\n       For full logs, run 'nix log /nix/store/mwcd6lnd3glwjk2kjcpggpcna6razhs7-linux-kernel.drv'.\nerror: 1 dependencies of derivation '/nix/store/dcsk3agds59104rv7566cv2ppm3qgpza-nixos-system-nixos-23.11.5353.878ef7d9721b.drv' failed to build\nError: Failed to build\n</code></pre></div>\n<p>Will take a look tomorrow.</p>",
+        "id": 436766537,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714679627
+    },
+    {
+        "content": "<p>I'll try to fix the out of tree build tonight</p>",
+        "id": 436766704,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714679691
+    },
+    {
+        "content": "<p>I think I have the out-of-tree build and unused arg warning issue fixed now</p>",
+        "id": 436769327,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714680695
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436769327\">said</a>:</p>\n<blockquote>\n<p>I think I have the out-of-tree build and unused arg warning issue fixed now</p>\n</blockquote>\n<p>I'll take a look at your branch again <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 436829899,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714720450
+    },
+    {
+        "content": "<p>Benchmarks are running now <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span> I had to do a bit more work because I was missing <code>llvm-as</code> in the build environment <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 436871841,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714738642
+    },
+    {
+        "content": "<p>Interesting, can you share your setup? llvm-link is available but not llvm-as?</p>",
+        "id": 436872038,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714738722
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436872038\">said</a>:</p>\n<blockquote>\n<p>Interesting, can you share your setup? llvm-link is available but not llvm-as?</p>\n</blockquote>\n<p>It is a bespoke NixOS setup. I will share the config at some point, but it is a bit too messy right now. I am using <a href=\"https://github.com/DeterminateSystems/nix-netboot-serve\"><code>nix-netboot-serve</code></a> to boot bare metal nodes into NixOS system expressions that I generate for the CI task.</p>\n<p>I did not test LTO since I put this system online. Otherwise I would have gotten an error for <code>llvm-link</code> as well.</p>",
+        "id": 436873047,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714739114
+    },
+    {
+        "content": "<p>I was able to hack up something similar (don't have it broken out into CONFIG_ statements) by turning on LTO for Rust only, turning on LTO for <code>helpers.o</code>, and then switching all the post-processing you'd do for a full LTO kernel build on. I don't see anything starting with <code>rust_helpers_</code> in our resulting vmlinux, and BPF loads, so it avoids the BTF poisoning issue Alice and I were hitting earlier.</p>\n<p>What you have may be cleaner since it doesn't force you to LTO the Rust stuff, just mentioning it since it avoids the need for special linking procedures.</p>",
+        "id": 436916227,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1714752885
+    },
+    {
+        "content": "<p>The reason that I go with this approach is that it allows inlining helpers into loadable modules.</p>",
+        "id": 436922220,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714755018
+    },
+    {
+        "content": "<p>I would expect loadable modules to usually be accessing this stuff via subsytem bindings in the base kernel image, but that makes some sense.</p>",
+        "id": 436926010,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1714756474
+    },
+    {
+        "content": "<p>IIRC Andreas compile his driver as modules</p>",
+        "id": 436926756,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714756802
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"554954\">Matthew Maurer</span> <a href=\"#narrow/stream/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/436926010\">said</a>:</p>\n<blockquote>\n<p>I would expect loadable modules to usually be accessing this stuff via subsytem bindings in the base kernel image, but that makes some sense.</p>\n</blockquote>\n<p>They do access C APIs through subsystem abstractions. But some times the Rust abstractions are inlined into the module. If the helpers are inlined into the abstraction code emitted in vmlinux, it does not help the module.</p>",
+        "id": 436931435,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714758644
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> I get an average speedup of 3.4 percent when applying this patch <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span> Awesome work!</p>",
+        "id": 437206534,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714979561
+    },
+    {
+        "content": "<p>I also tried LTO on just rust and the helpers last Friday, and got a speedup of 3.3%. those numbers are very close.</p>",
+        "id": 437209259,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714980765
+    },
+    {
+        "content": "<p>The speedup is in comparision to LTO disabled?</p>",
+        "id": 437235245,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714991486
+    },
+    {
+        "content": "<p>Yes.</p>",
+        "id": 437235266,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714991499
+    },
+    {
+        "content": "<p>What's the relative difference compared to the previous LTO attempts?</p>",
+        "id": 437235285,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1714991508
+    },
+    {
+        "content": "<p>Compared to what precisely? I don't currently have working full LTO.</p>",
+        "id": 437235408,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1714991561
+    },
+    {
+        "content": "<p>I saw varying results when I tested with NVMe earlier <a href=\"https://rust-for-linux.com/nvme-driver#results-2\">https://rust-for-linux.com/nvme-driver#results-2</a></p>",
+        "id": 437236483,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714992080
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/35136/78ij6QfueeElqlqPNW3gqh6E/image.png\">image.png</a><br>\nResults with this patch is also varying, but over all more positive. I did not try the NVMe driver yet.</p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/35136/78ij6QfueeElqlqPNW3gqh6E/image.png\" title=\"image.png\"><img src=\"/user_uploads/35136/78ij6QfueeElqlqPNW3gqh6E/image.png\"></a></div>",
+        "id": 437236714,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1714992162
+    },
+    {
+        "content": "<p>I ran the test for <code>rnull</code> rebased on 6.10-rc3:</p>\n<p><a href=\"/user_uploads/35136/ZIM3k6NwVAkEEuchCCs8aaIQ/image.png\">image.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/35136/ZIM3k6NwVAkEEuchCCs8aaIQ/image.png\" title=\"image.png\"><img data-original-dimensions=\"1702x921\" src=\"/user_uploads/thumbnail/35136/ZIM3k6NwVAkEEuchCCs8aaIQ/image.png/840x560.webp\"></a></div>",
+        "id": 455922419,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1722601944
+    },
+    {
+        "content": "<p>For 6.9-rc3 LTO gave 3.4% speedup. For 6.10-rc3 only 2.0%.</p>",
+        "id": 455922676,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1722602015
+    },
+    {
+        "content": "<p>I have updated my branch based on latest rust-next, renamed the option <code>RUST_INLINE_HELPERS</code> and added LLVM version compatibility check</p>",
+        "id": 475153198,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1728253973
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> I tried out your current <code>thin-lto</code> branch  <code>50538d9f26dd93a94727c23c1efd17895c7eb07c</code>. It does not compile for me. I get \"Unused argument\" from clang for <code>-idirafter</code> and <code>-isystem</code>.</p>",
+        "id": 482638070,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731684610
+    },
+    {
+        "content": "<p>I think that's with your nix setup? Looks like something added by clang wrappers.</p>",
+        "id": 482643421,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1731686134
+    },
+    {
+        "content": "<p>It's with nix yes. I didn't see this before though. I'll try building <code>rust-next</code>.</p>",
+        "id": 482672222,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731695558
+    },
+    {
+        "content": "<p>Not happening on <code>rust-next</code>. This is actually without enabling <code>CONFIG_RUST_INLINE_HELPERS</code>. I'll try to debug.</p>",
+        "id": 482676769,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731697202
+    },
+    {
+        "content": "<p>Oh, I did enable it. It looks like it is <code>rustc</code> calling out to <code>clang</code> when emitting the bitcode, and the nix clang wrapper supplying this flag is apparently not cool in this situation.</p>",
+        "id": 482679297,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731698107
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>  do you think this is a viable fix:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code>modified   rust/Makefile\n<span class=\"gu\">@@ -373,7 +373,7 @@ quiet_cmd_rustc_library = $(if $(skip_clippy),RUSTC,$(RUSTC_OR_CLIPPY_QUIET)) L</span>\n<span class=\"w\"> </span>       --crate-name $(patsubst %.o,%,$(notdir $@)) $&lt; \\\n<span class=\"w\"> </span>       --sysroot=/dev/null \\\n<span class=\"w\"> </span>   $(if $(link_helper),;$(LLVM_LINK) $(patsubst %.o,%.bc,$@) $(obj)/helpers/helpers.bc -o $(patsubst %.o,%.m.bc,$@); \\\n<span class=\"gd\">-       $(CC) $(CLANG_FLAGS) $(KBUILD_CFLAGS) -mllvm=--ignore-tti-inline-compatible -c $(patsubst %.o,%.m.bc,$@) -o $@) \\</span>\n<span class=\"gi\">+       $(CC) $(CLANG_FLAGS) $(KBUILD_CFLAGS) -Wno-unused-command-line-argument -mllvm=--ignore-tti-inline-compatible -c $(patsubst %.o,%.m.bc,$@) -o $@) \\</span>\n<span class=\"w\"> </span>   $(if $(rustc_objcopy),;$(OBJCOPY) $(rustc_objcopy) $@) \\\n<span class=\"w\"> </span>   $(cmd_objtool)\n\nmodified   scripts/Makefile.build\n<span class=\"gu\">@@ -275,7 +275,7 @@ rust_common_cmd = \\</span>\n<span class=\"w\"> </span>quiet_cmd_rustc_o_rs = $(RUSTC_OR_CLIPPY_QUIET) $(quiet_modtag) $@\n<span class=\"w\"> </span>      cmd_rustc_o_rs = $(rust_common_cmd) --emit=$(if $(CONFIG_RUST_INLINE_HELPERS),llvm-bc=$(patsubst %.o,%.bc,$@),obj=$@) $&lt; \\\n<span class=\"w\"> </span>   $(if $(CONFIG_RUST_INLINE_HELPERS),;$(LLVM_LINK) $(patsubst %.o,%.bc,$@) $(objtree)/rust/helpers/helpers.bc -o $(patsubst %.o,%.m.bc,$@); \\\n<span class=\"gd\">-       $(CC) $(CLANG_FLAGS) $(KBUILD_CFLAGS) -mllvm=--ignore-tti-inline-compatible -c $(patsubst %.o,%.m.bc,$@) -o $@) \\</span>\n<span class=\"gi\">+       $(CC) $(CLANG_FLAGS) $(KBUILD_CFLAGS) -Wno-unused-command-line-argument -mllvm=--ignore-tti-inline-compatible -c $(patsubst %.o,%.m.bc,$@) -o $@) \\</span>\n<span class=\"w\"> </span>   $(cmd_objtool)\n\n<span class=\"w\"> </span>define rule_rustc_o_rs\n</code></pre></div>",
+        "id": 482874215,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731859555
+    },
+    {
+        "content": "<p>I just point my CC to unwrapped clang</p>",
+        "id": 483059081,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1731945292
+    },
+    {
+        "content": "<p>Then the rest of the kernel fails to build.</p>",
+        "id": 483063235,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731946269
+    },
+    {
+        "content": "<p>Actually, it just occurs to me it might be hostprogs that fail to build. They would need to know where to find libc.</p>",
+        "id": 483063403,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731946315
+    },
+    {
+        "content": "<p>How? If only CC but not HOSTCC is changed then it should be fine</p>",
+        "id": 483063473,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1731946325
+    },
+    {
+        "content": "<p>You are probably right. I don't set HOSTCC. I'll try to use the wrapped one for HOSTCC and the unwrapped one for CC.</p>",
+        "id": 483063613,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731946366
+    },
+    {
+        "content": "<p>For some reason I only need to set CC= in make and everything just works</p>",
+        "id": 483063732,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1731946398
+    },
+    {
+        "content": "<p>It'll be good if Wunused-command-line-argument can somehow ignore those added by nix wrapper</p>",
+        "id": 483063797,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1731946417
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/483063732\">said</a>:</p>\n<blockquote>\n<p>For some reason I only need to set CC= in make and everything just works</p>\n</blockquote>\n<p>Yea, so I didn't set anything. Just have <code>clang_18</code> in path. That is probably the issue.</p>",
+        "id": 483064066,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731946477
+    },
+    {
+        "content": "<p>I am completely baffled regarding how <code>CC</code> is set in the makefile. It seems like it is hard coded to either <code>$(CROSS_COMPILE)gcc</code> or <code>$(LLVM_PREFIX)clang$(LLVM_SUFFIX)</code> depending on whether <code>LLVM=</code> is passed. So you passing <code>CC=</code> does not do _anything_. Unless I am missing something?</p>",
+        "id": 483107812,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731958547
+    },
+    {
+        "content": "<p>And extrapolating on that, it is impossible to pass different <code>HOSTCC</code> and <code>CC</code> when using clang/llvm.</p>",
+        "id": 483108027,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731958612
+    },
+    {
+        "content": "<p>I <em>must</em> me missing something here, right?</p>",
+        "id": 483108374,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731958729
+    },
+    {
+        "content": "<blockquote>\n<p>It seems like it is hard coded to either</p>\n</blockquote>\n<p>No, it isn't -- you can easily check by passing a random value in <code>CC</code>. Note that it has to be a parameter to <code>make</code>, _not_ an environment variable.</p>\n<p>Can you confirm that setting <code>make ... CC=foo</code> breaks your build?</p>",
+        "id": 483118816,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1731962345
+    },
+    {
+        "content": "<p>I set it via env and it has no effect.  Then I see this <a href=\"https://github.com/Rust-for-Linux/linux/blob/b2603f8ac8217bc59f5c7f248ac248423b9b99cb/Makefile#L478\">https://github.com/Rust-for-Linux/linux/blob/b2603f8ac8217bc59f5c7f248ac248423b9b99cb/Makefile#L478</a></p>",
+        "id": 483187314,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731995465
+    },
+    {
+        "content": "<p>Looks like a hard code to me</p>",
+        "id": 483187340,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731995492
+    },
+    {
+        "content": "<p>So what am I not seeing? Where is the conditional set that is not executed if CC is set outside make?</p>",
+        "id": 483187449,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1731995562
+    },
+    {
+        "content": "<p>OK, turns out I did not understand the difference between setting a variable in the environment vs passing it as a flag to make. What a waste of time, gotta read the manual next time.</p>",
+        "id": 483197097,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1732001194
+    },
+    {
+        "content": "<p>But the use is also inconsistent. Some kbuild parameters are picked up from the environment, such as <code>KBUILD_BUILD_HOST</code>.</p>",
+        "id": 483197399,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1732001311
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/483197097\">said</a>:</p>\n<blockquote>\n<p>OK, turns out I did not understand the difference between setting a variable in the environment vs passing it as a flag to make. What a waste of time, gotta read the manual next time.</p>\n</blockquote>\n<p>That is why I remarked above the \"not\" :P</p>",
+        "id": 483225274,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1732010905
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/483187449\">said</a>:</p>\n<blockquote>\n<p>So what am I not seeing? Where is the conditional set that is not executed if CC is set outside make?</p>\n</blockquote>\n<p>There is no conditional because it is how Make variables behave.</p>",
+        "id": 483225465,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1732010979
+    },
+    {
+        "content": "<p>Yes, it all makes sense now. I got really confused for a while there <span aria-label=\"laughter tears\" class=\"emoji emoji-1f602\" role=\"img\" title=\"laughter tears\">:laughter_tears:</span></p>",
+        "id": 483225682,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1732011039
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/LTO.20Rust.20modules.20with.20C.20helpers/near/483197399\">said</a>:</p>\n<blockquote>\n<p>But the use is also inconsistent. Some kbuild parameters are picked up from the environment, such as <code>KBUILD_BUILD_HOST</code>.</p>\n</blockquote>\n<p>Yeah, it is confusing, but that one is at least documented.</p>",
+        "id": 483225756,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1732011066
+    }
+]

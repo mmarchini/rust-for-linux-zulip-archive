@@ -1,0 +1,208 @@
+<html>
+<head><meta charset="utf-8"><title>Workqueues bound to a lifetime · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html">Workqueues bound to a lifetime</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="600111585"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600111585" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600111585">(Jun 04 2026 at 15:06)</a>:</h4>
+<p>I'm thinking about how to work in workqueues with the new lifetime model. Let's say we have device private data that looks like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyGpuPrivateData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">wq</span><span class="p">:</span><span class="w"> </span><span class="nc">OwnedWorkqueue</span><span class="o">&lt;'</span><span class="na">foo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">foo</span><span class="p">:</span><span class="w"> </span><span class="nc">Foo</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>and that <code>Workqueue::&lt;'a&gt;::spawn</code> accepts any closure that is <code>'a</code>. (Note contravariance in 'a.) Then we want to be able to do this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">MyGpuPrivateData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">spawn_work</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">wq</span><span class="p">.</span><span class="n">spawn</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// ok because `wq` borrows from `foo`</span>
+<span class="w">            </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{}"</span><span class="p">,</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">foo</span><span class="p">);</span>
+<span class="w">        </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>But my understanding is that the self-referential pin-init stuff only lets you create such self-referential values when constructing <code>MyGpuPrivateData</code> and not after the fact.</p>
+<p>Maybe you can do this by stashing a <code>&amp;Workqueue</code> elsewhere in <code>MyGpuPrivateData</code>?</p>
+<p>Thoughts?</p>
+<p>cc  <span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span></p>
+
+
+
+<a name="600112337"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600112337" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600112337">(Jun 04 2026 at 15:09)</a>:</h4>
+<p><del>this isn't self-referential?</del> ah I see it now</p>
+
+
+
+<a name="600112908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600112908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600112908">(Jun 04 2026 at 15:12)</a>:</h4>
+<p>shouldn't the transformation <code>&amp;'a Self -&gt; &amp;'foo Foo</code> always be allowed for <code>MyGpuPrivateData</code>?</p>
+
+
+
+<a name="600113007"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113007" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113007">(Jun 04 2026 at 15:12)</a>:</h4>
+<p>not sure where the <code>'foo</code> lifetime would come from, but maybe this can just be a field projection?</p>
+
+
+
+<a name="600113045"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113045" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113045">(Jun 04 2026 at 15:12)</a>:</h4>
+<p>There's going to be a <code>with_project</code> API that allows you to this</p>
+
+
+
+<a name="600113153"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113153" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113153">(Jun 04 2026 at 15:13)</a>:</h4>
+<p>It uses HRTB to mint <code>'foo</code> lifetime, and the projected type is going to be <code>&amp;'foo Foo</code> for the <code>foo</code> field</p>
+
+
+
+<a name="600113321"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113321" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113321">(Jun 04 2026 at 15:14)</a>:</h4>
+<p>ah cool! is it something like this?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">MyGpuPrivateData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_project</span><span class="o">&lt;</span><span class="n">R</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">f</span><span class="p">:</span><span class="w"> </span><span class="nc">for</span><span class="o">&lt;'</span><span class="na">foo</span><span class="o">&gt;</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="n">MyGpuPrivateDataProjected</span><span class="o">&lt;'</span><span class="na">foo</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">R</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">R</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="600113372"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113372" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113372">(Jun 04 2026 at 15:14)</a>:</h4>
+<p>Yes</p>
+
+
+
+<a name="600113492"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113492" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113492">(Jun 04 2026 at 15:14)</a>:</h4>
+<p><a href="https://github.com/Rust-for-Linux/pin-init/blob/dev/selfref/examples/selfref.rs">https://github.com/Rust-for-Linux/pin-init/blob/dev/selfref/examples/selfref.rs</a></p>
+
+
+
+<a name="600113498"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113498" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113498">(Jun 04 2026 at 15:14)</a>:</h4>
+<p>I do wonder if and how field projection could make this nice... <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="600113780"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113780" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113780">(Jun 04 2026 at 15:16)</a>:</h4>
+<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to "all fields below <code>wq</code>"</p>
+
+
+
+<a name="600113801"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113801" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113801">(Jun 04 2026 at 15:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113498">said</a>:</p>
+<blockquote>
+<p>I do wonder if and how field projection could make this nice... <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+</blockquote>
+<p>I feel like this needs more than just FP, since we have no way of naming the <code>'foo</code> lifetime</p>
+
+
+
+<a name="600113937"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600113937" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600113937">(Jun 04 2026 at 15:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113780">said</a>:</p>
+<blockquote>
+<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to "all fields below <code>wq</code>"</p>
+</blockquote>
+<p>I'd imagine we could have some kind of "field groups"</p>
+
+
+
+<a name="600114019"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600114019" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600114019">(Jun 04 2026 at 15:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113780">said</a>:</p>
+<blockquote>
+<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to "all fields below <code>wq</code>"</p>
+</blockquote>
+<p>Just use the first field name that needs to be borrowed. Outlive bounds exist for all borrowed fields based on their drop order.</p>
+
+
+
+<a name="600114071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600114071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600114071">(Jun 04 2026 at 15:17)</a>:</h4>
+<p>ah, neat</p>
+
+
+
+<a name="600115938"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600115938" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600115938">(Jun 04 2026 at 15:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113801">said</a>:</p>
+<blockquote>
+<p>I feel like this needs more than just FP, since we have no way of naming the <code>'foo</code> lifetime</p>
+</blockquote>
+<ul>
+<li>if we had a places as lifetimes, we could have <code>self: &amp;Self -&gt; &amp;'{self.foo} Foo</code>, which the borrow checker could permit using in a closure that's spawned on the workqueue.</li>
+<li>however that signature is only valid if <code>foo</code> is not dropped before the workqueue is finished. currently it seems to me that this is solved by dropping the workqueue first and then <code>foo</code>.</li>
+</ul>
+<p>Because of this, std can't improve upon the output lifetime of borrowing unless it also supports self-referential types directly (and then it can check that <code>foo</code> is only ever dropped after <code>wq</code>).</p>
+
+
+
+<a name="600116041"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600116041" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600116041">(Jun 04 2026 at 15:25)</a>:</h4>
+<p>so I don't think that FP will come in handy here</p>
+
+
+
+<a name="600116484"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600116484" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600116484">(Jun 04 2026 at 15:27)</a>:</h4>
+<p>The workqueue could also take a new type Data&lt;'foo&gt; as argument that only contains the references the workqueue actually needs from  <code>struct MyGpuPrivateData</code>.</p>
+<p>But if this already works, I guess this is more generic as you can always create a new struct within <code>struct MyGpuPrivateData</code> that contains the workqueue, plus the data you want to expose to the workqueue.</p>
+
+
+
+<a name="600119189"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600119189" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600119189">(Jun 04 2026 at 15:39)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> I assume we can then relax <code>W: RawWorkItem&lt;ID&gt; + Send + 'static</code> to <code>W: RawWorkItem&lt;ID&gt; + Send + 'wq</code>.</p>
+
+
+
+<a name="600119616"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600119616" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600119616">(Jun 04 2026 at 15:41)</a>:</h4>
+<p>How would you want to handle work items queued on the global system workqueues that must not exceed driver unbind?</p>
+
+
+
+<a name="600119700"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600119700" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600119700">(Jun 04 2026 at 15:42)</a>:</h4>
+<p>Exactly</p>
+
+
+
+<a name="600119840"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600119840" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600119840">(Jun 04 2026 at 15:42)</a>:</h4>
+<p>Such work items would either have to be made <code>'static</code> or require a different spawn method.</p>
+
+
+
+<a name="600120030"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600120030" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600120030">(Jun 04 2026 at 15:43)</a>:</h4>
+<p>I guess the spawn method would return a handle that cancels work on drop, and it cannot be forgotten?</p>
+
+
+
+<a name="600134100"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Workqueues%20bound%20to%20a%20lifetime/near/600134100" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime.html#600134100">(Jun 04 2026 at 16:51)</a>:</h4>
+<blockquote>
+<p>and it cannot be forgotten?</p>
+</blockquote>
+<p>What do you mean cannot be forgotten? Do you mean <code>mem::forget</code>?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,224 @@
+[
+    {
+        "content": "<p>I have a bindgen issue, hope I can some help here. I add a C function as this in <code>include/linux/irqflags.h</code>, </p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"kr\">inline</span><span class=\"w\"> </span><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"nf\">local_interrupt_enable</span><span class=\"p\">(</span><span class=\"kt\">void</span><span class=\"p\">)</span>\n<span class=\"p\">{</span>\n<span class=\"w\">          </span><span class=\"kt\">int</span><span class=\"w\"> </span><span class=\"n\">new_count</span><span class=\"p\">;</span>\n\n<span class=\"w\">          </span><span class=\"n\">new_count</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">hardirq_disable_exit</span><span class=\"p\">();</span>\n\n<span class=\"w\">          </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"n\">new_count</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"w\"> </span><span class=\"n\">HARDIRQ_DISABLE_MASK</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                  </span><span class=\"kt\">unsigned</span><span class=\"w\"> </span><span class=\"kt\">long</span><span class=\"w\"> </span><span class=\"n\">flags</span><span class=\"p\">;</span>\n\n<span class=\"w\">                  </span><span class=\"n\">flags</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">raw_cpu_read</span><span class=\"p\">(</span><span class=\"n\">local_interrupt_disable_state</span><span class=\"p\">.</span><span class=\"n\">flags</span><span class=\"p\">);</span>\n<span class=\"w\">                  </span><span class=\"n\">local_irq_restore</span><span class=\"p\">(</span><span class=\"n\">flags</span><span class=\"p\">);</span>\n<span class=\"w\">                  </span><span class=\"cm\">/*</span>\n<span class=\"cm\">                   * TODO: re-read preempt count can be avoided, but it needs</span>\n<span class=\"cm\">                   * should_resched() taking another parameter as the current</span>\n<span class=\"cm\">                   * preempt count</span>\n<span class=\"cm\">                   */</span>\n<span class=\"w\">                  </span><span class=\"n\">preempt_check_resched</span><span class=\"p\">();</span>\n<span class=\"w\">          </span><span class=\"p\">}</span>\n<span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>and bindgen gives me an error:</p>\n<blockquote>\n<p>Unable to generate bindings: clang diagnosed error: ../include/linux/irqflags.h:294:3: error: call to undeclared function 'preempt_check_resched'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]</p>\n</blockquote>\n<p>because <code>preempt_check_resched()</code> is a C macro (defined in <code>include/linux/preempt.h</code> and I included it in <code>include/linux/irqflags.h</code>), and in this case <code>local_interrupt_enable()</code> is not supposed to be called by Rust code, so I don't want bindgen to generate binding for it at all. And yet, seems bindgen (or libclang) needs to parse function to some degree.</p>\n<p>My question is: is there a way to avoid this?</p>",
+        "id": 497553017,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738625887
+    },
+    {
+        "content": "<p>You could explicitly exclude the function by name?</p>",
+        "id": 497598898,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1738654594
+    },
+    {
+        "content": "<p>It doesn't seem to work</p>",
+        "id": 497759308,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704267
+    },
+    {
+        "content": "<p>Yeah - I think what Andreas said is what you would want. <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> how are you excluding it at the moment?</p>",
+        "id": 497759380,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704298
+    },
+    {
+        "content": "<p>There should be a <code>--blocklist-function</code> argument that you can add to the arguments that we use with bindgen</p>",
+        "id": 497759420,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704313
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497759420\">said</a>:</p>\n<blockquote>\n<p>There should be a <code>--blocklist-function</code> argument that you can add to the arguments that we use with bindgen</p>\n</blockquote>\n<p><code>--blocklist-function local_interrupt_enable</code> in <code>rust/bindgen_parameters</code> doesn't work.</p>",
+        "id": 497759663,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704421
+    },
+    {
+        "content": "<p>Hm.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">      </span><span class=\"o\">--</span><span class=\"n\">wrap</span><span class=\"o\">-</span><span class=\"k\">static</span><span class=\"o\">-</span><span class=\"n\">fns</span>\n<span class=\"w\">          </span><span class=\"n\">Generate</span><span class=\"w\"> </span><span class=\"n\">wrappers</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">inline</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">functions</span>\n<span class=\"w\">      </span><span class=\"o\">--</span><span class=\"n\">wrap</span><span class=\"o\">-</span><span class=\"k\">static</span><span class=\"o\">-</span><span class=\"n\">fns</span><span class=\"o\">-</span><span class=\"n\">path</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">PATH</span><span class=\"o\">&gt;</span>\n<span class=\"w\">          </span><span class=\"n\">Sets</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">path</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">source</span><span class=\"w\"> </span><span class=\"n\">file</span><span class=\"w\"> </span><span class=\"n\">that</span><span class=\"w\"> </span><span class=\"n\">must</span><span class=\"w\"> </span><span class=\"n\">be</span><span class=\"w\"> </span><span class=\"n\">created</span><span class=\"w\"> </span><span class=\"n\">due</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">presence</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">inline</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">functions</span>\n<span class=\"w\">      </span><span class=\"o\">--</span><span class=\"n\">wrap</span><span class=\"o\">-</span><span class=\"k\">static</span><span class=\"o\">-</span><span class=\"n\">fns</span><span class=\"o\">-</span><span class=\"n\">suffix</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">SUFFIX</span><span class=\"o\">&gt;</span>\n<span class=\"w\">          </span><span class=\"n\">Sets</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">suffix</span><span class=\"w\"> </span><span class=\"n\">added</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"n\">wrapper</span><span class=\"w\"> </span><span class=\"n\">functions</span><span class=\"w\"> </span><span class=\"n\">generated</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">inline</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">functions</span>\n<span class=\"w\">      </span><span class=\"o\">--</span><span class=\"n\">default</span><span class=\"o\">-</span><span class=\"n\">visibility</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">VISIBILITY</span><span class=\"o\">&gt;</span>\n<span class=\"w\">          </span><span class=\"n\">Set</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">default</span><span class=\"w\"> </span><span class=\"n\">visibility</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">fields</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">including</span><span class=\"w\"> </span><span class=\"n\">bitfields</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"n\">accessor</span><span class=\"w\"> </span><span class=\"n\">methods</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">bitfields</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"n\">This</span><span class=\"w\"> </span><span class=\"n\">flag</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">ignored</span><span class=\"w\"> </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"o\">--</span><span class=\"n\">respect</span><span class=\"o\">-</span><span class=\"n\">cxx</span><span class=\"o\">-</span><span class=\"n\">access</span><span class=\"o\">-</span><span class=\"n\">specs</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">flag</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">used</span>\n</code></pre></div>",
+        "id": 497760075,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704573
+    },
+    {
+        "content": "<p>what I want is quite the opposite, I want bindgen to ignore this \"static inline\" function</p>",
+        "id": 497760243,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704626
+    },
+    {
+        "content": "<p>yeah - I'm curious if we add some sort of suffix to it and if we need to block the function with the suffix added</p>",
+        "id": 497760292,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704649
+    },
+    {
+        "content": "<p><a href=\"https://github.com/fbq/linux/tree/dev/nested-irq-disable\">https://github.com/fbq/linux/tree/dev/nested-irq-disable</a></p>",
+        "id": 497760340,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704670
+    },
+    {
+        "content": "<p>in case you want to play with it.</p>",
+        "id": 497760354,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704678
+    },
+    {
+        "content": "<p>yeah lemme see what I can do</p>",
+        "id": 497760395,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704701
+    },
+    {
+        "content": "<p>i get a strong feeling it isn't applying the static inlines to the normal function blocklist at all</p>",
+        "id": 497760510,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738704732
+    },
+    {
+        "content": "<p>I'm going to try move <code>local_interrupt_disable/enable()</code> into <code>spinlock.h</code> to see if it makes any difference.</p>",
+        "id": 497760853,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738704872
+    },
+    {
+        "content": "<p>realizing something: this is an error message from libclang itself having trouble parsing the translation unit, which would mean that it's unlikely the blocklist has any affect because the point that is likely applied comes after actually parsing the TUs using libclang</p>",
+        "id": 497762948,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705684
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 497762983,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738705698
+    },
+    {
+        "content": "<p>So I think the solution might just be to make sure that function is defined</p>",
+        "id": 497762989,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705701
+    },
+    {
+        "content": "<p>Then hopefully it should parse and avoid spitting out the binding</p>",
+        "id": 497763026,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705715
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497762989\">said</a>:</p>\n<blockquote>\n<p>So I think the solution might just be to make sure that function is defined</p>\n</blockquote>\n<p>That \"function\" is a macro, and it's defined.</p>",
+        "id": 497763083,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738705735
+    },
+    {
+        "content": "<p>right right</p>",
+        "id": 497763108,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705746
+    },
+    {
+        "content": "<p>this is very strange</p>",
+        "id": 497763630,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705949
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> BTW ^ current blocker for spinlockirq, if you have any ideas it'd be appreciated. something strange is happening here</p>",
+        "id": 497763712,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738705984
+    },
+    {
+        "content": "<p>I have a \"#ifdef\" work around.</p>",
+        "id": 497763971,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738706098
+    },
+    {
+        "content": "<p>gotcha. can you show me it btw? I'm kind of curious what it looks like</p>",
+        "id": 497764207,
+        "sender_full_name": "Lyude",
+        "timestamp": 1738706188
+    },
+    {
+        "content": "<p>One sec, once it passed my unit test I'm going to share the branch</p>",
+        "id": 497764273,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738706223
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497764207\">said</a>:</p>\n<blockquote>\n<p>gotcha. can you show me it btw? I'm kind of curious what it looks like</p>\n</blockquote>\n<p>branch updated, I also need to move some function into <code>spinlock.h</code> to avoid header file cyclic dependency on riscv</p>",
+        "id": 497774080,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738710525
+    },
+    {
+        "content": "<p>Hi everybody, my understanding is that <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> has this figured out already? Sorry for the delay here.</p>",
+        "id": 497901539,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1738764492
+    },
+    {
+        "content": "<p>Not really, I have a work around, but still cannot figure out why bindgen does this.</p>",
+        "id": 497920662,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738769447
+    },
+    {
+        "content": "<p>or libclang</p>",
+        "id": 497920690,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738769453
+    },
+    {
+        "content": "<p>But bindgen parses the header like clang does, yes? So if bindgen rejects it, surely the C side of the kernel does not build either when that header is included?</p>",
+        "id": 497921277,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1738769604
+    },
+    {
+        "content": "<p>It was built successfully without Rust enabled.</p>",
+        "id": 497921393,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738769641
+    },
+    {
+        "content": "<p>You probably are missing an include of some other header? I'm guessing the relevant <code>.c</code> files import the other header through other mechanisms but the bindgen helper header does not include the dependency header.</p>",
+        "id": 497921625,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1738769689
+    },
+    {
+        "content": "<p>Hmm... it happens when bindgen generating the bindings for a \".h\" file, and we have the \"#include\" for the macro definition.</p>",
+        "id": 497922272,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738769845
+    },
+    {
+        "content": "<p>Surely bindgen would not emit that error if the function is defined or a macro?</p>",
+        "id": 497922377,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1738769871
+    },
+    {
+        "content": "<p>Let me see if I can make a smaller reproduce.</p>",
+        "id": 497922514,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738769900
+    },
+    {
+        "content": "<p>Ok, I find the root-cause, the macro I used is <code>#undef</code> explicityly if <code>MODULE</code> is defined, and we pass <code>-DMODULE</code> into bindgen command line. I think the code would not compile if a module is built, which is not in my test env.</p>",
+        "id": 497927477,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1738771109
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> has marked this topic as resolved.</p>",
+        "id": 497927537,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1738771129
+    }
+]

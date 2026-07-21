@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>I get the necessity and use cases for Pin – but why does the Rust language / compiler even move memory around implicitly in the first place? What's the advantage?</p>",
+        "id": 433755538,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713360154
+    },
+    {
+        "content": "<p>Without Pin a user can explicitly move a value to a different location without any unsafe code.</p>",
+        "id": 433756431,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1713360393
+    },
+    {
+        "content": "<p>So it is 100% about preventing a _programmer_ from moving memory _explicitly_ and Rust does not implicitly move, say, a Box to a different position on the heap?</p>",
+        "id": 433756845,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713360498
+    },
+    {
+        "content": "<p>Moves of values are closely tied to ownership, which is pretty central to how Rust's ownership and borrow checker works. Having something like C++ move constructors would seriously complicate many things.</p>\n<p>But I think it's also worth noting that the decision to make everything movable is from pre-2015 and it wasn't until 2020-ish that they found a use-case that necessitated that Rust add support for Pin.</p>",
+        "id": 433756977,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713360530
+    },
+    {
+        "content": "<p>It's worth noting that Pin is not really a language feature. The compiler itself doesn't just move values around without you doing an actual move operation in the source code. Pin is just a library where we essentially use private fields and other mechanisms of that sort to prevent you from expressing any move that results in a change of address.</p>",
+        "id": 433757386,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713360642
+    },
+    {
+        "content": "<p>Values on the heap are never implicitly moved by rustc. Nor are stack values while a reference is outstanding. That is why Pin was implementable as pure library construct without compiler integration. (Technically there is some compiler integration to disable the noalias optimization flag in some cases to allow self-referential values.)</p>",
+        "id": 433757488,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1713360674
+    },
+    {
+        "content": "<p>It's closely tied with the idea that if some piece of code triggers memory safety, then there must be an incorrect unsafe block somewhere. The problem is that if you make a struct that has internal unsafe code that relies on the struct's address not changing, then, well, it's not unsafe for the owner of the struct to move it. So since the only unsafe blocks in the program are in the implementation of the struct, then it <em>must</em> be the case that incorrect unsafe block is in the implementation of the struct.</p>",
+        "id": 433757892,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713360786
+    },
+    {
+        "content": "<p>Pinning something fundamentally requires you to call the unsafe method <code>Pin::new_unchecked</code>, so by having the self-referential struct take a pinned reference, then you force the call to use unsafe to call <code>Pin::new_unchecked</code>. Now you also have an unsafe block in the caller, so now it is possible to say \"the incorrect unsafe block is the one in the caller\".</p>",
+        "id": 433758072,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713360841
+    },
+    {
+        "content": "<p>(Now, we also have some library methods that allow you to pin stuff safely. These work by using private fields/shadowing/etc to prevent the user from moving the value safely. But they all boil down to <code>Pin::new_unchecked</code> somewhere.)</p>",
+        "id": 433758267,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713360875
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Pin.2C.20or.3A.20why.20is.20memory.20moved.20around.3F/near/433757386\">said</a>:</p>\n<blockquote>\n<p>It's worth noting that Pin is not really a language feature. The compiler itself doesn't just move values around without you doing an actual move operation in the source code. Pin is just a library where we essentially use private fields and other mechanisms of that sort to prevent you from expressing any move that results in a change of address.</p>\n</blockquote>\n<p>Honestly you add something like this to the std library docs, I've never found the pin module very clear</p>",
+        "id": 433844941,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1713376847
+    },
+    {
+        "content": "<p>There was a PR at some point to rewrite them. Not sure if it ever landed.</p>",
+        "id": 433845022,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713376878
+    },
+    {
+        "content": "<p>I did see that, think it might have</p>",
+        "id": 433845132,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1713376917
+    },
+    {
+        "content": "<p>interesting, I remember reading the opposite somewhere, that the compiler could move values around</p>",
+        "id": 433845262,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1713376954
+    },
+    {
+        "content": "<p>I think it only can under the as-if rule.</p>",
+        "id": 433845390,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713377009
+    },
+    {
+        "content": "<p>Maybe I misread this part:</p>\n<blockquote>\n<p>All values in Rust are trivially moveable. This means that the address at which a value is located is not necessarily stable in between borrows. The compiler is allowed to move a value to a new address without running any code to notify that value that its address has changed. Although the compiler will not insert memory moves where no semantic move has occurred, there are many places where a value may be moved. For example, when doing assignment or passing a value into a function.</p>\n</blockquote>",
+        "id": 433845983,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1713377242
+    },
+    {
+        "content": "<p>Still: Why is this done?</p>\n<p>I'd assume for \"passing a value into a function\" we're talking about stack-values, which could be passed through a new stack frame or something.<br>\nBut for something already residing on the Heap I don't see any advantage in changing the addr</p>",
+        "id": 433963712,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1713423739
+    },
+    {
+        "content": "<p>I mean, one example would be <code>vec.remove(0)</code>. This changes the address of the remaining elements in the vector, and they're on the heap.</p>",
+        "id": 433964855,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713423842
+    },
+    {
+        "content": "<p>Or even <code>vec.push(elem)</code> when it needs to reallocate.</p>",
+        "id": 433965850,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713423932
+    },
+    {
+        "content": "<p>To be fair, there's a good chance that we wouldn't design pinning the way it is now if we could start over knowing everything we know now. Making everything movable was a choice that was made many years before pinning was added.</p>",
+        "id": 434017264,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713436688
+    },
+    {
+        "content": "<p>Things are movable in C as well, it’s just not a common idiom and C doesn’t attempt to avoid UB.</p>\n<p>We can declare a local struct mutex “m”, call mutex_init on it, then declare a new struct mutex “n” and assign m to n (n = m). Now n is corrupt for the same reasons it would in Rust.</p>",
+        "id": 434530332,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1713643765
+    }
+]

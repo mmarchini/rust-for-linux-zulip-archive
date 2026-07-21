@@ -1,0 +1,75 @@
+<html>
+<head><meta charset="utf-8"><title>Module symbol exports · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html">Module symbol exports</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="266493077"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266493077" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Axtens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266493077">(Dec 31 2021 at 09:40)</a>:</h4>
+<p>Hey all, thinking about my next step of Rust-for-grub work and I wanted to confirm my understanding of what you all do on Linux.</p>
+<p>Like Linux, grub also has modules that use symbols exported from a core kernel.</p>
+<p>Looking at <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/exports.c">https://github.com/Rust-for-Linux/linux/blob/rust/rust/exports.c</a> , it seems like you generate exports for a bunch of things automatically. So if a module wants to call something on Vec&lt;&gt;, it ends up going via the core kernel, right?</p>
+<p>Does that mean you end up with a larger kernel because you can't prune out parts of the core library that aren't called (because you don't know what a module will end up using)? I ask because I'm pondering whether or not to build the core into the kernel or build the parts of the core used by each module into each module. </p>
+<p>I think the core crate is bigger than the current grub kernel so I'm a bit loathe to propose including the whole thing! On the other hand the idea of modules compiled _after_ the primary build process isn't really a thing in grub-land so it might be possible to trim it down more aggressively.</p>
+
+
+
+<a name="266504912"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266504912" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266504912">(Dec 31 2021 at 13:59)</a>:</h4>
+<p>So far all the APIs we support are places there are existing kernel APIs for, and we expose C-ABI functions from Rust, and function-pointer structs (e.g. <code>file_operations</code>).</p>
+<p>Which is to say the kernel C code never calls any <code>Vec&lt;T&gt;</code> methods, those are called exclusively from Rust code.</p>
+<p>I'm not sure if that answers your question?</p>
+
+
+
+<a name="266506604"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266506604" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266506604">(Dec 31 2021 at 14:35)</a>:</h4>
+<blockquote>
+<p>So if a module wants to call something on Vec&lt;&gt;, it ends up going via the core kernel, right?</p>
+</blockquote>
+<p>Yes, <code>core</code>, <code>alloc</code>, etc. go into the "shared" Rust support.</p>
+<blockquote>
+<p>Does that mean you end up with a larger kernel because you can't prune out parts of the core library that aren't called (because you don't know what a module will end up using)?</p>
+</blockquote>
+<p>Yeah, but you can also see it the other way around: it allows us to have a smaller kernel, since the idea is that eventually many modules will reuse the same code.</p>
+<p>In order to take care of the "rest" that we do not expect anybody using (or that we do not want anybody to use), we are also trimming <code>alloc</code> in our fork (no <code>collections</code>, no <code>sync</code>, no <code>rc</code>...), and we also requested upstream a few "modularization" options for <code>core</code> (some already in, e.g. <code>no_fp_fmt_parse</code>).</p>
+
+
+
+<a name="266506679"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266506679" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266506679">(Dec 31 2021 at 14:37)</a>:</h4>
+<p>A lot of the "worst" offenders for codesize are generics, which only get codegen'd if they're actually used, so that helps.</p>
+
+
+
+<a name="266508935"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266508935" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Axtens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266508935">(Dec 31 2021 at 15:20)</a>:</h4>
+<p>Cool. </p>
+<p>Yeah, I was thinking of Rust modules calling Rust <code>core</code> functionality. </p>
+<p>I'll have a crack again at some point (work keeps wanting me to Create Shareholder Value, unfortunately) and let you know how I go. I suspect I might go down the path of forking and trimming core and alloc, but I'll see how I go.</p>
+<blockquote>
+<p>A lot of the "worst" offenders for codesize are generics, which only get codegen'd if they're actually used, so that helps.</p>
+</blockquote>
+<p>IIUC you're saying <code>Vec&lt;u8&gt;::whatever</code> is only generated if there's actually a <code>Vec&lt;u8&gt;</code>. Is that right? How would the compiler be able to reason about that if there could be an out-of-tree module that ends up trying to call <code>Vec&lt;u8&gt;::foo</code>?</p>
+
+
+
+<a name="266509120"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266509120" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266509120">(Dec 31 2021 at 15:23)</a>:</h4>
+<p>When compiling <code>core</code> (or any crate for that matter) rustc emits the IR for generics methods that can be read by rustc when compiling something downstream and the method will be code-gen'd then if it wasn't already codegen'd inside <code>core</code>.</p>
+
+
+
+<a name="266509190"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module%20symbol%20exports/near/266509190" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Axtens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.20symbol.20exports.html#266509190">(Dec 31 2021 at 15:24)</a>:</h4>
+<p>oh sweet, that is nifty</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

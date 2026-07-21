@@ -1,0 +1,71 @@
+<html>
+<head><meta charset="utf-8"><title>size of structure field in const context · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html">size of structure field in const context</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="419130916"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419130916" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Valentin Obst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419130916">(Jan 31 2024 at 22:01)</a>:</h4>
+<p>Is there a clean way to get the size of a structure field in const context? I only found this <a href="https://stackoverflow.com/questions/61046063/how-to-get-the-size-of-a-struct-field-in-rust-without-instantiating-it">stackoverflow thread</a>.</p>
+<p>The reason I need this is because the kernel gives my module a pointer to this field in order to store some private data for later use. I want to fail compilation if the type I intend to store in that memory is too large. On the C side there is a #define, but involves the <code>sizeof_field</code> and is thus not converted by bindgen.</p>
+
+
+
+<a name="419208934"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419208934" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dirk Behme <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419208934">(Feb 01 2024 at 09:48)</a>:</h4>
+<p>Is adding a helper function in rust/helpers.c exporting from C what you need (the macro/sizeof) an option?</p>
+
+
+
+<a name="419224708"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419224708" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Valentin Obst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419224708">(Feb 01 2024 at 11:19)</a>:</h4>
+<p>If I understand correctly, this would require that my abstractions perform a runtime check to verify that the struct defined by the module fits into the storage that the kernel provides. Ideally I'd like the compilation of such a module to fail.</p>
+
+
+
+<a name="419236946"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419236946" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dirk Behme <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419236946">(Feb 01 2024 at 12:35)</a>:</h4>
+<p>Maybe anything like this (see <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=c3e261786c770ee7cd1c949b9b9230a9">Playground</a>) ?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">TheStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">foo</span>: <span class="p">[</span>::<span class="n">std</span>::<span class="n">os</span>::<span class="n">raw</span>::<span class="n">c_char</span><span class="p">;</span><span class="w"> </span><span class="mi">100</span><span class="k">usize</span><span class="p">],</span>
+<span class="w">    </span><span class="c1">// other fields...</span>
+<span class="p">}</span>
+
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">dbg!</span><span class="p">(</span><span class="w"> </span><span class="n">get_size_of_return_type</span><span class="p">(</span><span class="o">|</span><span class="n">s</span>: <span class="nc">TheStruct</span><span class="o">|</span><span class="w"> </span><span class="n">s</span><span class="p">.</span><span class="n">foo</span><span class="p">)</span><span class="w"> </span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">fn</span> <span class="nf">get_size_of_return_type</span><span class="o">&lt;</span><span class="n">F</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">U</span><span class="o">&gt;</span><span class="p">(</span><span class="n">_f</span>: <span class="nc">F</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">usize</span>
+<span class="nc">where</span>
+<span class="w">    </span><span class="n">F</span>: <span class="nb">FnOnce</span><span class="p">(</span><span class="n">T</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">U</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span>::<span class="n">mem</span>::<span class="n">size_of</span>::<span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">();</span><span class="w"> </span><span class="c1">// For kernel code replace std by core</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">90</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">compile_error!</span><span class="p">(</span><span class="s">"Size too large"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">size</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Inspired by the given <a href="https://stackoverflow.com/questions/61046063/how-to-get-the-size-of-a-struct-field-in-rust-without-instantiating-it">stackoverflow thread</a>.</p>
+
+
+
+<a name="419244010"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419244010" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Valentin Obst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419244010">(Feb 01 2024 at 13:18)</a>:</h4>
+<p>Unfortunately this does not work in const context (<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=c2e2c57badd4a7098040db436a5f2fcf">Playground</a>). The macro works and looks sound, however, I thought there might be a better way since this was posted three years ago.</p>
+
+
+
+<a name="419285815"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/size%20of%20structure%20field%20in%20const%20context/near/419285815" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Rodriguez Reboredo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/size.20of.20structure.20field.20in.20const.20context.html#419285815">(Feb 01 2024 at 16:35)</a>:</h4>
+<p>Turning <code>get_size_of_return_type</code> into const and using an static assertion would be the way to go. In <code>kernel</code> we have the <code>build_assert</code> macro which performs the assertion in a const context or expands into a panic otherwise.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

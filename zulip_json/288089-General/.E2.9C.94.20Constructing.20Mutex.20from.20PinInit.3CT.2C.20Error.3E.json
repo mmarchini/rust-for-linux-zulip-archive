@@ -1,0 +1,338 @@
+[
+    {
+        "content": "<p>Sorry if I missed discussion somewhere, but is it possible to construct <code>Mutex&lt;T&gt;</code> from failable pin init (<code>impl PinInit&lt;T, Error&gt;</code>)? As far as I see, <code>new_mutex!()</code> (and <code>Lock::new</code> in general) accepts only <code>PinInit&lt;T, _ = Infallible&gt;</code>...</p>\n<p>Basically I want something like</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">S</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">ComplexObject</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">ComplexObject</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">      </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\">  </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"cm\">/* ... */</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">S</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">try_pin_init</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"bp\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"n\">new_mutex</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">ComlexObject</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">())</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 567385936,
+        "sender_full_name": "Gladyshev Ilya",
+        "timestamp": 1768132510
+    },
+    {
+        "content": "<p>We could add a generic error parameter to <code>Lock::new</code> or add a new variant <code>Lock::try_new</code> that has that generic parameter. But at the moment nobody needed it, so we don't have a way to construct it</p>",
+        "id": 567386193,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768132877
+    },
+    {
+        "content": "<p>Okay, thanks! Then I'll try to implement it for my purposes (and post it here for future references)</p>",
+        "id": 567387467,
+        "sender_full_name": "Gladyshev Ilya",
+        "timestamp": 1768134547
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1007498\">Gladyshev Ilya</span> has marked this topic as resolved.</p>",
+        "id": 567387470,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1768134554
+    },
+    {
+        "content": "<p>please send a patch so everyone can benefit :)</p>",
+        "id": 567387490,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768134585
+    },
+    {
+        "content": "<p>As far as I have checked, this did the trick:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/sync/lock.rs b/rust/kernel/sync/lock.rs</span>\n<span class=\"gh\">index 46a57d1fc309..bcef9d39eff3 100644</span>\n<span class=\"gd\">--- a/rust/kernel/sync/lock.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/sync/lock.rs</span>\n<span class=\"gu\">@@ -128,12 +139,12 @@ unsafe impl&lt;T: ?Sized + Send, B: Backend&gt; Sync for Lock&lt;T, B&gt; {}</span>\n\n<span class=\"w\"> </span>impl&lt;T, B: Backend&gt; Lock&lt;T, B&gt; {\n<span class=\"w\"> </span>    /// Constructs a new lock initialiser.\n<span class=\"gd\">-    pub fn new(</span>\n<span class=\"gd\">-        t: impl PinInit&lt;T&gt;,</span>\n<span class=\"gi\">+    pub fn new&lt;E: From&lt;Infallible&gt;&gt;(</span>\n<span class=\"gi\">+        t: impl PinInit&lt;T, E&gt;,</span>\n<span class=\"w\"> </span>        name: &amp;'static CStr,\n<span class=\"w\"> </span>        key: Pin&lt;&amp;'static LockClassKey&gt;,\n<span class=\"gd\">-    ) -&gt; impl PinInit&lt;Self&gt; {</span>\n<span class=\"gd\">-        pin_init!(Self {</span>\n<span class=\"gi\">+    ) -&gt; impl PinInit&lt;Self, E&gt; {</span>\n<span class=\"gi\">+        try_pin_init!(Self {</span>\n<span class=\"w\"> </span>            data &lt;- UnsafeCell::pin_init(t),\n<span class=\"w\"> </span>            _pin: PhantomPinned,\n<span class=\"w\"> </span>            // SAFETY: `slot` is valid while the closure is called and both `name` and `key` have\n<span class=\"gu\">@@ -141,7 +152,7 @@ pub fn new(</span>\n<span class=\"w\"> </span>            state &lt;- Opaque::ffi_init(|slot| unsafe {\n<span class=\"w\"> </span>                B::init(slot, name.as_char_ptr(), key.as_ptr())\n<span class=\"w\"> </span>            }),\n<span class=\"gd\">-        })</span>\n<span class=\"gi\">+        } ? E)</span>\n<span class=\"w\"> </span>    }\n<span class=\"w\"> </span>}\n</code></pre></div>\n<p>I will add this as part of the user's patchset. Alternatively, I can post it as a standalone patch if that is preferable.</p>",
+        "id": 567394515,
+        "sender_full_name": "Gladyshev Ilya",
+        "timestamp": 1768143001
+    },
+    {
+        "content": "<p>yes that should work. But you might need to fix some callsites of <code>Lock::new</code> (which are used by the <code>lock_new!</code> macros)</p>",
+        "id": 567400208,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768148431
+    },
+    {
+        "content": "<p>so in that case it might be better to add a new function <code>Lock::try_new</code></p>",
+        "id": 567400223,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768148445
+    },
+    {
+        "content": "<p>I added a <code>try_new_mutex!</code> along with a new lock constructor in one of my trees a few weeks back <a href=\"https://github.com/metaspace/linux/blob/6caed7589cab744420e6fc6feea464c662cd232b/rust/kernel/sync/lock.rs#L141\">https://github.com/metaspace/linux/blob/6caed7589cab744420e6fc6feea464c662cd232b/rust/kernel/sync/lock.rs#L141</a></p>",
+        "id": 567482770,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768211617
+    },
+    {
+        "content": "<p>that's not using <code>impl PinInit&lt;T, E&gt;</code> in the arguments, but a plain <code>T</code></p>",
+        "id": 567482971,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768211668
+    },
+    {
+        "content": "<p>Yes, I think that change did not land for 6.18.</p>",
+        "id": 567483216,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768211732
+    },
+    {
+        "content": "<p>it is in mainline?</p>",
+        "id": 567483414,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768211780
+    },
+    {
+        "content": "<p>I thought so. I think I recall <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> talking about this as well.</p>",
+        "id": 567483569,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768211817
+    },
+    {
+        "content": "<p>yes it's his patch</p>",
+        "id": 567483595,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768211825
+    },
+    {
+        "content": "<p>I just checked again, it is in mainline</p>",
+        "id": 567483768,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768211866
+    },
+    {
+        "content": "<p>Anyway, I had a problem constructing a mutex in a fallible context, because <code>Infallible</code> cannot be coersed to <code>Error</code>if I recall correctly. This particular piece of code was bugging me:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">pin_slice</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"o\">|</span><span class=\"n\">i</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">sector</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"nb\">Into</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"p\">::</span><span class=\"n\">into</span><span class=\"p\">(</span><span class=\"n\">zone_size_sectors</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"n\">try_new_mutex</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">                </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"w\"> </span><span class=\"n\">zone_nr_conv</span><span class=\"p\">.</span><span class=\"n\">try_into</span><span class=\"p\">().</span><span class=\"n\">expect</span><span class=\"p\">(</span><span class=\"s\">\"Fewer than 2^32 zones\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">ZoneDescriptor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                        </span><span class=\"n\">start_sector</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">sector</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">size_sectors</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">zone_size_sectors</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">capacity_sectors</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">zone_size_sectors</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">kind</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ZoneType</span><span class=\"p\">::</span><span class=\"n\">Conventional</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">write_pointer</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">sector</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Into</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"p\">::</span><span class=\"n\">into</span><span class=\"p\">(</span><span class=\"n\">zone_size_sectors</span><span class=\"p\">),</span>\n<span class=\"w\">                        </span><span class=\"n\">condition</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ZoneCondition</span><span class=\"p\">::</span><span class=\"n\">NoWritePointer</span><span class=\"p\">,</span>\n<span class=\"w\">                    </span><span class=\"p\">}</span>\n<span class=\"w\">                </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">ZoneDescriptor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                        </span><span class=\"n\">start_sector</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">sector</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">size_sectors</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">zone_size_sectors</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">capacity_sectors</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">zone_capacity_sectors</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">kind</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ZoneType</span><span class=\"p\">::</span><span class=\"n\">SequentialWriteRequired</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">write_pointer</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">sector</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"n\">condition</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ZoneCondition</span><span class=\"p\">::</span><span class=\"n\">Empty</span><span class=\"p\">,</span>\n<span class=\"w\">                    </span><span class=\"p\">}</span>\n<span class=\"w\">                </span><span class=\"p\">}</span>\n<span class=\"w\">            </span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"p\">},</span>\n<span class=\"w\">        </span><span class=\"n\">zone_count</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 567484162,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768211976
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567484162\">said</a>:</p>\n<blockquote>\n<p><code>Infallible</code> cannot be coersed to <code>Error</code></p>\n</blockquote>\n<p>we should just fix that <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 567484274,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212002
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">From</span><span class=\"o\">&lt;</span><span class=\"n\">Infallible</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">from</span><span class=\"p\">(</span><span class=\"n\">i</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Infallible</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 567484388,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212030
+    },
+    {
+        "content": "<p>I'll send a patch</p>",
+        "id": 567484414,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212037
+    },
+    {
+        "content": "<p>we already have that impl</p>",
+        "id": 567484477,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212054
+    },
+    {
+        "content": "<p>Ah, I see. I thought there was some kind of deeper reason for that <span aria-label=\"laughter tears\" class=\"emoji emoji-1f602\" role=\"img\" title=\"laughter tears\">:laughter_tears:</span></p>",
+        "id": 567484507,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212061
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567484477\">said</a>:</p>\n<blockquote>\n<p>we already have that impl</p>\n</blockquote>\n<p>Wait, it should just work?</p>",
+        "id": 567484591,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212083
+    },
+    {
+        "content": "<p>hmm that commit is from 2022, so it should've already worked when you tried it...</p>",
+        "id": 567484592,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212083
+    },
+    {
+        "content": "<p>Let me take another look then.</p>",
+        "id": 567484734,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212114
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>error[E0277]: the trait bound `Infallible: From&lt;kernel::alloc::AllocError&gt;` is not satisfied\n   --&gt; /home/aeh/src/linux-rust/rnull/drivers/block/rnull/zoned.rs:31:5\n    |\n 31 | /     KBox::pin_slice(\n 32 | |         |i| {\n 33 | |             let sector = i as u64 * Into::&lt;u64&gt;::into(zone_size_sectors);\n 34 | |             new_mutex!(\n...   |\n 57 | |         GFP_KERNEL,\n 58 | |     )\n    | |_____^ the trait `From&lt;kernel::alloc::AllocError&gt;` is not implemented for `Infallible`\n    |\n    = help: the trait `From&lt;kernel::alloc::AllocError&gt;` is not implemented for `Infallible`\n            but trait `From&lt;!&gt;` is implemented for it\n    = help: for that trait implementation, expected `!`, found `kernel::alloc::AllocError`\nnote: required by a bound in `Box::&lt;T, A&gt;::pin_slice`\n   --&gt; /home/aeh/src/linux-rust/rnull/rust/kernel/alloc/kbox.rs:344:12\n    |\n336 |     pub fn pin_slice&lt;Func, Item, E&gt;(\n    |            --------- required by a bound in this associated function\n...\n344 |         E: From&lt;AllocError&gt;,\n    |            ^^^^^^^^^^^^^^^^ required by this bound in `Box::&lt;T, A&gt;::pin_slice`\n</code></pre></div>",
+        "id": 567484982,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212189
+    },
+    {
+        "content": "<p>ah it's the other way around, <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 567485070,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212212
+    },
+    {
+        "content": "<p>you have a branch that I can check out?</p>",
+        "id": 567485128,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212230
+    },
+    {
+        "content": "<p>yes, the one linked above</p>",
+        "id": 567485198,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212249
+    },
+    {
+        "content": "<p>I'll find the exact place for you</p>",
+        "id": 567485245,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212265
+    },
+    {
+        "content": "<p>I do not see a branch linked above, only a commit (it doesn't say which branch)</p>",
+        "id": 567485343,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212291
+    },
+    {
+        "content": "<p><a href=\"https://github.com/metaspace/linux/blob/6caed7589cab744420e6fc6feea464c662cd232b/drivers/block/rnull/zoned.rs#L34\">https://github.com/metaspace/linux/blob/6caed7589cab744420e6fc6feea464c662cd232b/drivers/block/rnull/zoned.rs#L34</a></p>",
+        "id": 567485455,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212320
+    },
+    {
+        "content": "<p>ah, it's rnull-v6.18</p>",
+        "id": 567485522,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212337
+    },
+    {
+        "content": "<p>the commit is fine :)</p>",
+        "id": 567485565,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212347
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/drivers/block/rnull/zoned.rs b/drivers/block/rnull/zoned.rs</span>\n<span class=\"gh\">index ae6b1ee626e75..641dcf13306d5 100644</span>\n<span class=\"gd\">--- a/drivers/block/rnull/zoned.rs</span>\n<span class=\"gi\">+++ b/drivers/block/rnull/zoned.rs</span>\n<span class=\"gu\">@@ -12,7 +12,7 @@</span>\n<span class=\"w\"> </span>    prelude::*,\n<span class=\"w\"> </span>    sync::Mutex,\n<span class=\"w\"> </span>    sync::SpinLock,\n<span class=\"gd\">-    try_new_mutex,</span>\n<span class=\"gi\">+    new_mutex,</span>\n<span class=\"w\"> </span>    types::Owned, //\n<span class=\"w\"> </span>};\n\n<span class=\"gu\">@@ -31,7 +31,7 @@ pub(crate) fn init_zone_descriptors(</span>\n<span class=\"w\"> </span>    KBox::pin_slice(\n<span class=\"w\"> </span>        |i| {\n<span class=\"w\"> </span>            let sector = i as u64 * Into::&lt;u64&gt;::into(zone_size_sectors);\n<span class=\"gd\">-            try_new_mutex!(</span>\n<span class=\"gi\">+            new_mutex!(</span>\n<span class=\"w\"> </span>                if i &lt; zone_nr_conv.try_into().expect(\"Fewer than 2^32 zones\") {\n<span class=\"w\"> </span>                    ZoneDescriptor {\n<span class=\"w\"> </span>                        start_sector: sector,\n</code></pre></div>\n<p>This patch to trigger the error.</p>",
+        "id": 567485647,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212371
+    },
+    {
+        "content": "<p>I guess <code>impl From&lt;kernel::alloc::AllocError&gt; for Infallible</code> should just be producing <code>Ok</code>?</p>",
+        "id": 567486080,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768212486
+    },
+    {
+        "content": "<p>it can't, since we're not producing a <code>Result</code></p>",
+        "id": 567486256,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212535
+    },
+    {
+        "content": "<p>the issue in this case is that <code>pin_slice</code> requires an error type that's big enough to encompass the <code>AllocError</code>. <code>Infallible</code> means that no error happens, which is incorrect, as the allocation could fail</p>",
+        "id": 567486788,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212671
+    },
+    {
+        "content": "<p>so it's correct that you get a compile error here.</p>",
+        "id": 567486864,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212689
+    },
+    {
+        "content": "<p>what we could allow is turning a <code>impl PinInit&lt;T, Infallible&gt;</code> into a <code>impl PinInit&lt;T, E&gt;</code> for any <code>E</code></p>",
+        "id": 567486979,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212723
+    },
+    {
+        "content": "<p>We could also change the <code>pin_slice</code> function to this definition:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">pin_slice</span><span class=\"o\">&lt;</span><span class=\"n\">Func</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Item</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E2</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">init</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Func</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">len</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">flags</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Flags</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">Pin</span><span class=\"o\">&lt;</span><span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"p\">[</span><span class=\"n\">T</span><span class=\"p\">],</span><span class=\"w\"> </span><span class=\"n\">A</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">where</span>\n<span class=\"w\">        </span><span class=\"n\">Func</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnMut</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">Item</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">Item</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PinInit</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E2</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">E</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">From</span><span class=\"o\">&lt;</span><span class=\"n\">AllocError</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">E</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">From</span><span class=\"o\">&lt;</span><span class=\"n\">E2</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n</code></pre></div>",
+        "id": 567487363,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212834
+    },
+    {
+        "content": "<p>But then you'll have to manually specify <code>E</code> due to ambiguity</p>",
+        "id": 567487445,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768212856
+    },
+    {
+        "content": "<p>(better version below)</p>",
+        "id": 567488281,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768213070
+    },
+    {
+        "content": "<p>not sure if that's worth it though</p>",
+        "id": 567488343,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768213086
+    },
+    {
+        "content": "<p>actually here is a better version:</p>\n<div class=\"codehilite\" data-code-language=\"Darcs Patch\"><pre><span></span><code>diff --git a/drivers/block/rnull/zoned.rs b/drivers/block/rnull/zoned.rs\nindex ae6b1ee626e7..cb3c1d3332bb 100644\n<span class=\"gd\">--- a/drivers/block/rnull/zoned.rs</span>\n<span class=\"gi\">+++ b/drivers/block/rnull/zoned.rs</span>\n@@ -9,10 +9,10 @@\n         self,\n         gen_disk::GenDiskRef, //\n     },\n<span class=\"gi\">+    new_mutex,</span>\n     prelude::*,\n     sync::Mutex,\n     sync::SpinLock,\n<span class=\"gd\">-    try_new_mutex,</span>\n     types::Owned, //\n };\n\n@@ -31,7 +31,7 @@ pub(crate) fn init_zone_descriptors(\n     KBox::pin_slice(\n         |i| {\n             let sector = i as u64 * Into::&lt;u64&gt;::into(zone_size_sectors);\n<span class=\"gd\">-            try_new_mutex!(</span>\n<span class=\"gi\">+            new_mutex!(</span>\n                 if i &lt; zone_nr_conv.try_into().expect(\"Fewer than 2^32 zones\") {\n                     ZoneDescriptor {\n                         start_sector: sector,\ndiff --git a/rust/kernel/alloc/kbox.rs b/rust/kernel/alloc/kbox.rs\nindex 622b3529edfc..8dbc58b988f1 100644\n<span class=\"gd\">--- a/rust/kernel/alloc/kbox.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/alloc/kbox.rs</span>\n@@ -323,7 +323,7 @@ pub fn pin(x: T, flags: Flags) -&gt; Result&lt;Pin&lt;Box&lt;T, A&gt;&gt;, AllocError&gt;\n     /// }\n     ///\n     /// // Allocate a boxed slice of 10 `Example`s.\n<span class=\"gd\">-    /// let s = KBox::pin_slice(</span>\n<span class=\"gi\">+    /// let s = KBox::pin_slice::&lt;_, _, Error, _&gt;(</span>\n     ///     | _i | Example::new(),\n     ///     10,\n     ///     GFP_KERNEL\n@@ -333,24 +333,31 @@ pub fn pin(x: T, flags: Flags) -&gt; Result&lt;Pin&lt;Box&lt;T, A&gt;&gt;, AllocError&gt;\n     /// assert_eq!(s[3].d.lock().a, 20);\n     /// # Ok::&lt;(), Error&gt;(())\n     /// ```\n<span class=\"gd\">-    pub fn pin_slice&lt;Func, Item, E&gt;(</span>\n<span class=\"gi\">+    pub fn pin_slice&lt;Func, Item, E, E2&gt;(</span>\n         mut init: Func,\n         len: usize,\n         flags: Flags,\n     ) -&gt; Result&lt;Pin&lt;Box&lt;[T], A&gt;&gt;, E&gt;\n     where\n         Func: FnMut(usize) -&gt; Item,\n<span class=\"gd\">-        Item: PinInit&lt;T, E&gt;,</span>\n<span class=\"gd\">-        E: From&lt;AllocError&gt;,</span>\n<span class=\"gi\">+        Item: PinInit&lt;T, E2&gt;,</span>\n<span class=\"gi\">+        AllocError: Into&lt;E&gt;,</span>\n<span class=\"gi\">+        E2: Into&lt;E&gt;,</span>\n     {\n<span class=\"gd\">-        let mut buffer = super::Vec::&lt;T, A&gt;::with_capacity(len, flags)?;</span>\n<span class=\"gi\">+        let mut buffer = match super::Vec::&lt;T, A&gt;::with_capacity(len, flags) {</span>\n<span class=\"gi\">+            Ok(buffer) =&gt; buffer,</span>\n<span class=\"gi\">+            Err(err) =&gt; return Err(err.into()),</span>\n<span class=\"gi\">+        };</span>\n         for i in 0..len {\n             let ptr = buffer.spare_capacity_mut().as_mut_ptr().cast();\n             // SAFETY:\n             // - `ptr` is a valid pointer to uninitialized memory.\n             // - `ptr` is not used if an error is returned.\n             // - `ptr` won't be moved until it is dropped, i.e. it is pinned.\n<span class=\"gd\">-            unsafe { init(i).__pinned_init(ptr)? };</span>\n<span class=\"gi\">+            match unsafe { init(i).__pinned_init(ptr) } {</span>\n<span class=\"gi\">+                Ok(()) =&gt; (),</span>\n<span class=\"gi\">+                Err(err) =&gt; return Err(err.into()),</span>\n<span class=\"gi\">+            }</span>\n\n             // SAFETY:\n             // - `i + 1 &lt;= len`, hence we don't exceed the capacity, due to the call to\n</code></pre></div>",
+        "id": 567489030,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768213253
+    },
+    {
+        "content": "<p>that doesn't have the inference issue</p>",
+        "id": 567489058,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768213260
+    },
+    {
+        "content": "<p>Makes sense.  But do you really need <code>AllocError: Into&lt;E&gt;</code>?</p>",
+        "id": 567494451,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768214460
+    },
+    {
+        "content": "<p>I think this change is worth it. Do you want to send it?</p>",
+        "id": 567494774,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768214539
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567494451\">said</a>:</p>\n<blockquote>\n<p>Makes sense.  But do you really need <code>AllocError: Into&lt;E&gt;</code>?</p>\n</blockquote>\n<p>yes, the line <code>super::Vec::&lt;T, A&gt;::with_capacity</code> can fail the allocation and return <code>Err(AllocError)</code></p>",
+        "id": 567495198,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768214634
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567494774\">said</a>:</p>\n<blockquote>\n<p>I think this change is worth it. Do you want to send it?</p>\n</blockquote>\n<p>sure</p>",
+        "id": 567495214,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768214638
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567495198\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/.E2.9C.94.20Constructing.20Mutex.20from.20PinInit.3CT.2C.20Error.3E/near/567494451\">said</a>:</p>\n<blockquote>\n<p>Makes sense.  But do you really need <code>AllocError: Into&lt;E&gt;</code>?</p>\n</blockquote>\n<p>yes, the line <code>super::Vec::&lt;T, A&gt;::with_capacity</code> can fail the allocation and return <code>Err(AllocError)</code></p>\n</blockquote>\n<p>But <code>AllocError</code> is a named struct, not a generic parameter. The compiler should know this bound already?</p>",
+        "id": 567497272,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768215013
+    },
+    {
+        "content": "<p>I don't understand, <code>E</code> is generic, if we for example fill in <code>Infallible</code> for <code>E</code> that would be incorrect, since <code>AllocError</code> cannot be turned into <code>Infallible</code></p>",
+        "id": 567497543,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1768215063
+    },
+    {
+        "content": "<p>Ah, I got it. Thanks for explaining.</p>",
+        "id": 567499438,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1768215449
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> did you send this? If not, will you? Or should I send it and add a Co-developed by benno tag?</p>",
+        "id": 573881268,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1771061731
+    },
+    {
+        "content": "<p>oh yeah sorry about that, feel free to send it</p>",
+        "id": 573883388,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1771063813
+    },
+    {
+        "content": "<p>I think I have to put your SoB. Do you want to see the commit message before I send it?</p>",
+        "id": 573884329,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1771064821
+    },
+    {
+        "content": "<p>just send it, I'll reply on list</p>",
+        "id": 573884379,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1771064867
+    }
+]

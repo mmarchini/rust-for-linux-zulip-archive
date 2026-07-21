@@ -1,0 +1,44 @@
+[
+    {
+        "content": "<p>I was reading through the Rust DRM bindings since I am working on some new functionality there. I was a bit surprised by the following pattern.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">/// A typed DRM device with a specific `drm::Driver` implementation.</span>\n<span class=\"sd\">///</span>\n<span class=\"sd\">/// The device is always reference-counted.</span>\n<span class=\"sd\">///</span>\n<span class=\"sd\">/// # Invariants</span>\n<span class=\"sd\">///</span>\n<span class=\"sd\">/// `self.dev` is a valid instance of a `struct device`.</span>\n<span class=\"cp\">#[repr(C)]</span>\n<span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">drm_device</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">    </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p><code>bindings::drm_device</code> is already <code>#repr(C)</code>, and I do not understand the value of making <code>drm::Device</code> <code>#repr(C)</code>. If I understand correctly, it is not being based through the FFI boundaries?</p>",
+        "id": 534778808,
+        "sender_full_name": "Rahul Rameshbabu",
+        "timestamp": 1755370001
+    },
+    {
+        "content": "<p>It has the effect of ensuring that <code>dev</code> is placed before <code>data</code>.</p>",
+        "id": 534808953,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1755417511
+    },
+    {
+        "content": "<p>In particular, IIRC, we need to enforce the C layout if we want container_of &amp; friends to work</p>",
+        "id": 534817402,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1755429847
+    },
+    {
+        "content": "<p><code>container_of!</code> also works with <code>repr(Rust)</code> structs</p>",
+        "id": 534822105,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1755435407
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F/near/534808953\">said</a>:</p>\n<blockquote>\n<p>It has the effect of ensuring that <code>dev</code> is placed before <code>data</code>.</p>\n</blockquote>\n<p>Hmm, that was my initial thought. However as pointed out by this thread, I would expect <code>offset_of!</code>, <code>container_of! </code>, etc. to all work fine with Rust representation without needing to ensure the memory layout in a way where the declared field order decides the memory layout. At least, this is the conclusion I have come to from my skim of <code>rust/kernel/drm/device.rs</code>. However, maybe I am missing some logic that requires this ordering.</p>",
+        "id": 534849678,
+        "sender_full_name": "Rahul Rameshbabu",
+        "timestamp": 1755468437
+    },
+    {
+        "content": "<p>it's not fully insulated from the FFI border as its memory allocated/freed on C side through <code>__drm_dev_alloc</code>. That should work with <code>repr(Rust)</code> the offset  of <code>bindings::drm_device</code> is passed as argument  and the struct itself isn't directly used on C side.<br>\n<code>repr(C)</code> could have limited use when looking at register dumps of kernel warnings/oopses</p>",
+        "id": 534948380,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1755522443
+    },
+    {
+        "content": "<p>For any subtle requirement on <code>repr</code>s (or any other similar thing, really), let's please add a comment nearby if it is not mentioned elsewhere.</p>",
+        "id": 535139696,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1755612956
+    }
+]

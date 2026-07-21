@@ -1,0 +1,213 @@
+<html>
+<head><meta charset="utf-8"><title>pin-init references to initialized fields · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html">pin-init references to initialized fields</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="521255949"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521255949" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521255949">(May 30 2025 at 09:28)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> has a use-case for references to already initialized fields within the initializer macros. <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> also said this to be useful at RustWeek. I also think it's useful, but I fear that this is a footgun, since any raw pointer derived from such a reference-to-a-field might get invalidated upon using a reference to the entire struct.</p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>Example</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::{</span><span class="n">marker</span><span class="p">::</span><span class="n">PhantomPinned</span><span class="p">,</span><span class="w"> </span><span class="n">pin</span><span class="p">::</span><span class="n">Pin</span><span class="p">};</span>
+
+<span class="k">use</span><span class="w"> </span><span class="n">pin_init</span><span class="p">::{</span><span class="n">pin_data</span><span class="p">,</span><span class="w"> </span><span class="n">pin_init</span><span class="p">,</span><span class="w"> </span><span class="n">InPlaceInit</span><span class="p">};</span>
+
+<span class="cp">#[pin_data]</span>
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">_pin</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomPinned</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">write</span><span class="p">(</span><span class="bp">self</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">write2</span><span class="p">(</span><span class="bp">self</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="n">this</span><span class="p">.</span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">val</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">this</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">        </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// this would be generated by the macro, so one could just write `ptr: val` here</span>
+<span class="w">            </span><span class="c1">// instead.</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">this</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">()).</span><span class="n">val</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">val</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="n">_pin</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomPinned</span><span class="p">,</span>
+<span class="w">    </span><span class="p">});</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Box</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">x</span><span class="p">).</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write2</span><span class="p">(</span><span class="mi">82</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>$ cargo miri run --example demo
+SelfWriter { val: 0, ptr: 0x237e0, _pin: PhantomPinned }
+SelfWriter { val: 42, ptr: 0x237e0, _pin: PhantomPinned }
+SelfWriter { val: 82, ptr: 0x237e0, _pin: PhantomPinned }
+error: Undefined Behavior: attempting a write access using &lt;1564&gt; at alloc814[0x8], but that tag does not exist in the borrow stack for this location
+  --&gt; examples/demo.rs:16:18
+   |
+16 |         unsafe { self.ptr.write(val) };
+   |                  ^^^^^^^^^^^^^^^^^^^
+   |                  |
+   |                  attempting a write access using &lt;1564&gt; at alloc814[0x8], but that tag does not exist in the borrow stack for this location
+   |                  this error occurs as part of an access at alloc814[0x8..0x9]
+   |
+   = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+   = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: &lt;1564&gt; was created by a SharedReadWrite retag at offsets [0x8..0x9]
+  --&gt; examples/demo.rs:26:13
+   |
+26 |       let x = pin_init!(&amp;this in SelfWriter {
+   |  _____________^
+27 | |         val: 0,
+28 | |         ptr: {
+...  |
+34 | |         _pin: PhantomPinned,
+35 | |     });
+   | |______^
+help: &lt;1564&gt; was later invalidated at offsets [0x8..0x9] by a write access
+  --&gt; examples/demo.rs:21:9
+   |
+21 |         this.val = val;
+   |         ^^^^^^^^^^^^^^
+   = note: BACKTRACE (of the first span):
+   = note: inside `SelfWriter::write` at examples/demo.rs:16:18: 16:37
+note: inside `main`
+  --&gt; examples/demo.rs:42:5
+   |
+42 |     x.as_mut().write(42);
+   |     ^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `$crate::__init_internal` which comes from the expansion of the macro `pin_init` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error
+</code></pre></div>
+</div></div>
+<p>If I use <code>UnsafePinned</code> in the example, then it does continue to work:</p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>Example with UnsafePinned</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#![feature(unsafe_pinned)]</span>
+
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">pin</span><span class="p">::{</span><span class="n">Pin</span><span class="p">,</span><span class="w"> </span><span class="n">UnsafePinned</span><span class="p">};</span>
+
+<span class="k">use</span><span class="w"> </span><span class="n">pin_init</span><span class="p">::{</span><span class="n">pin_data</span><span class="p">,</span><span class="w"> </span><span class="n">pin_init</span><span class="p">,</span><span class="w"> </span><span class="n">InPlaceInit</span><span class="p">};</span>
+
+<span class="cp">#[pin_data]</span>
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafePinned</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">write</span><span class="p">(</span><span class="bp">self</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">write2</span><span class="p">(</span><span class="bp">self</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">new</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">map_unchecked_mut</span><span class="p">(</span><span class="o">|</span><span class="n">t</span><span class="o">|</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">val</span><span class="p">.</span><span class="n">get_mut_pinned</span><span class="p">().</span><span class="n">write</span><span class="p">(</span><span class="n">new</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">this</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">SelfWriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafePinned</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+<span class="w">        </span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// this would be generated by the macro, so one could just write `ptr:</span>
+<span class="w">            </span><span class="c1">// val.get_mut_pinned()` here instead.</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">val</span><span class="p">:</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">new_unchecked</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">this</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">()).</span><span class="n">val</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">val</span><span class="p">.</span><span class="n">get_mut_pinned</span><span class="p">()</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">});</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Box</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">x</span><span class="p">).</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write2</span><span class="p">(</span><span class="mi">82</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">x</span><span class="p">.</span><span class="n">as_mut</span><span class="p">().</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"{x:?}"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>$ cargo miri run --example demo
+SelfWriter { val: UnsafePinned { .. }, ptr: 0x237e0 }
+SelfWriter { val: UnsafePinned { .. }, ptr: 0x237e0 }
+SelfWriter { val: UnsafePinned { .. }, ptr: 0x237e0 }
+SelfWriter { val: UnsafePinned { .. }, ptr: 0x237e0 }
+</code></pre></div>
+</div></div>
+<p>Before I go to t-opsem, I thought I'd ask here for people's opinion. I fear that people might get the wrong impression what these references would be for. But since it works well with <code>UnsafePinned</code>, it might not be a problem?</p>
+
+
+
+<a name="521255997"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521255997" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521255997">(May 30 2025 at 09:28)</a>:</h4>
+<p>cc <span class="user-mention" data-user-id="413824">@Gary Guo</span></p>
+
+
+
+<a name="521317536"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521317536" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521317536">(May 30 2025 at 15:13)</a>:</h4>
+<p>I would say <code>UnsafePinned</code> is exactly for cases like this.</p>
+
+
+
+<a name="521341948"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521341948" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521341948">(May 30 2025 at 17:31)</a>:</h4>
+<p>Yea, I think this is expected</p>
+
+
+
+<a name="521342069"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521342069" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521342069">(May 30 2025 at 17:32)</a>:</h4>
+<p>Writing directly to val would invalidate the ptr</p>
+
+
+
+<a name="521342534"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521342534" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521342534">(May 30 2025 at 17:35)</a>:</h4>
+<p>You get this without pin-init, with just structs on stack too</p>
+
+
+
+<a name="521347632"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/pin-init%20references%20to%20initialized%20fields/near/521347632" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/pin-init.20references.20to.20initialized.20fields.html#521347632">(May 30 2025 at 18:06)</a>:</h4>
+<p>Just this is UB already:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">raw</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">val</span><span class="p">;</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">);</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">82</span><span class="p">;</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ptr</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,190 @@
+<html>
+<head><meta charset="utf-8"><title>Question about devres access_with() · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html">Question about devres access_with()</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="517521724"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517521724" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517521724">(May 12 2025 at 12:06)</a>:</h4>
+<p>Hi <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <br>
+I had question about Devres optimization for bypassing RCU you recently posted. For Nova, this compile-time optimization is only possible during probe() or any other path where device unbinding is not possible correct?  2. To address <a href="https://github.com/Rust-for-Linux/linux/issues/1">#1</a>, Is it possible to hold a (Arc) reference to Device&lt;Bound&gt; and then we wait for reference count to drop to 0,  before allowing device unbinding or does that throw a wrench in device driver unbinding?</p>
+
+
+
+<a name="517587266"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517587266" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517587266">(May 12 2025 at 15:37)</a>:</h4>
+<p>Hi <span class="user-mention" data-user-id="598482">@Joel Fernandes</span>,</p>
+<p>What do you mean with "to address <a href="https://github.com/Rust-for-Linux/linux/issues/1">#1</a>"? What does it relate to?</p>
+<p>In general: Yes, <code>Devres::access()</code> can only be used from a scope where you have a <code>&amp;Device&lt;Bound&gt;</code>.</p>
+<p>Note that this is sufficient, since it is guaranteed that during the lifetime of such a reference the device can't be unbound. Obviously <code>probe()</code> is a good example for providing a <code>&amp;Device&lt;Bound&gt;</code>, since the device can't be unbound as long as <code>probe()</code> runs.</p>
+<p>It is <em>not</em> possible to have an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code> (note that the compiler won't let you by design), since it would be impossible to guarantee that for the duration of the lifetime of an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code> the device is <em>not</em> unbound, since one could extend the lifetime of an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code>infinitely.</p>
+<p>However, the plan is to provide a <code>&amp;Device&lt;Bound&gt;</code> reference whenever possible. For instance, IRQ abstractions can do so from an IRQ handler, since we can (and have to) make it an invariant of the IRQ abstraction that the IRQ handler is removed <em>before</em> the device is unbound, hence for the duration of an IRQ handler we can provide a <code>&amp;Device&lt;Bound&gt;</code>. The same would be true for SYSFS abstractions or, depending on the particular subsystem, subsystem callbacks and / or IOCTLs.</p>
+<p>We can even implement "fenced" variants of workqueues, etc. which guarantee that they're teared down <em>before</em> the corresponding <code>Device</code> is unbound and hence can provide a <code>&amp;Device&lt;Bound&gt;</code> reference.</p>
+
+
+
+<a name="517591235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517591235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517591235">(May 12 2025 at 15:51)</a>:</h4>
+<blockquote>
+<p>Is it possible to hold a (Arc) reference to Device&lt;Bound&gt; and then we wait for reference count to drop to 0, before allowing device unbinding or does that throw a wrench in device driver unbinding?</p>
+</blockquote>
+<p>No, the lifetime of a <code>struct device</code> is entirely independent from its state of being bound to a driver. It'd also be the wrong solution to forcefully keep a device bound to a driver. The bound state is something the driver has to be capable of to react to, it's nothing a driver should be allowed (or be capable of) controlling -- that's up to core code.</p>
+
+
+
+<a name="517593103"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517593103" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517593103">(May 12 2025 at 15:57)</a>:</h4>
+<p>Thanks Danilo, this makes it a lot clearer. For some reason I thought a bound device could be used in nova-core all the time but it sounds like we can just use it in some contexts. So in the future when aux bus or whatever talks to nova-core and we need to do something with a Device, it sounds like we’d still need RCU-based accesses unless it is a special case like probe or irq handling. Correct me if I’m wrong though. Cc <span class="user-mention" data-user-id="890884">@Alexandre Courbot</span> <span class="user-mention" data-user-id="782725">@John Hubbard</span> <span class="user-mention" data-user-id="765503">@Alistair</span> <span class="user-mention" data-user-id="897540">@Timur Tabi</span></p>
+
+
+
+<a name="517593534"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517593534" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517593534">(May 12 2025 at 15:59)</a>:</h4>
+<p>Or perhaps if we can guarantee in a certain context that a device is bound, we’d be fine</p>
+
+
+
+<a name="517594331"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517594331" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517594331">(May 12 2025 at 16:02)</a>:</h4>
+<p>For nova-core I'm rather confident that we can get away with (almost) always having a <code>&amp;Device&lt;Bound&gt;</code> in scope when we need it.</p>
+<p>It depends a bit on nova-drm, since DRM allows IOCTLs after the parent device has been unbound, but I'm pretty sure we can find a solution for that in the interface between nova-core and nova-drm.</p>
+
+
+
+<a name="517841107"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517841107" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517841107">(May 13 2025 at 14:08)</a>:</h4>
+<p>I guess there should be a way in the DRM ioctl code to ensure that the device is still bound, convert our device reference to a bound one, and pass that to nova-core?</p>
+
+
+
+<a name="517841658"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517841658" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517841658">(May 13 2025 at 14:10)</a>:</h4>
+<p>You can only do that if you can guarantee that the device is actually bound when the ioctl() is called and it is not unbound during the ioctl(). DRM doesn't guarantee that.</p>
+
+
+
+<a name="517842114"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517842114" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517842114">(May 13 2025 at 14:12)</a>:</h4>
+<p>Anyways, we can handle it from the API. nova-drm shouldn't be able to call into nova-core after the device has been unbound. nova-core abstracts the hardware, if the hardware is gone (i.e. the device is unbound), it shouldn't be called.</p>
+
+
+
+<a name="517842390"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517842390" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517842390">(May 13 2025 at 14:12)</a>:</h4>
+<p>Isn't there a way to hold on a do-not-unbind lock that would allow such a conversion to take place?</p>
+
+
+
+<a name="517842856"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517842856" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517842856">(May 13 2025 at 14:14)</a>:</h4>
+<p>It's not on the driver to control unbind, it's on the driver to properly handle the event at any time. But even if we would, what would we win? Replace the Devres RCU with another lock?</p>
+
+
+
+<a name="517843097"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517843097" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517843097">(May 13 2025 at 14:15)</a>:</h4>
+<p>Hopefully a less constraining one yes <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="517843443"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517843443" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517843443">(May 13 2025 at 14:16)</a>:</h4>
+<p>Besides that, what would be the purpose? Artificially keep the bound state and try reading from and writing to a device that's potentially gone (i.e. unplugged)?</p>
+
+
+
+<a name="517843947"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517843947" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517843947">(May 13 2025 at 14:18)</a>:</h4>
+<p>It's just that I don't see how the problem could be solved. If nova-core is called from nova-drm, it becomes part of it and thus responsible to handle the unbound event at any time as well. So this would limit the places where we can use Device&lt;Bound&gt;</p>
+
+
+
+<a name="517844033"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517844033" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517844033">(May 13 2025 at 14:18)</a>:</h4>
+<p>And a device can be unplugged while probe() is running all the same</p>
+
+
+
+<a name="517844524"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517844524" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517844524">(May 13 2025 at 14:20)</a>:</h4>
+<p>Or maybe I don't understand the problem space. Actually I'm pretty sure I don't</p>
+
+
+
+<a name="517846952"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517846952" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517846952">(May 13 2025 at 14:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="890884">Alexandre Courbot</span> <a href="#narrow/channel/288089-General/topic/Question.20about.20devres.20access_with.28.29/near/517843947">said</a>:</p>
+<blockquote>
+<p>It's just that I don't see how the problem could be solved. If nova-core is called from nova-drm, it becomes part of it and thus responsible to handle the unbound event at any time as well. So this would limit the places where we can use Device&lt;Bound&gt;</p>
+</blockquote>
+<p>I'm not sure there are a lot of DRM ioctls() from which we'd call nova-core functions that need register accesses; are there any at all? I'd assume that all those would only hit GSP paths?</p>
+<p>Otherwise, there may be a few nova-core functions to be called from nova-drm that need to do the <code>try_access_with()</code> dance. But that'd be fine, that's exactly what we have it for.</p>
+
+
+
+<a name="517848783"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517848783" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517848783">(May 13 2025 at 14:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="890884">Alexandre Courbot</span> <a href="#narrow/channel/288089-General/topic/Question.20about.20devres.20access_with.28.29/near/517843097">said</a>:</p>
+<blockquote>
+<p>Hopefully a less constraining one yes <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+</blockquote>
+<p>Well, I think a quick RCU read side critical section covering a few I/O accesses is much less constraining and costly than a huge "device bound" mutex.</p>
+
+
+
+<a name="517849818"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517849818" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517849818">(May 13 2025 at 14:42)</a>:</h4>
+<p>If we end up doing GSP initialization lazily then the entry point for the whole dance will be an open() call. If that qualifies for having a bound device, that's fine I guess.</p>
+
+
+
+<a name="517910198"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517910198" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517910198">(May 13 2025 at 19:45)</a>:</h4>
+<p>Looking ahead, the direction of GSP design is definitely toward, "GSP owns register accesses. The OS kernel driver must go through GSP in order to accomplish tasks that, in the past, would have been done via direct BAR0 access from the driver".</p>
+<p>I'm hoping that we can eventually get down to just a few register accesses from the nova-core, and even those would be mostly during GPU initialization.</p>
+<p>For now though, maybe we should document a table of registers that nova-core accesses, and at what stage (init vs. channel allocation vs...), and update it as we go along. That would allow quantifying the cost of try_access_with(), and we could see if it actually turns into a problem.</p>
+
+
+
+<a name="517922474"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517922474" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517922474">(May 13 2025 at 21:01)</a>:</h4>
+<p><code>try_access_with()</code> itself is never the problem, it just catches bugs that we also catch in DRM C drivers with <code>drm_dev_enter()</code> and <code>drm_dev_exit()</code>.</p>
+<p>More general, if you can't prove that the device can't be unbound while using I/O memory, i.e. you're in a call path where the device can be unbound concurrently, we ultimately need some kind of protection.</p>
+<p>Think of it in C. Let's say in <code>probe()</code> you call <code>pcim_iomap()</code> and store the base address in some reference counted structure, e.g. your driver specific DRM device.</p>
+<p>Think of what happens if in a call path where the (PCI) device can be unbound concurrently (e.g. DRM ioctl()) you just access the I/O memory -- it potentially faults.</p>
+<p>DRM ioctls() are prone to that, hence they protect things with <code>drm_dev_enter()</code> and <code>drm_dev_exit()</code>, which in the end is a specialized version of <code>Devres</code> and <code>try_access_with()</code>.</p>
+<p>Besides that, I doubt that an RCU read side critical section for MMIO accesses becomes a relevant cost. And as mentioned, I'm pretty sure that we can almost always avoid that in nova-core anyways.</p>
+
+
+
+<a name="517933961"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517933961" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517933961">(May 13 2025 at 22:28)</a>:</h4>
+<p>I think there are vmm paths where we need to flush BARs that might still need register access (I think TLB flushes are register based)</p>
+
+
+
+<a name="517934071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517934071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517934071">(May 13 2025 at 22:28)</a>:</h4>
+<p>lazy GSP init isn't something we will be that interested in, so I really wouldn't waste time considering it</p>
+
+
+
+<a name="517934108"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517934108" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517934108">(May 13 2025 at 22:29)</a>:</h4>
+<p>we want to load the driver and power manage the device properly without userspace ever interacting</p>
+
+
+
+<a name="517934148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Question%20about%20devres%20access_with%28%29/near/517934148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Question.20about.20devres.20access_with.28.29.html#517934148">(May 13 2025 at 22:29)</a>:</h4>
+<p>suspend/resume + dynamic power mgmt should all be happening once nova-core is loaded</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

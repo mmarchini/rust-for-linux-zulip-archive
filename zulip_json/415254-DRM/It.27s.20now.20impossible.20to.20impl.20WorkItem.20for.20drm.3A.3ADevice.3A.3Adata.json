@@ -1,0 +1,56 @@
+[
+    {
+        "content": "<p>This field is no longer reference counted, so it cannot be used as <code>WorkItem::Pointer</code>.  The trait cannot be implemented for <code>drm::device::Device&lt;T&gt;</code> or <code>ARef&lt;drm::device::Device&lt;T&gt;&gt;</code> either, because of the orphan rule. This leads to two issues:</p>\n<p>a) We now have to build an extra indirection just to make this work, i.e.: we have to place inner members of <code>drm::device::Device::data</code> behind an <code>Arc&lt;T&gt;</code> just to share them with the worker, even though <code>ARef&lt;drm::device::Device&lt;T&gt;&gt;</code> is already ref-counted.</p>\n<p>b) We now have to group fields into the same struct to place them in said <code>Arc</code>. This is just so that they can be accessed by the worker, even though they may be unrelated otherwise, i.e.:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">DriverData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"c1\">// this is clunky and unnecessary</span>\n<span class=\"w\">  </span><span class=\"n\">shared_worker_fields</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">SharedDriverData</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>c) different workers may need to access different fields, so eventually lots of things will end up in the <code>SharedDriverData</code> struct of the previous example</p>\n<p>This looks like a regression (feature-wise) from what we had before.</p>\n<p>cc <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span></p>",
+        "id": 525730715,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1750863039
+    },
+    {
+        "content": "<p>hmm, I guess I was too eager to comment here, I now see there is nothing forbidding callers from setting Device&lt;T&gt;::data to an Arc&lt;T&gt;, which would yield the same behavior as before apparently</p>",
+        "id": 525732461,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1750863486
+    },
+    {
+        "content": "<p>I don't see how this is different than before, if you really want <code>drm::Device::data</code> to be reference counted you can do that:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">MyDriver</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Data</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">MyData</span><span class=\"o\">&gt;</span><span class=\"p\">;</span>\n<span class=\"w\">   </span><span class=\"p\">[</span><span class=\"o\">..</span><span class=\"p\">.]</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 525732557,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750863512
+    },
+    {
+        "content": "<p>However, this seems like a workaround. Usually, you want your data to live exactly as long as the <code>drm::Device</code>, hence no need for a separate allocation.</p>",
+        "id": 525732778,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750863579
+    },
+    {
+        "content": "<p>Maybe workqueue should work slightly different and take a <code>ForeignOwnable</code> instead.</p>",
+        "id": 525732824,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750863597
+    },
+    {
+        "content": "<p>yeah, we now have two refcounts for something that should have the same lifetime, true</p>",
+        "id": 525733205,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1750863685
+    },
+    {
+        "content": "<p>I'm trying to see your point here with the <code>ForeignOwnable</code> by the way</p>",
+        "id": 525733501,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1750863767
+    },
+    {
+        "content": "<p>I don't know exactly how the workqueue stuff works (would need to take a look), but it seemed that you were implying that you can only implement it on your own type,  hence wouldn't <code>struct WqData(ARef&lt;drm::Device&gt;)</code> work?</p>",
+        "id": 525734052,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750863926
+    },
+    {
+        "content": "<p>I think we can just implement it for Device and have it dispatch to the inner T</p>",
+        "id": 525734092,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1750863939
+    }
+]

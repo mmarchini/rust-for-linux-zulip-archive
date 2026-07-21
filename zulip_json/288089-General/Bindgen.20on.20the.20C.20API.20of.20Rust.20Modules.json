@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Hey!</p>\n<p>I have a Rust module that exposes a C API for the wider kernel to use. I guess a similar scenario will happen when DRM utilities are written in Rust but are exposed to C drivers. While it is rather straightforward to expose the C entry-points in Rust, I would love to get an automatic verification that it matches the prototypes in the C header.</p>\n<p>What I did in the bus1 patches is write a C header with the expected C API exposed by the Rust driver, and then run bindgen on it to be able to use those exact symbols in Rust. This avoids duplication of API constants, and even allows verifying function prototypes via static assertions (though I did not include that in the PR).</p>\n<p>I wonder whether anyone did something similar, and whether this is how we want this to be done?</p>\n<p>Some issues along the way:</p>\n<ul>\n<li>I copied the bindgen invocation almost verbatim, since the makefile variables are not exported. I don't want the private module symbols to end up in kernel::bindings, as it seems kinda unrelated to it. And this allows recompiling a module without changing the kernel objects (very convenient for hot-reloading during development). Is there some strict requirement to run bindgen only once? Or is it suitable to export the bindgen command so other modules can run it as well?</li>\n<li>I could not figure out a good way to expose Rust objects other than in a box. Some objects would preferably live on the stack to avoid the overhead of the allocation. But I could not figure out a decent option to get a suitable object size to use in the C header. I could certainly just pick a large size and alignment, but for some objects the selected kernel configurations and architecture make a big difference.</li>\n</ul>\n<p>Ideas welcome!<br>\nDavid</p>",
+        "id": 583010794,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1775042324
+    },
+    {
+        "content": "<p>For constants, the Rust code should use the value defined in the header via bindgen. For functions, you should use the <code>#[export]</code> macro that I already added for checking that the signature is correct.</p>",
+        "id": 583011211,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1775042458
+    },
+    {
+        "content": "<p>We don't have a good solution for struct sizes, as headers can't really depend on Rust code. You have to guess/overestimate with an assertion on Rust side.</p>",
+        "id": 583011399,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1775042529
+    },
+    {
+        "content": "<p>I could make the Rust compilation output the size of an object and use that in the C-header. Kinda like rbindgen. Would mean compiling the source twice, or we get a circular dependency, I think.</p>",
+        "id": 583016032,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1775043896
+    },
+    {
+        "content": "<p>It would probably be the first <code>.h</code> file kernel-wide that was generated at build-time.</p>",
+        "id": 583016440,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1775044005
+    },
+    {
+        "content": "<p>So you can't <em>just</em> do that.</p>",
+        "id": 583016473,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1775044013
+    },
+    {
+        "content": "<p>You sure? I thought the ./arch did all kinds of weird autogeneration (syscalls come to mind).</p>\n<p>But if the makefile dependency handling cannot do that right now, I could write it as an <code>extern size_t foo;</code> and use it with <code>alloca()</code> or VLAs.</p>",
+        "id": 583016780,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1775044110
+    },
+    {
+        "content": "<p>There are generated header files, but they are usually checked in and not actually generated during every build.</p>",
+        "id": 583016980,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1775044168
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"688800\">@Emilio Cobos Álvarez</span> told me once when we talked about <code>bindgen</code> that in Firefox they had some sort of solution for this, i.e. \"circular\" issues with C &lt;-&gt; Rust.</p>",
+        "id": 583016985,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1775044170
+    },
+    {
+        "content": "<p>Right. I might have to investigate.<br>\nAny comments on exporting the bindgen stuff so modules can use $(call,bindgen) in makefiles?</p>",
+        "id": 583017436,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1775044299
+    },
+    {
+        "content": "<p>i.e. involving <code>cbindgen</code> as well.</p>",
+        "id": 583017452,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1775044303
+    }
+]

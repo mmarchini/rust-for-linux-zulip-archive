@@ -1,0 +1,74 @@
+[
+    {
+        "content": "<p>Hi! In my work on the rust vkms driver, I came across another thing it looks like I would need to add rust support for in the kernel: iosys_map bindings. I'm not entirely sure what these would look like yet, but my assumption is because of how general this interface is that it might be a good idea to make it <code>!Send</code> + <code>!Sync</code>, and expose IO operations as <code>unsafe</code> methods so that users implement their own safe abstractions around it to fit their needs. Does this seem like a good plan?</p>",
+        "id": 459935365,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723405689
+    },
+    {
+        "content": "<p>(disclamer, I don't know what <code>iosys_map</code> is and have just read the doc overview in <code>iosys-map.h</code>)</p>\n<p>Do you mind sharing what you need to use <code>iosys_map</code> for? What makes you think that we cannot provide safe abstractions?</p>",
+        "id": 459940931,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1723408173
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/459940931\">said</a>:</p>\n<blockquote>\n<p>(disclamer, I don't know what <code>iosys_map</code> is and have just read the doc overview in <code>iosys-map.h</code>)</p>\n<p>Do you mind sharing what you need to use <code>iosys_map</code> for? What makes you think that we cannot provide safe abstractions?</p>\n</blockquote>\n<p>The main reason I want to use it is so that we can handle return values from DRM functions like <code>drm_gem_fb_vmap()</code> (<code>drivers/gpu/drm/drm_gem_framebuffer_helper.c</code>) for mapping framebuffers that could live in either system memory or IO memory at runtime. </p>\n<p>Also - I actually guess maybe we could expose them as safe? I had assumed this was something that would be an unsafe operation because a generic type for a memory mapping isn't really going to know what access rules ithe memory is governed by. However, it seems like the <code>kernel::io::Io</code> type we currently have in the kernel actually exposes stuff like <code>readw</code>/<code>readl</code>/etc. as safe methods so I guess perhaps safe would be fine here?</p>",
+        "id": 459941429,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723408385
+    },
+    {
+        "content": "<p>Going to start working on this today - I'm thinking of trying to handle this similarly to <code>io.rs</code>, except we use a struct like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">IosysMap</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">map</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">bindings</span><span class=\"p\">::</span><span class=\"n\">iosys_map</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"n\">maxsize</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>And probably require that any conversions from a raw iosys_map require that the user specify the size to store in maxsize</p>",
+        "id": 462212099,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723582940
+    },
+    {
+        "content": "<p>Though I've been wondering if we should maybe do some sort of a conversion from iosys_map to a rust type instead of embedding the struct. It feels like it's a bit of a shame to have something redundant like this when we already have <code>io.rs</code></p>",
+        "id": 462212242,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723583014
+    },
+    {
+        "content": "<p>(I just realized <a href=\"http://io.rs\">io.rs</a> isn't actually upstream yet, whoops!)</p>",
+        "id": 462215297,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723584540
+    },
+    {
+        "content": "<p>Could we also do this?:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">/// # Invariants</span>\n<span class=\"sd\">/// - the pointer stored in `map` points to a valid `T`</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">IoSysMap</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">map</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">iosys_map</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">_p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PhantomData</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>And then you eg could use <code>IoSysMap&lt;[u8; 256]&gt;</code>. Some more questions:</p>\n<ul>\n<li>Do you need to have a variable size? Or do you know it statically?</li>\n<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>\n</ul>\n<p>in case you don't know the size statically (which I think is the case, based on your approach), then the idea above doesn't work.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462215297\">said</a>:</p>\n<blockquote>\n<p>(I just realized <a href=\"http://io.rs\">io.rs</a> isn't actually upstream yet, whoops!)</p>\n</blockquote>\n<p>is it on the rust branch? I only found <code>io_{buffer,mem,iter}.rs</code> there.</p>",
+        "id": 462268046,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1723614571
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046\">said</a>:</p>\n<blockquote>\n<ul>\n<li>Do you need to have a variable size? Or do you know it statically?</li>\n</ul>\n</blockquote>\n<p>honestly I don't and TBH I'd rather it not, I was mostly just copying what <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> has been doing. Supposedly the <code>maxsize</code> thing is for when we don't know the size of something statically.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046\">said</a>:</p>\n<blockquote>\n<ul>\n<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>\n</ul>\n</blockquote>\n<p>This is a very general interface used all over the kernel, so it can really point to anything. Sometimes it might be a struct, in my case it is simply a framebuffer - so a linear array of pixel data. That being said - I don't think any non-primitive types would ever be stored in them</p>",
+        "id": 462414639,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723668166
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046\">said</a>:</p>\n<blockquote>\n<p>Lyude <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462215297\">said</a>:</p>\n<blockquote>\n<p>(I just realized <a href=\"http://io.rs/\">io.rs</a> isn't actually upstream yet, whoops!)</p>\n</blockquote>\n<p>is it on the rust branch? I only found <code>io_{buffer,mem,iter}.rs</code> there.</p>\n</blockquote>\n<p>I will have to check, it might be on the nova branch actually</p>",
+        "id": 462414688,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723668194
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span>  You can find it in [1] and it's used by the PCI abstractions in [2].</p>\n<p>We can probably reuse it for an abstraction for iosys_map, but I still need to have a look on that.</p>\n<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> I did not get to it yet, but tomorrow I should have some time for that.</p>\n<p>[1] <a href=\"https://github.com/Rust-for-Linux/linux/commits/staging/rust-device/\">https://github.com/Rust-for-Linux/linux/commits/staging/rust-device/</a><br>\n[2] <a href=\"https://github.com/Rust-for-Linux/linux/commits/staging/rust-pci/\">https://github.com/Rust-for-Linux/linux/commits/staging/rust-pci/</a></p>",
+        "id": 462415379,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1723668550
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462414639\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046\">said</a>:</p>\n<blockquote>\n<ul>\n<li>Do you need to have a variable size? Or do you know it statically?</li>\n</ul>\n</blockquote>\n<p>honestly I don't and TBH I'd rather it not, I was mostly just copying what <span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> has been doing. Supposedly the <code>maxsize</code> thing is for when we don't know the size of something statically.</p>\n</blockquote>\n<p>sorry, I am confused, you don't need and don't want to have variable size or you don't know it statically?</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462268046\">said</a>:</p>\n<blockquote>\n<ul>\n<li>what do these normally point to just opaque data (ie <code>[u8]</code>) or do you also store structs with eg mutexes or similar stuff?</li>\n</ul>\n</blockquote>\n<p>This is a very general interface used all over the kernel, so it can really point to anything. Sometimes it might be a struct, in my case it is simply a framebuffer - so a linear array of pixel data. That being said - I don't think any non-primitive types would ever be stored in them</p>\n</blockquote>\n<p>I see, but it still would be useful to be able to give the type of the pointed to value, so I think we should support that.</p>",
+        "id": 462415386,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1723668555
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/288089-General/topic/Unsafe.20iosys_map.20bindings/near/462415386\">said</a>:</p>\n<blockquote>\n<p>I see, but it still would be useful to be able to give the type of the pointed to value, so I think we should support that.</p>\n</blockquote>\n<p>Oh yeah - this was kind of why I was hoping to mimic the way that dakr's interface currently works, since they've got support for reading a number of primitives</p>",
+        "id": 462425471,
+        "sender_full_name": "Lyude",
+        "timestamp": 1723674335
+    }
+]

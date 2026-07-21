@@ -1,0 +1,536 @@
+<html>
+<head><meta charset="utf-8"><title>PIO support · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html">PIO support</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="497998744"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/497998744" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#497998744">(Feb 05 2025 at 23:02)</a>:</h4>
+<p><span class="user-mention" data-user-id="412307">@Fiona Behrens</span> <br>
+CC: <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> </p>
+<p>In response to the PIO topic you brought up during today's meeting.</p>
+<p>I think that on the Rust side we shouldn't use <code>iowrite*</code>/<code>ioread*</code>. The reason is that those functions always do the if-else dance in <code>IO_COND()</code>, which in Rust isn't necessary, since we can do this check once on creation of the <code>Io</code> type.</p>
+<p>We can introduce a trait <code>IoBackend</code> with generic read / write functions, e.g. <code>read8</code> or <code>write32</code> and then implement an MMIO and a PIO type implementing those functions with the corresponding MMIO and PIO accessors. The generic <code>Io</code> type can then instantiate  either one or the other on creation avoiding the duplicate checks we'd get with <code>iowrite*</code>/<code>ioread*</code>.</p>
+
+
+
+<a name="497999650"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/497999650" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#497999650">(Feb 05 2025 at 23:09)</a>:</h4>
+<p>Hmm, how would we do that check on functions that just give us a cockie. For platforms that uses the iowrite from lib I do like that idea, but according to the docs there could be a arch that handles it differently</p>
+
+
+
+<a name="497999969"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/497999969" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#497999969">(Feb 05 2025 at 23:12)</a>:</h4>
+<p>E.g. the pci_iomap function is documented to just return this cookie without reasonable way to check if pio or mmio</p>
+
+
+
+<a name="497999990"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/497999990" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#497999990">(Feb 05 2025 at 23:12)</a>:</h4>
+<p>Will definitely try to code that down</p>
+
+
+
+<a name="498001970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498001970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498001970">(Feb 05 2025 at 23:29)</a>:</h4>
+<p>If you look at <code>pci_iomap()</code>, it either returns the result of <code>ioremap()</code> which is a real memory mapping or the result of <code>ioport_map()</code>, which indeed is some kind of cookie. But in this case cookie means that the port is embedded in a "fake" address.</p>
+<p>When you call e.g. <code>ioread32()</code> [1] the "fake" address is converted to the port again [2]. We should be able to do the same thing once on creation of <code>Io</code>, rather than on every read / write.</p>
+<p>[1] <a href="https://elixir.bootlin.com/linux/v6.13.1/source/lib/iomap.c#L225">https://elixir.bootlin.com/linux/v6.13.1/source/lib/iomap.c#L225</a><br>
+[2] <a href="https://elixir.bootlin.com/linux/v6.13.1/source/lib/iomap.c#L57">https://elixir.bootlin.com/linux/v6.13.1/source/lib/iomap.c#L57</a></p>
+
+
+
+<a name="498002631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498002631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498002631">(Feb 05 2025 at 23:35)</a>:</h4>
+<p>As you say, this is at least true for CONFIG_GENERIC_IOMAP=y. It might indeed be that otherwise we're screwed. :/</p>
+
+
+
+<a name="498003132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498003132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498003132">(Feb 05 2025 at 23:39)</a>:</h4>
+<p>So, for CONFIG_GENERIC_IOMAP=n we probably need a backend for <code>iowrite*</code>/<code>ioread*</code>.</p>
+
+
+
+<a name="498051983"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498051983" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498051983">(Feb 06 2025 at 07:23)</a>:</h4>
+<p>Maybe we translate <code>iowrite*</code> to Rust and let the <code>IO_COND()</code> check happen in Rust?</p>
+
+
+
+<a name="498052009"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498052009" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498052009">(Feb 06 2025 at 07:23)</a>:</h4>
+<p>Instead of using a helper for <code>iowrite*</code>.</p>
+
+
+
+<a name="498059248"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498059248" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498059248">(Feb 06 2025 at 08:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/PIO.20support/near/498051983">said</a>:</p>
+<blockquote>
+<p>Maybe we translate <code>iowrite*</code> to Rust and let the <code>IO_COND()</code> check happen in Rust?</p>
+</blockquote>
+<p>But still storing the cookie in rust? Not sure how much this would help us</p>
+
+
+
+<a name="498060059"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498060059" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498060059">(Feb 06 2025 at 08:14)</a>:</h4>
+<p>I mean, if you can do something better than what C does, that's even better of course.</p>
+
+
+
+<a name="498061030"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061030" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061030">(Feb 06 2025 at 08:20)</a>:</h4>
+<p>You mean for still one composite type that is able to handle both. Hmm have to look at that</p>
+
+
+
+<a name="498061115"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061115" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061115">(Feb 06 2025 at 08:21)</a>:</h4>
+<p>It is at least much easier to just do that as an enum or something like that as we can easier return types bigger than a pointer in rust</p>
+
+
+
+<a name="498061124"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061124" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061124">(Feb 06 2025 at 08:21)</a>:</h4>
+<p>If C does it that way, then clearly the performance of it is acceptable?</p>
+
+
+
+<a name="498061249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061249">(Feb 06 2025 at 08:22)</a>:</h4>
+<p>Which way do you mean now? Think that could also be somewhat included in being able to just return a new type</p>
+
+
+
+<a name="498061391"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061391" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061391">(Feb 06 2025 at 08:23)</a>:</h4>
+<p>I mean that C does a runtime check?</p>
+
+
+
+<a name="498061453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061453">(Feb 06 2025 at 08:23)</a>:</h4>
+<p>Ah, yeah could be fine</p>
+
+
+
+<a name="498061531"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498061531" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498061531">(Feb 06 2025 at 08:24)</a>:</h4>
+<p>If you always know at compile time which variant it's going to be, then it's fine to get rid of the check, of course.</p>
+
+
+
+<a name="498062088"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062088" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062088">(Feb 06 2025 at 08:27)</a>:</h4>
+<p>Still wonder if we could do it in a nice way with const generics. But as enums are AFAIK still not allowed, unsure how to reasonable implement a three state</p>
+
+
+
+<a name="498062256"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062256" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062256">(Feb 06 2025 at 08:28)</a>:</h4>
+<p>I think if you want generics just use normal types with a trait instead of trying to use const generics.</p>
+
+
+
+<a name="498062309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062309">(Feb 06 2025 at 08:28)</a>:</h4>
+<p>Hehe yeah sounds reasonable</p>
+
+
+
+<a name="498062415"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062415" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062415">(Feb 06 2025 at 08:29)</a>:</h4>
+<p>But one thing is, presumably C does the runtime check because you don't know at compile time which one you need? If so, then generics won't help you since they require you to know it at compile time?</p>
+
+
+
+<a name="498062491"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062491" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062491">(Feb 06 2025 at 08:29)</a>:</h4>
+<p>Sometimes you know, sometimes not</p>
+
+
+
+<a name="498062650"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062650" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062650">(Feb 06 2025 at 08:30)</a>:</h4>
+<p>I guess you can have three types, where one does the runtime check.</p>
+
+
+
+<a name="498062708"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062708" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062708">(Feb 06 2025 at 08:30)</a>:</h4>
+<p>We could in the end then also use Box&lt;dyn trait&gt; but don’t like that to much</p>
+
+
+
+<a name="498062759"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062759" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062759">(Feb 06 2025 at 08:31)</a>:</h4>
+<p>Nah, now you will have worse performance than c</p>
+
+
+
+<a name="498062789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498062789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498062789">(Feb 06 2025 at 08:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/PIO.20support/near/498062650">said</a>:</p>
+<blockquote>
+<p>I guess you can have three types, where one does the runtime check.</p>
+</blockquote>
+<p>Yep that was my idea now. That’s why three states</p>
+
+
+
+<a name="498147758"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498147758" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498147758">(Feb 06 2025 at 15:27)</a>:</h4>
+<p>From what I see right now, u64 accessors are only defined for mmio, not pio and sometimes on iowrite, but also just the extern void but then mission implementations. Should I just not provide 64bit functions in the trait then?</p>
+
+
+
+<a name="498152147"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498152147" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498152147">(Feb 06 2025 at 15:46)</a>:</h4>
+<p>very very rough sketch, but maybe like this could work. Just have to implement MMIO and the generic coockie base system now (and fix documentation and everything :) )<br>
+<a href="https://cyberchaos.dev/kloenk/linux/-/commit/c76d20c5f4bc0c4ec49042899e4ef33500c3a55e">https://cyberchaos.dev/kloenk/linux/-/commit/c76d20c5f4bc0c4ec49042899e4ef33500c3a55e</a></p>
+
+
+
+<a name="498154635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498154635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498154635">(Feb 06 2025 at 15:56)</a>:</h4>
+<p>You can have two traits, one with the 64-bit functions and one with the others. Then only implement the 64-bit trait when they're actually available.</p>
+
+
+
+<a name="498154709"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498154709" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498154709">(Feb 06 2025 at 15:56)</a>:</h4>
+<p>yeah, would work as well</p>
+
+
+
+<a name="498154854"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498154854" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498154854">(Feb 06 2025 at 15:57)</a>:</h4>
+<p>but we also have some of the relaxed and similar things as well, other option would be to just create some of those as "normal" functions</p>
+
+
+
+<a name="498155415"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498155415" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498155415">(Feb 06 2025 at 15:59)</a>:</h4>
+<p>I think for PIO, e.g. read8_relaxed() can just call read8().</p>
+
+
+
+<a name="498155591"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498155591" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498155591">(Feb 06 2025 at 16:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/PIO.20support/near/498155415">said</a>:</p>
+<blockquote>
+<p>I think for PIO, e.g. read8_relaxed() can just call read8().</p>
+</blockquote>
+<p>so you would like to have those in the trait as well?</p>
+
+
+
+<a name="498158359"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498158359" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498158359">(Feb 06 2025 at 16:12)</a>:</h4>
+<p>I think they have to be, no?</p>
+
+
+
+<a name="498158517"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498158517" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498158517">(Feb 06 2025 at 16:12)</a>:</h4>
+<p>We can also just add it to only the MMIO struct that implements the trait. Less fun to use, but think the coockie interface also does not have the relaxed e.g.</p>
+
+
+
+<a name="498159131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159131">(Feb 06 2025 at 16:14)</a>:</h4>
+<p>But how does that help? In <code>Io</code> we can only use the trait functions, can't we?</p>
+
+
+
+<a name="498159256"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159256" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159256">(Feb 06 2025 at 16:15)</a>:</h4>
+<p>hmm yeah, but we can maybe generate a MMIO struct from IO</p>
+
+
+
+<a name="498159289"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159289" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159289">(Feb 06 2025 at 16:15)</a>:</h4>
+<p>_relaxed btw. only means that they don't have a memory barrier.</p>
+
+
+
+<a name="498159382"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159382" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159382">(Feb 06 2025 at 16:15)</a>:</h4>
+<p>But then it's not transparent to the user, I'd like to avoid that.</p>
+
+
+
+<a name="498159724"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159724" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159724">(Feb 06 2025 at 16:17)</a>:</h4>
+<p>I think we don't need to worry about it too much, having PIO implement e.g. read8_relaxed() as read8() should be fine.</p>
+
+
+
+<a name="498159808"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498159808" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498159808">(Feb 06 2025 at 16:17)</a>:</h4>
+<p>ok, so just both, can add that to my POC above later</p>
+
+
+
+<a name="498365084"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498365084" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498365084">(Feb 07 2025 at 15:25)</a>:</h4>
+<p>I did another grep in my linux checkout. The only occurrences that are related to all this are directly on MMIO, there is nothing on the iowrite family and also not on pio, so it's fine to just do the relaxed ones on MMIO</p>
+
+
+
+<a name="498365466"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498365466" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498365466">(Feb 07 2025 at 15:26)</a>:</h4>
+<p>Sure, but what do you suggest should Io::write8_relaxed() do if it's PIO?</p>
+
+
+
+<a name="498365511"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498365511" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498365511">(Feb 07 2025 at 15:27)</a>:</h4>
+<p>I don't want to implement it at all</p>
+
+
+
+<a name="498365609"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498365609" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498365609">(Feb 07 2025 at 15:27)</a>:</h4>
+<p>As only MMIO implements it, and not even the branching function, we can just implement it on that struct that is MMIO</p>
+
+
+
+<a name="498365899"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498365899" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498365899">(Feb 07 2025 at 15:28)</a>:</h4>
+<p>But we have a common <code>Io</code> interface. Otherwise drivers have to know on compile time whether they are on PIO or MMIO.</p>
+
+
+
+<a name="498366019"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498366019" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498366019">(Feb 07 2025 at 15:29)</a>:</h4>
+<p>But on the C side the relaxed version is also not on the common one, so there the driver has to know at compile time as well</p>
+
+
+
+<a name="498377622"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498377622" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498377622">(Feb 07 2025 at 16:23)</a>:</h4>
+<p>force pushed my code, still don't have the relaxed, have to change the macro for that, to make generating it easier, hopefully monday evening or tuesday I will fix that</p>
+
+
+
+<a name="498386157"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498386157" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498386157">(Feb 07 2025 at 17:05)</a>:</h4>
+<p>True, but what type would you return from pci::Device::iomap_region()?</p>
+<p>In C you can use whatever accessor you want because the driver typically knows if a certain BAR is MMIO or PIO.</p>
+
+
+
+<a name="498386390"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498386390" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498386390">(Feb 07 2025 at 17:06)</a>:</h4>
+<p>My idea was to make the generic version a enum. Then we can just match the enum and if it’s mmio return the mmio abstraction</p>
+
+
+
+<a name="498387727"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498387727" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498387727">(Feb 07 2025 at 17:12)</a>:</h4>
+<p>So what exactly would be the return type of pci::Device::iomap_region()?</p>
+
+
+
+<a name="498387779"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498387779" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498387779">(Feb 07 2025 at 17:13)</a>:</h4>
+<p>Probably this enum. Have to looks again</p>
+
+
+
+<a name="498387832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/498387832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#498387832">(Feb 07 2025 at 17:13)</a>:</h4>
+<p>The enum implementation is also only for Generic iomap</p>
+
+
+
+<a name="499342186"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499342186" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499342186">(Feb 12 2025 at 22:41)</a>:</h4>
+<p><a href="https://cyberchaos.dev/kloenk/linux/-/commit/cb4245aaa9904283368f85ce83412bb724299162">https://cyberchaos.dev/kloenk/linux/-/commit/cb4245aaa9904283368f85ce83412bb724299162</a> this now implements the relaxed functions for MMIo, will work on how to create this enum now, so that the <code>pci::Device::iomap_region()</code> can return it</p>
+
+
+
+<a name="499343111"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499343111" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499343111">(Feb 12 2025 at 22:48)</a>:</h4>
+<p>One thing I noticed right now, is that currently we deref <code>pci::Bar</code> to <code>Io</code>. With Io being the enum for cached access (we have to do the check at some point either way) this does not work. We could implement the new IoAccess traits for Bar directly now though. Only thing is how to attach a lifetime to the io enum when you want raw access</p>
+
+
+
+<a name="499343681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499343681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499343681">(Feb 12 2025 at 22:53)</a>:</h4>
+<p>but we also have to transform the <code>IoRaw</code> for how I created the <code>PIo</code> function</p>
+
+
+
+<a name="499346843"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499346843" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499346843">(Feb 12 2025 at 23:18)</a>:</h4>
+<p>also with proper handing <code>Io::from_raw</code> can fail, if the cookie is invalid. That should never happen, but guess with rust abstraction should is not good enough :)</p>
+
+
+
+<a name="499359563"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499359563" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499359563">(Feb 13 2025 at 01:25)</a>:</h4>
+<p><a href="https://cyberchaos.dev/kloenk/linux/-/commit/ccdf58166fdd8892b3eb542f0fb53ec07b57adc9">https://cyberchaos.dev/kloenk/linux/-/commit/ccdf58166fdd8892b3eb542f0fb53ec07b57adc9</a> and a new version that implements everything based on <code>CONFIG_GENERIC_IOMAP</code>. have to see how to work without it (don't have a arm setup currently, so will be annoying to do, but will try)</p>
+
+
+
+<a name="499440867"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499440867" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499440867">(Feb 13 2025 at 10:54)</a>:</h4>
+<p>On my end this doesn't compile with PCI drivers.</p>
+<p>Maybe you can adjust samples/rust/rust_driver_pci.rs to show how it's supposed to work?</p>
+
+
+
+<a name="499454401"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499454401" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499454401">(Feb 13 2025 at 12:01)</a>:</h4>
+<p>Yeah, also planned. Know that I did not yet get to that. The general api is more what the current commit tries to show</p>
+
+
+
+<a name="499460541"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499460541" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499460541">(Feb 13 2025 at 12:31)</a>:</h4>
+<p>One thought that I forgot to mention: It may be good to send an early commit that changes the current function names of <code>Io</code> from readb() etc. to read8() etc. This may prevent some trouble once the actual thing you're working on is about to land.</p>
+<p>(Actually, I already thought of the <code>Io</code> abstraction advancing when I worked on it initially and I also therefore wanted to rename things to more generic names, but I entirely forgot about it. <span aria-label="sad" class="emoji emoji-2639" role="img" title="sad">:sad:</span> )</p>
+
+
+
+<a name="499463745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499463745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499463745">(Feb 13 2025 at 12:46)</a>:</h4>
+<p>You mean as very early commit just alone renaming it. Yeah could make sense</p>
+
+
+
+<a name="499774399"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499774399" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499774399">(Feb 14 2025 at 15:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412307">Fiona Behrens</span> <a href="#narrow/channel/288089-General/topic/PIO.20support/near/499463745">said</a>:</p>
+<blockquote>
+<p>You mean as very early commit just alone renaming it. Yeah could make sense</p>
+</blockquote>
+<p>Or should I in that commit introduce all the macros and trait I have already, so we have the trait system and then just add the new things</p>
+
+
+
+<a name="499774706"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/499774706" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#499774706">(Feb 14 2025 at 15:51)</a>:</h4>
+<p>also looked again at arm (not usually that much down at assembler level), that does not have portio, not sure how to best then change that Io is equals to MMIo</p>
+
+
+
+<a name="500276444"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/500276444" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#500276444">(Feb 17 2025 at 21:25)</a>:</h4>
+<p><a href="https://lore.kernel.org/rust-for-linux/20250217-io-generic-rename-v1-1-06d97a9e3179@kloenk.dev/T/">https://lore.kernel.org/rust-for-linux/20250217-io-generic-rename-v1-1-06d97a9e3179@kloenk.dev/T/</a></p>
+
+
+
+<a name="500753600"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/500753600" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rob Herring <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#500753600">(Feb 19 2025 at 22:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/PIO.20support/near/499440867">said</a>:</p>
+<blockquote>
+<p>On my end this doesn't compile with PCI drivers.</p>
+<p>Maybe you can adjust samples/rust/rust_driver_pci.rs to show how it's supposed to work?</p>
+</blockquote>
+<p>I'm not sure the "relaxed" accessors are supposed to be used with PCI. They were primarily added for non-PCI use on weakly ordered systems (Arm).  In C we can't really enforce the usage, but with Rust we could I think. There's a lot of history around this. It would be good to get Arnd Bergmann's attention on it.</p>
+
+
+
+<a name="500889290"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/500889290" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#500889290">(Feb 20 2025 at 14:16)</a>:</h4>
+<p><span class="user-mention" data-user-id="758058">@Rob Herring</span></p>
+<p>I don't really see how this is related to PCI? The relaxed semantics is about instruction ordering  at compile time and CPU ordering at runtime. As you mentioned for ARM / ARM64 both are relevant, for x86 the relaxed semantics only omits the compiler barrier as in the non-relaxed version.</p>
+<p>The PCI bus itself has strictly ordered reads (i.e., a read cannot pass a previous write), but may have unordered writes, e.g. posted writes (buffering in root complexes or switches) or write combining. But this is unrelated to the ordering of the CPU or the compiler.</p>
+<p>So, on x86 it's probably not that interesting to be able to omit the compiler barrier. But on ARM / ARM64, PCI devices are typically mapped through a PCI root complex, i.e. PCI BAR accesses happens through accesses to the root complex and there we might care about unnecessary CPU barriers, no?</p>
+
+
+
+<a name="500969060"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/500969060" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rob Herring <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#500969060">(Feb 20 2025 at 21:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <br>
+The issue is drivers get developed on x86 which is SO both for PCI <em>and</em> the CPU. Arm has to ensure accesses behave the same or there may be problems with using those PCI devices on Arm. You can't have a WO CPU reordering things before they even get to the PCI bus. You would be back to Arm and x86 behaving differently if you used relaxed accessors on a PCI device. There's very few PCI drivers using relaxed accessors:</p>
+<p>git grep --name-only 'struct pci_driver' drivers/ | xargs git grep readl_relaxed</p>
+<p>Mostly all HiSilicon drivers, so maybe a questionable pattern... Given so few, do we even need/want relaxed accessors for PCI?</p>
+<p>Also, I think the 'asm volatile' still serves as some compiler barrier as it is still necessary for register accesses to occur in program order. Otherwise, things could be really broken. But I'm a bit rusty on the ins and outs of asm volatile.</p>
+<p>Again, just make sure the folks that have studied this are in the loop. And Arnd has the most cross-arch experience there.</p>
+
+
+
+<a name="501073372"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501073372" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501073372">(Feb 21 2025 at 10:35)</a>:</h4>
+<blockquote>
+<p>You can't have a WO CPU reordering things before they even get to the PCI bus.</p>
+</blockquote>
+<p>I think you can, but I agree that it very rarely is possible and even less often needed. Maybe some bulk reads / writes, where the order doesn't matter. (We may have a use-case in Nova where we could do it, but if we need it is a whole different question -- I think not.)</p>
+<p>For the decision of whether to expose a separate type just to hide the relaxed functions, I think it should be fundamentally wrong to use them, but I don't think this is the case.</p>
+<p>Anyway, I think this is a discussion that should be continued on the mailing list. I think we should keep a common interface for the first patch series and then discuss where we want to go from there.</p>
+<blockquote>
+<p>git grep --name-only 'struct pci_driver' drivers/ | xargs git grep readl_relaxed</p>
+</blockquote>
+<p>That only catches the ones that have the pci driver code and the relevant I/O stuff in the same file. But I fully agree, it's <em>very</em> rarely used.</p>
+<blockquote>
+<p>Also, I think the 'asm volatile' still serves as some compiler barrier as it is still necessary for register accesses to occur in program order.</p>
+</blockquote>
+<p>I don't think so, see also [1]. But even if, not all I/O accessor are implemented using <code>asm volatile</code>.</p>
+<p>[1] <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#Volatile">https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#Volatile</a></p>
+
+
+
+<a name="501172086"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501172086" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rob Herring <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501172086">(Feb 21 2025 at 19:22)</a>:</h4>
+<p>Arnd says the requirement for relaxed usage with PCI is it must be used carefully and documented.</p>
+
+
+
+<a name="501173657"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501173657" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501173657">(Feb 21 2025 at 19:32)</a>:</h4>
+<p>what does that say for my patch when I finaly get to test the arm stuff and make it sendable? document in the relaxed trait that you likely don't want relaxed, but still offer it?</p>
+
+
+
+<a name="501174243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501174243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rob Herring <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501174243">(Feb 21 2025 at 19:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412307">Fiona Behrens</span> <a href="#narrow/channel/288089-General/topic/PIO.20support/near/501173657">said</a>:</p>
+<blockquote>
+<p>what does that say for my patch when I finaly get to test the arm stuff and make it sendable? document in the relaxed trait that you likely don't want relaxed, but still offer it?</p>
+</blockquote>
+<p>It's the callers that need to document their usage much like is done for unsafe blocks in rust. So you would just want to document the requirement to document usage. It would be nice if that could be checked by tools though.</p>
+
+
+
+<a name="501174334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501174334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501174334">(Feb 21 2025 at 19:37)</a>:</h4>
+<p>we can make the functions in the trait unsafe, so that clippy checks there is a SAFETY comment, but that feels kinda wrong? not sure</p>
+
+
+
+<a name="501174708"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/501174708" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rob Herring <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#501174708">(Feb 21 2025 at 19:39)</a>:</h4>
+<p>A similar mechanism would be great, but yeah, making them unsafe doesn't seem right.</p>
+
+
+
+<a name="503819116"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/503819116" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#503819116">(Mar 06 2025 at 15:12)</a>:</h4>
+<p><span class="user-mention" data-user-id="412307">@Fiona Behrens</span></p>
+<p>There have been a few discussions about the ergonomic aspects of the aspect that any <code>Io</code> implementations can only handed out by subsystems within a <code>Devres</code> container. For instance, PCI returns a <code>Devres&lt;pci::Bar&gt; on </code>iomap_region()`.</p>
+<p>Correspondingly, I think we want additional accessors that take a closure and call <code>try_access()</code> internally and pass the I/O implementation (e.g. pci::Bar) to the closure, such that the corresponding RCU read-side critical section is self contained.</p>
+<p>Would you be interested in looking into this as well?</p>
+
+
+
+<a name="503819379"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/PIO%20support/near/503819379" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/PIO.20support.html#503819379">(Mar 06 2025 at 15:13)</a>:</h4>
+<p>Nt sure I fully understand what you mean. Also think my usecase is quite different currently. Right now I only need to access portio for my stuff</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

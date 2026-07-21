@@ -1,0 +1,99 @@
+<html>
+<head><meta charset="utf-8"><title>✔ Modifying within pinned containers · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html">✔ Modifying within pinned containers</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="561658367"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561658367" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561658367">(Dec 03 2025 at 13:58)</a>:</h4>
+<p>Is it impossible by design that you cannot modify data within a <code>Pin&lt;KBox&lt;T&gt;&gt;</code>, even if a field in <code>T</code> is not marked with the pin marker?</p>
+<p>My understanding so far has been that Pin is just about making things unmovable in memory, not immutable per se.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Job</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">credits</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">T</span><span class="p">,</span>
+<span class="w">    </span><span class="n">done_fence</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">ARef</span><span class="o">&lt;</span><span class="n">DmaFence</span><span class="o">&lt;</span><span class="kt">i32</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">hardware_fence</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">ARef</span><span class="o">&lt;</span><span class="n">DmaFence</span><span class="o">&lt;</span><span class="kt">i32</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">nr_of_deps</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="c1">//    dependencies: List, // TODO implement dependency list</span>
+<span class="p">}</span>
+
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">submit_job</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">job</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">Job</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;&gt;&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ARef</span><span class="o">&lt;</span><span class="n">DmaFence</span><span class="o">&lt;</span><span class="kt">i32</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">job_cost</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">job</span><span class="p">.</span><span class="n">credits</span><span class="p">;</span>
+<span class="w">        </span><span class="c1">// TODO: It would be nice if the done_fence's seqno actually matches the</span>
+<span class="w">        </span><span class="c1">// submission order. To do that, however, we'd need to protect job</span>
+<span class="w">        </span><span class="c1">// creation with InnerJobqueue's spinlock. Is that worth it?</span>
+<span class="w">        </span><span class="c1">//let enq = EnqueuedJob::new(job, &amp;self.fctx)?;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">done_fence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">fctx</span><span class="p">.</span><span class="n">as_arc_borrow</span><span class="p">().</span><span class="n">new_fence</span><span class="p">(</span><span class="mi">42</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="kt">i32</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// Get the fence for the user.</span>
+<span class="w">        </span><span class="n">job</span><span class="p">.</span><span class="n">done_fence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">done_fence</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+
+
+
+<span class="n">error</span><span class="p">[</span><span class="n">E0594</span><span class="p">]:</span><span class="w"> </span><span class="nc">cannot</span><span class="w"> </span><span class="n">assign</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">dereference</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="err">`</span><span class="n">core</span><span class="p">::</span><span class="n">pin</span><span class="p">::</span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">kbox</span><span class="p">::</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">Job</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Kmalloc</span><span class="o">&gt;&gt;</span><span class="err">`</span>
+<span class="w">   </span><span class="o">-</span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">drm</span><span class="o">/</span><span class="n">jq</span><span class="p">.</span><span class="n">rs</span><span class="p">:</span><span class="mi">277</span><span class="p">:</span><span class="mi">9</span>
+<span class="w">    </span><span class="o">|</span>
+<span class="mi">277</span><span class="w"> </span><span class="o">|</span><span class="w">         </span><span class="n">job</span><span class="p">.</span><span class="n">done_fence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">done_fence</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+<span class="w">    </span><span class="o">|</span><span class="w">         </span><span class="o">^^^^^^^^^^^^^^</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">assign</span>
+<span class="w">    </span><span class="o">|</span>
+<span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="n">help</span><span class="p">:</span><span class="w"> </span><span class="nc">trait</span><span class="w"> </span><span class="err">`</span><span class="n">DerefMut</span><span class="err">`</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">modify</span><span class="w"> </span><span class="n">through</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">dereference</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">implemented</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="err">`</span><span class="n">core</span><span class="p">::</span><span class="n">pin</span><span class="p">::</span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">kbox</span><span class="p">::</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">Job</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Kmalloc</span><span class="o">&gt;&gt;</span><span class="err">`</span>
+</code></pre></div>
+
+
+
+<a name="561659148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561659148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561659148">(Dec 03 2025 at 14:02)</a>:</h4>
+<p>You can use projections to do that.</p>
+
+
+
+<a name="561659226"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561659226" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561659226">(Dec 03 2025 at 14:02)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">job</span><span class="p">.</span><span class="n">project</span><span class="p">().</span><span class="n">done_fence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">done_fence</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+</code></pre></div>
+
+
+
+<a name="561659248"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561659248" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561659248">(Dec 03 2025 at 14:02)</a>:</h4>
+<p>Possibly you need <code>job.as_mut().project()</code></p>
+
+
+
+<a name="561659659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561659659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561659659">(Dec 03 2025 at 14:04)</a>:</h4>
+<p>See commit 619db96daf942dad974c6c8157ed06d52f7bb969. It uses the feature in <code>rust/kernel/workqueue.rs</code></p>
+
+
+
+<a name="561679973"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561679973" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561679973">(Dec 03 2025 at 15:16)</a>:</h4>
+<p>But you have to implement a <code>project()</code> method yourself for your data structure, don't you?</p>
+
+
+
+<a name="561680493"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561680493" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561680493">(Dec 03 2025 at 15:17)</a>:</h4>
+<p><code>#[pin_data]</code> emits them, I think</p>
+
+
+
+<a name="561683143"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561683143" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561683143">(Dec 03 2025 at 15:24)</a>:</h4>
+<p>OK, thx… no idea why that's necessary, but seems to  work..</p>
+
+
+
+<a name="561821928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Modifying%20within%20pinned%20containers/near/561821928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Modifying.20within.20pinned.20containers.html#561821928">(Dec 04 2025 at 08:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

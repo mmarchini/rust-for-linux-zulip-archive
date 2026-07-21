@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>Hi,<br>\nI currently try to register a new class, with this C macro: <a href=\"https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L260\">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L260</a></p>\n<p>I can't find an implementation of this in the rust-for-linux for, and no issue related to this.</p>\n<p>So, right now I use some unsafe:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">bindings</span>::<span class=\"n\">__class_create</span><span class=\"p\">(</span><span class=\"n\">module</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span><span class=\"p\">.</span><span class=\"n\">as_char_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">KEY</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">())}</span>\n</code></pre></div>\n<p>But I have to made things public in ThisModule and LockClassKey to make this working.</p>\n<p>Did I miss the implementation of <code>class_create</code> ? If no, is there a better way to get <code>*mut module</code> and <code>*mut lock_class_key</code> than making things public in the kernel crate ?</p>",
+        "id": 341796532,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678801306
+    },
+    {
+        "content": "<p>A tricky part for this is <code>class_create</code> macro allocates a static location for lock_class_key, so to behave as the same, you will need introduce a Rust macro, for example</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">class_create</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"p\">(</span><span class=\"n\">owner</span>:<span class=\"cp\">$expr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span>:<span class=\"cp\">$expr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{{</span>\n<span class=\"w\">    </span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">key</span>: <span class=\"nc\">LockClassKey</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"w\">    </span><span class=\"c1\">// create local binding to avoid evaluate unknown expression in `unsafe`</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">owner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cp\">$owner</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">name</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cp\">$name</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">bindings</span>::<span class=\"n\">__class_create</span><span class=\"p\">(</span><span class=\"n\">owner</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span><span class=\"p\">.</span><span class=\"n\">as_char_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">KEY</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">())}</span>\n<span class=\"w\">  </span><span class=\"p\">}}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 341811620,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678804400
+    },
+    {
+        "content": "<p>Yes, but I still need to put LockClassKey.get and ThisModule.0 public to use this macro<br>\nI think I need to create some \"safe\" wrapper on class to avoid this, but I really don't know where and how to begin <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 341813974,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678804864
+    },
+    {
+        "content": "<p>I think <code>LockClassKey::get()</code> is both public and safe, so maybe you can define a \"constructor\" for <code>Class</code>:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Class</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"n\">name</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">CStr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">key</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">LockClassKey</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">owner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Class</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">bindings</span>::<span class=\"n\">__class_create</span><span class=\"p\">(</span><span class=\"n\">owner</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span><span class=\"p\">.</span><span class=\"n\">as_char_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">key</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">())}</span>\n<span class=\"w\">    </span><span class=\"n\">owner</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 341825275,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678806994
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Class</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"n\">ptr</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span>::<span class=\"n\">class</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Class</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"w\"> </span><span class=\"n\">owner</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">ThisModule</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">CStr</span><span class=\"p\">,</span><span class=\"n\">key</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"nb\">static</span> <span class=\"nc\">LockClassKey</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: all pointers are guaranteed valid by compiler</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">from_kernel_err_ptr</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">bindings</span>::<span class=\"n\">__class_create</span><span class=\"p\">(</span><span class=\"n\">owner</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">name</span><span class=\"p\">.</span><span class=\"n\">as_char_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">key</span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">())}</span>\n<span class=\"w\">        </span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"bp\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">ptr</span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">Drop</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Class</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">drop</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: As the class can only be created with `new`, ptr is valid</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"n\">bindings</span>::<span class=\"n\">class_destroy</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">ptr</span><span class=\"p\">)}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Just before your message I come with this <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span> <br>\nI added the destructor because I need to call it on module unloading<br>\nI'm not sure about the SAFETY justfication, but at least it seems to works</p>",
+        "id": 341826969,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678807301
+    },
+    {
+        "content": "<p>Looks good to me ;-)</p>",
+        "id": 341832315,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678808250
+    },
+    {
+        "content": "<p>See you at LKML I guess? ;-)</p>",
+        "id": 341832416,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678808269
+    },
+    {
+        "content": "<p>Welllll, maybe, but I really don't know how to submit it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> <br>\nDo you have a guide to do this properly ?</p>",
+        "id": 341833925,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678808563
+    },
+    {
+        "content": "<p>Hmm.. I missed that you wrap a pointer instead of a struct, please consider</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(transparent)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Class</span><span class=\"p\">(</span><span class=\"n\">bindings</span>::<span class=\"n\">class</span><span class=\"p\">);</span>\n\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">ClassRef</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">ptr</span>: <span class=\"nc\">NonNull</span><span class=\"o\">&lt;</span><span class=\"n\">Class</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 341834387,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678808647
+    },
+    {
+        "content": "<p>Thanks !</p>",
+        "id": 341834509,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678808677
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"597162\">Louis Chauvet</span> <a href=\"#narrow/stream/288089-General/topic/class_create/near/341833925\">said</a>:</p>\n<blockquote>\n<p>Welllll, maybe, but I really don't know how to submit it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> <br>\nDo you have a guide to do this properly ?</p>\n</blockquote>\n<p>There is <a href=\"https://docs.kernel.org/process/submitting-patches.html\">https://docs.kernel.org/process/submitting-patches.html</a></p>",
+        "id": 341835169,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678808833
+    },
+    {
+        "content": "<p>For the NonNull creation, should I use:</p>\n<ul>\n<li>new_unchecked (with unsafe), because I'm sure that the pointer is invalid after <code>from_kernel_err_ptr</code></li>\n<li>new with unwrap</li>\n<li>new and check that the Option really contains something</li>\n</ul>",
+        "id": 341845167,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678810895
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/class_create/near/341835169\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"597162\">Louis Chauvet</span> <a href=\"#narrow/stream/288089-General/topic/class_create/near/341833925\">said</a>:</p>\n<blockquote>\n<p>Welllll, maybe, but I really don't know how to submit it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> <br>\nDo you have a guide to do this properly ?</p>\n</blockquote>\n<p>There is <a href=\"https://docs.kernel.org/process/submitting-patches.html\">https://docs.kernel.org/process/submitting-patches.html</a></p>\n</blockquote>\n<p>I'll have to check with my company's legal department, but I hope to have the right to submit it.</p>",
+        "id": 341845477,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1678810963
+    },
+    {
+        "content": "<p>I think <code>new_unchecked</code> here is OK</p>",
+        "id": 341845728,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1678811043
+    },
+    {
+        "content": "<p>Also please read <a href=\"https://rust-for-linux.com/contributing\">https://rust-for-linux.com/contributing</a></p>",
+        "id": 341874064,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1678818184
+    },
+    {
+        "content": "<p>Hello,<br>\nI have the authorization from my company to submit patches <span aria-label=\"partying face\" class=\"emoji emoji-1f973\" role=\"img\" title=\"partying face\">:partying_face:</span> <br>\nOn which branch should I base my work ? Latest mainstream or one of the rfl branch ? (which one in this case ?)</p>",
+        "id": 360719602,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1684916232
+    },
+    {
+        "content": "<p>You can base your patches on the rust-next branch, or on Linus' Linux 6.4-rc1 commit.</p>",
+        "id": 360719873,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684916304
+    },
+    {
+        "content": "<p>Ho, I have a problem, I think my patch should go to this file: <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs</a>, but it's not yet upstream on linux 6.4</p>\n<p>(It's a wrapper around <a href=\"https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54\">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54</a>)</p>\n<p>Should I create this file with only my patch ? (It doesn't depend on <code>struct Device</code>, but as class is defined in the device folder in C, I think it's the \"right\" place. Or should I create <code>device.rs</code> to include <code>device/class.rs</code> ?)</p>",
+        "id": 360735092,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1684920362
+    },
+    {
+        "content": "<p>It needs to be upstreamed first.</p>",
+        "id": 360737704,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684921105
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"597162\">Louis Chauvet</span> <a href=\"#narrow/stream/288089-General/topic/class_create/near/360735092\">said</a>:</p>\n<blockquote>\n<p>Ho, I have a problem, I think my patch should go to this file: <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/device.rs</a>, but it's not yet upstream on linux 6.4</p>\n<p>(It's a wrapper around <a href=\"https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54\">https://elixir.bootlin.com/linux/latest/source/include/linux/device/class.h#L54</a>)</p>\n<p>Should I create this file with only my patch ? (It doesn't depend on <code>struct Device</code>, but as class is defined in the device folder in C, I think it's the \"right\" place. Or should I create <code>device.rs</code> to include <code>device/class.rs</code> ?)</p>\n</blockquote>\n<p>Just submit your patch the way you feel is right and then we can talk about if it needs to be moved around when we do the review :) If you need to create a file or module, do that.</p>",
+        "id": 360742378,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684922346
+    },
+    {
+        "content": "<p>No, please wait until dependencies are upstreamed (or submitted to the list).</p>\n<p>For <code>device.rs</code>,  <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> is working on submitting it as far as I understand, so as soon as he submits the patch(es), you can rebase on top of those and submit yours.</p>",
+        "id": 360746439,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1684923435
+    },
+    {
+        "content": "<p>However, if you are looking for early feedback, then you may want to create a branch somewhere with your dependencies, and then submit the patch based on your branch, and mark it as an RFC series for instance.</p>",
+        "id": 360747618,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1684923781
+    },
+    {
+        "content": "<p>Please see <a href=\"https://rust-for-linux.com/contributing#submitting-new-abstractions-and-modules\">https://rust-for-linux.com/contributing#submitting-new-abstractions-and-modules</a> for some other tips on that.</p>",
+        "id": 360747772,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1684923825
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/class_create/near/360746439\">said</a>:</p>\n<blockquote>\n<p>No, please wait until dependencies are upstreamed (or submitted to the list).</p>\n<p>For <code>device.rs</code>,  <span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> is working on submitting it as far as I understand, so as soon as he submits the patch(es), you can rebase on top of those and submit yours.</p>\n</blockquote>\n<p>He says it does not depend on anything in <code>device.rs</code> but that file would be a good place for his stuff as well. It goes without saying \"don't submit other peoples stuff\".</p>",
+        "id": 360751663,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684924913
+    },
+    {
+        "content": "<p>I would encourage sending it to the list, slap an RFC badge on it and get some feedback sooner rather than later.</p>",
+        "id": 360752139,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684925030
+    },
+    {
+        "content": "<p>Ah, I read it as upstreaming parts of the existing file (even if not <code>struct Device</code>).</p>\n<p>If it does not depend on anything that is not in <code>rust-next</code> and it is just a matter of placement, then Andreas is right -- definitely please go ahead!</p>",
+        "id": 360763393,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1684928182
+    },
+    {
+        "content": "<p>Ok, I tried to go ahead, but I didn't expect <code>from_kernel_err_ptr</code> to not be upstreamed <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n<ul>\n<li>If I look at rustforlinux/rust-next to create a class I need to use <code>bindings::class_create</code> (linux 6.4) (but I don't have <code>from_kerne_err_ptr</code>)</li>\n<li>If I look at rustforlinux/rust, I need to use <code>bindings::__class_create</code> (linux 6.3) (but this must be updated when you bump the linux version)<br>\nWhat should I do ? Wait the next version bump in rustforlinux/rust ?</li>\n</ul>",
+        "id": 360804588,
+        "sender_full_name": "Louis Chauvet",
+        "timestamp": 1684937943
+    },
+    {
+        "content": "<p>Regarding the Linux version, you can ignore the <code>rust</code> branch -- patches go for mainline. Indeed, Greg changed it recently in several ways (removed the <code>THIS_MODULE</code> parameter need from the macro, then made it a function and removed the key), which makes it a bit easier too.</p>\n<p>Regarding <code>from_kernel_err_ptr</code>: it got renamed to <code>from_err_ptr</code> when it got upstreamed recently, so you should have it.</p>",
+        "id": 360825979,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1684942544
+    },
+    {
+        "content": "<p>There's an open patch for lock_class_key now so you should be able to base off that</p>",
+        "id": 369015058,
+        "sender_full_name": "riking",
+        "timestamp": 1687552451
+    }
+]

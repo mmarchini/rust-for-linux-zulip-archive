@@ -1,0 +1,172 @@
+<html>
+<head><meta charset="utf-8"><title>Per-call-site data and lock class keys · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html">Per-call-site data and lock class keys</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="572430773"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572430773" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572430773">(Feb 06 2026 at 17:27)</a>:</h4>
+<p>Currently we have a proliferation of macros due to the need of lock class keys.</p>
+<p>I have a quite hacky POC that uses inline assembly to attach unique data per call site: <a href="https://play.rust-lang.org/?version=stable&amp;mode=release&amp;edition=2024&amp;gist=059879a9f9d629d62f7fd207cc0b1b22">https://play.rust-lang.org/?version=stable&amp;mode=release&amp;edition=2024&amp;gist=059879a9f9d629d62f7fd207cc0b1b22</a>.</p>
+<p>I think this is too hacky to actually use in the kernel, but I'm throwing it here to invite ideas that would improve the ergnomics when initialization requires lock classes.</p>
+
+
+
+<a name="572430894"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572430894" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572430894">(Feb 06 2026 at 17:28)</a>:</h4>
+<p>I'm guessing this is the idea I mentioned before?</p>
+
+
+
+<a name="572430937"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572430937" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572430937">(Feb 06 2026 at 17:28)</a>:</h4>
+<p>Yes, this is the idea that we've discussed long time ago</p>
+
+
+
+<a name="572431287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431287">(Feb 06 2026 at 17:30)</a>:</h4>
+<p>This deduplicatoin stuff seems interesting. Can you say more?</p>
+
+
+
+<a name="572431290"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431290" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431290">(Feb 06 2026 at 17:30)</a>:</h4>
+<p>I think we previously discussed if const ptr can improve this? I ended up not using const ptr as <code>Location::caller()</code> from const context is not the actual caller.</p>
+
+
+
+<a name="572431471"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431471" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431471">(Feb 06 2026 at 17:31)</a>:</h4>
+<p>The deduplication thing is basically to ensure that if a function gets instantiated twice (e.g. into two crates because it's inlinable), the same instance is provided. If we just use the data without deduplication, then we have  2 lock class keys where we want one.</p>
+
+
+
+<a name="572431599"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431599" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431599">(Feb 06 2026 at 17:32)</a>:</h4>
+<p>I think we might want a version that creates two callsites in that case</p>
+
+
+
+<a name="572431604"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431604" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431604">(Feb 06 2026 at 17:32)</a>:</h4>
+<p>maybe</p>
+
+
+
+<a name="572431636"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431636" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431636">(Feb 06 2026 at 17:32)</a>:</h4>
+<p>that was the behavior I intended when I suggested it at least</p>
+
+
+
+<a name="572431801"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572431801" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572431801">(Feb 06 2026 at 17:33)</a>:</h4>
+<p>I guess for the lockdep use case it won't hurt to have duplicates, it just makes lockdep less efficient as it needs to track more classes</p>
+
+
+
+<a name="572432417"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572432417" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572432417">(Feb 06 2026 at 17:37)</a>:</h4>
+<p>the other use-case I saw was kmalloc, which has some profiling feature per kmalloc callsite</p>
+
+
+
+<a name="572432436"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572432436" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572432436">(Feb 06 2026 at 17:37)</a>:</h4>
+<p>the deduplication also seems unnecessary there</p>
+
+
+
+<a name="572432522"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572432522" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572432522">(Feb 06 2026 at 17:37)</a>:</h4>
+<p>cool that you can merge them tho</p>
+
+
+
+<a name="572432549"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572432549" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572432549">(Feb 06 2026 at 17:37)</a>:</h4>
+<p>Okay, perhaps we should introduce a version that doesn't dedup and place some caveat warnings there</p>
+
+
+
+<a name="572461023"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572461023" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572461023">(Feb 06 2026 at 20:50)</a>:</h4>
+<p>Lina wrote <a href="https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>
+
+
+
+<a name="572465140"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572465140" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572465140">(Feb 06 2026 at 21:23)</a>:</h4>
+<p>There is a remap-path-prefix, although somehow in the build system we only have code to strip it, but nothing that adds it? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="572465327"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572465327" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572465327">(Feb 06 2026 at 21:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671509">Janne Grunau</span> <a href="#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572461023">said</a>:</p>
+<blockquote>
+<p>Lina wrote <a href="https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>
+</blockquote>
+<p>This was discussed very early on. The vibe at the time is that this is too expensive as it needs to perform a lookup and allocation every time (even it's only used with lockdep enabled). With inline asm trick it'll be cheaper.</p>
+
+
+
+<a name="572466559"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572466559" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572466559">(Feb 06 2026 at 21:35)</a>:</h4>
+<p>it passes absolute paths to the compiler <a href="https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9">https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9</a></p>
+
+
+
+<a name="572467884"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572467884" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572467884">(Feb 06 2026 at 21:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671509">Janne Grunau</span> <a href="#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572461023">said</a>:</p>
+<blockquote>
+<p>Lina wrote <a href="https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a">https://github.com/AsahiLinux/linux/commit/db615eab65ce7c47d07d683c6d8dc2b88e1ad45a</a> for dynamic lockdep classes for the asahi driver. I dropped the change to lower the maintenance burden. I think it also depended on build system change to always use full absolute paths</p>
+</blockquote>
+<p>I think one issue of that is using <code>Box</code> to allocate lock keys dynamically (and automatically). In general we want to avoid calling allocation inside lockdep (the automatic lock keys is considered as an extension to lockdep).</p>
+
+
+
+<a name="572468213"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Per-call-site%20data%20and%20lock%20class%20keys/near/572468213" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys.html#572468213">(Feb 06 2026 at 21:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671509">Janne Grunau</span> <a href="#narrow/channel/288089-General/topic/Per-call-site.20data.20and.20lock.20class.20keys/near/572466559">said</a>:</p>
+<blockquote>
+<p>it passes absolute paths to the compiler <a href="https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9">https://github.com/AsahiLinux/linux/commit/54ab88878869036c9d6620101bfe17a81e88c2f9</a></p>
+</blockquote>
+<p>That fixes the issue wrong way around, it should be like this:</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/rust/Makefile b/rust/Makefile</span>
+<span class="gh">index 629b3bdd2b20..d87e3dd254bc 100644</span>
+<span class="gd">--- a/rust/Makefile</span>
+<span class="gi">+++ b/rust/Makefile</span>
+<span class="gu">@@ -579,6 +579,7 @@ quiet_cmd_rustc_library = $(if $(skip_clippy),RUSTC,$(RUSTC_OR_CLIPPY_QUIET)) L</span>
+<span class="w"> </span>       $(filter-out $(skip_flags),$(rust_flags)) $(rustc_target_flags) \
+<span class="w"> </span>       --emit=dep-info=$(depfile) --emit=obj=$@ \
+<span class="w"> </span>       --emit=metadata=$(dir $@)$(patsubst %.o,lib%.rmeta,$(notdir $@)) \
+<span class="gi">+       --remap-path-prefix=$(abspath $(srctree))= \</span>
+<span class="w"> </span>       --crate-type rlib -L$(objtree)/$(obj) \
+<span class="w"> </span>       --crate-name $(patsubst %.o,%,$(notdir $@)) $&lt; \
+<span class="w"> </span>       --sysroot=/dev/null \
+<span class="gh">diff --git a/scripts/Makefile.build b/scripts/Makefile.build</span>
+<span class="gh">index 204e58dd1bb0..336f0670299f 100644</span>
+<span class="gd">--- a/scripts/Makefile.build</span>
+<span class="gi">+++ b/scripts/Makefile.build</span>
+<span class="gu">@@ -330,6 +330,7 @@ rust_common_cmd = \</span>
+<span class="w"> </span>   -Zcrate-attr=no_std \
+<span class="w"> </span>   -Zcrate-attr='feature($(rust_allowed_features))' \
+<span class="w"> </span>   -Zunstable-options --extern pin_init --extern kernel \
+<span class="gi">+   --remap-path-prefix=$(abspath $(srctree))= \</span>
+<span class="w"> </span>   --crate-type rlib -L $(objtree)/rust/ \
+<span class="w"> </span>   --crate-name $(basename $(notdir $@)) \
+<span class="w"> </span>   --sysroot=/dev/null \
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

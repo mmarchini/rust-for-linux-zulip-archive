@@ -1,0 +1,260 @@
+[
+    {
+        "content": "<p>I think we can avoid the separate initialization step of global locks like this: <a href=\"https://github.com/Darksonn/linux/commits/arch-spin-global/\">https://github.com/Darksonn/linux/commits/arch-spin-global/</a></p>\n<p>Thoughts? The idea is to do this:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"w\"> </span>#define __ARCH_SPIN_LOCK_UNLOCKED      { 0 }\n<span class=\"gi\">+#define __ARCH_SPIN_LOCK_UNLOCKED_TYP  unsigned int</span>\n<span class=\"gi\">+#define __ARCH_SPIN_LOCK_UNLOCKED_INT  0</span>\n</code></pre></div>\n<p>and use the new defines on the Rust side.</p>",
+        "id": 469133522,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725983080
+    },
+    {
+        "content": "<p>looks a bit cursed, but I think that is a huge improvement if we can avoid the additional init function. Great idea!<br>\nIn <code>rust/bindings/lib.rs</code>, I do not like the hardcoded <code>64</code> constant... Do you think it's possible to just calculate the required length? If not, then I would add a <code>build_assert!</code> to check that it's fine. Or maybe define the size also on the C side?</p>",
+        "id": 469150411,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725986398
+    },
+    {
+        "content": "<p>The Rust compiler will catch the UB during const evaluation if 64 is too small.</p>",
+        "id": 469150653,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725986434
+    },
+    {
+        "content": "<p>Anyone happens to know what file would be a good place to put a kunit test (on the C side) related to this change?</p>",
+        "id": 469157558,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725987967
+    },
+    {
+        "content": "<p>why do you need a <code>__ARCH_SPIN_LOCK_UNLOCKED_TYP</code>, it should always be an <code>i32</code>, right?</p>",
+        "id": 469160730,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725988851
+    },
+    {
+        "content": "<p>also, I think you need to statically check that <code>__ARCH_SPIN_LOCK_UNLOCKED</code> is the same value as  <code>__ARCH_SPIN_LOCK_UNLOCKED_INT</code>.</p>",
+        "id": 469161296,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725988979
+    },
+    {
+        "content": "<p>See the Todo in the commit message</p>",
+        "id": 469161697,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989075
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469160730\">said</a>:</p>\n<blockquote>\n<p>why do you need a <code>__ARCH_SPIN_LOCK_UNLOCKED_TYP</code>, it should always be an <code>i32</code>, right?</p>\n</blockquote>\n<p>Ah oh, in SMP=n, spinlock is ZST ;-)</p>",
+        "id": 469162411,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725989257
+    },
+    {
+        "content": "<p>Parisc is another tricky one</p>",
+        "id": 469162647,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989291
+    },
+    {
+        "content": "<p>You could define the new macro only for the archs that support Rust, right?</p>",
+        "id": 469163125,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725989394
+    },
+    {
+        "content": "<p>True.</p>",
+        "id": 469163227,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989419
+    },
+    {
+        "content": "<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>",
+        "id": 469163610,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989520
+    },
+    {
+        "content": "<p>Won't it cause build error if they forget?</p>",
+        "id": 469163788,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725989560
+    },
+    {
+        "content": "<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>",
+        "id": 469163868,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989578
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469162647\">said</a>:</p>\n<blockquote>\n<p>Parisc is another tricky one</p>\n</blockquote>\n<p>Rust doesn't support this _at all_, so we probably don't need to add it</p>",
+        "id": 469165022,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725989775
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469163610\">said</a>:</p>\n<blockquote>\n<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>\n</blockquote>\n<p>it will be a compile error when they forget, right?</p>",
+        "id": 469165197,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725989812
+    },
+    {
+        "content": "<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>",
+        "id": 469165259,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989835
+    },
+    {
+        "content": "<p>In general, I thought I could just add some tests for the correct value on the C side, and not bother with making the test arch-specific.</p>",
+        "id": 469165349,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725989869
+    },
+    {
+        "content": "<p>if someone adds a brand-new arch, they would also have this issue, right?</p>",
+        "id": 469166308,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725990085
+    },
+    {
+        "content": "<p>what?</p>",
+        "id": 469166402,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725990103
+    },
+    {
+        "content": "<p>so I don't think it's that bad for people that add rust support for a new arch to have to do add it</p>",
+        "id": 469166450,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725990112
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469165259\">said</a>:</p>\n<blockquote>\n<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>\n</blockquote>\n<p>Arch needs to explicitly select whether it uses \"asm-generic\" header or not, so there is no \"silent inclusion\".</p>",
+        "id": 469166452,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725990112
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469166452\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469165259\">said</a>:</p>\n<blockquote>\n<p>It's a bit unclear to me if it'll build error or just fall back to the generic asm header?</p>\n</blockquote>\n<p>Arch needs to explicitly select whether it uses \"asm-generic\" header or not, so there is no \"silent inclusion\".</p>\n</blockquote>\n<p>Thanks for the clarification.</p>",
+        "id": 469166605,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725990130
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469166402\">said</a>:</p>\n<blockquote>\n<p>what?</p>\n</blockquote>\n<p>I was referring to this:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469163610\">said</a>:</p>\n<blockquote>\n<p>But this way it doesn't become something that people adding new archs have to remember to do.</p>\n</blockquote>\n<p>When someone adds support for an arch that isn't yet supported in the kernel, they would have to add this, if they also wanted to enable rust.</p>",
+        "id": 469167206,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725990230
+    },
+    {
+        "content": "<p>so I think it's fine to have people that add rust support for an arch also have to add it</p>",
+        "id": 469167360,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1725990247
+    },
+    {
+        "content": "<p>Also, we could make an \"architecture checking list\" for new arch to implement Rust support, it would be helpful anyway.</p>",
+        "id": 469167437,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725990260
+    },
+    {
+        "content": "<p>But overall, I agree that using a const value to initialize static spinlocks is the right thing to do, thanks for looking into this!</p>",
+        "id": 469167916,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725990366
+    },
+    {
+        "content": "<p>Any advice on where to put a kunit test?</p>",
+        "id": 469168141,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725990420
+    },
+    {
+        "content": "<p>I haven't written any kunit test for C myself, but I find a few <code>_kunit.c</code> file in <code>lib/</code>, so that's probably where it should be put.</p>",
+        "id": 469168693,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725990571
+    },
+    {
+        "content": "<p>but since it can be done static may be just</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">static_assert</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"p\">(</span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED_TYP</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">)(</span><span class=\"o\">&amp;</span><span class=\"p\">(</span><span class=\"n\">arch_spinlock_t</span><span class=\"w\"> </span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED_INT</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>in <code>rust/bindings/bindings_helper.h</code></p>",
+        "id": 469170853,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725990953
+    },
+    {
+        "content": "<p>Ah nice!</p>",
+        "id": 469171092,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725990987
+    },
+    {
+        "content": "<p>though why not put the test somewhere that runs even if Rust is disabled?</p>",
+        "id": 469171152,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725990999
+    },
+    {
+        "content": "<p>to avoid introducing _TYP and _INT for archs that don't support Rust I think.</p>",
+        "id": 469171738,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725991161
+    },
+    {
+        "content": "<p>We can wrap it in <code>#ifdef __ARCH_SPIN_LOCK_UNLOCKED_TYP</code></p>",
+        "id": 469171807,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725991184
+    },
+    {
+        "content": "<p>Then probably put it in <code>include/linux/spinlock_types.h</code>.</p>",
+        "id": 469172067,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725991242
+    },
+    {
+        "content": "<p>Ok</p>",
+        "id": 469172125,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725991257
+    },
+    {
+        "content": "<p>Hmm.. but seems a </p>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Global.20spin.20locks/near/469170853\">said</a>:</p>\n<blockquote>\n<p>but since it can be done static may be just</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">static_assert</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"p\">(</span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED_TYP</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">)(</span><span class=\"o\">&amp;</span><span class=\"p\">(</span><span class=\"n\">arch_spinlock_t</span><span class=\"w\"> </span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED_INT</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>in <code>rust/bindings/bindings_helper.h</code></p>\n</blockquote>\n<p>Hmm... looks like this C version \"transmute\" doesn't work in constant expression...</p>",
+        "id": 469186987,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725995019
+    },
+    {
+        "content": "<p>So it has to be a real kunit test?</p>",
+        "id": 469187126,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725995045
+    },
+    {
+        "content": "<p>Probably, I'm still trying to see if there is an alternative.</p>",
+        "id": 469190543,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725995970
+    },
+    {
+        "content": "<p>Well let me know what you come up with.</p>",
+        "id": 469190579,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725995987
+    },
+    {
+        "content": "<p>so if bindgen can convert a C const to Rust const, we can do a:</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">arch_spinlock_t</span><span class=\"w\"> </span><span class=\"n\">UNLOCKED</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">__ARCH_SPIN_LOCK_UNLOCKED</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>and use that in Rust code?</p>",
+        "id": 469196223,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725997718
+    },
+    {
+        "content": "<p>(it's a bit annoying to work around a bindgen issue with C side changes, sigh)</p>",
+        "id": 469197638,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1725998092
+    },
+    {
+        "content": "<p>Yeah if Bingen could handle the struct it would be much easier</p>",
+        "id": 469199351,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725998545
+    }
+]

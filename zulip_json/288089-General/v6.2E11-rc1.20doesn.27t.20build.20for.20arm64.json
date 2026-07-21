@@ -1,0 +1,206 @@
+[
+    {
+        "content": "<p>I was testing something locally, and I noticed I'm getting these errors when cross-compiling for arm64.</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>aliceryhl@aliceryhl-l:~/rust-for-linux$ git checkout v6.11-rc1\naliceryhl@aliceryhl-l:~/rust-for-linux$ make LLVM=1 CLIPPY=1 ARCH=arm64\n  UPD     include/config/kernel.release\n  UPD     include/generated/utsrelease.h\n  CALL    scripts/checksyscalls.sh\n  BINDGEN rust/bindings/bindings_helpers_generated.rs\n  CLIPPY L rust/bindings.o\n  EXPORTS rust/exports_bindings_generated.h\n  CLIPPY L rust/kernel.o\n  EXPORTS rust/exports_kernel_generated.h\n  CC      init/version.o\n  AR      init/built-in.a\n  CC      kernel/sys.o\n  AR      kernel/built-in.a\n  CC      rust/helpers.o\n  CC      rust/exports.o\n  AR      rust/built-in.a\n  AR      built-in.a\n  AR      vmlinux.a\n  LD      vmlinux.o\n  OBJCOPY modules.builtin.modinfo\n  GEN     modules.builtin\n  MODPOST vmlinux.symvers\n  UPD     include/generated/utsversion.h\n  CC      init/version-timestamp.o\n  LD      vmlinux\nld.lld: error: undefined symbol: __extendsfdf2\n&gt;&gt;&gt; referenced by core.a6f5fc5794e7b7b3-cgu.0\n&gt;&gt;&gt;               rust/core.o:(&lt;f32&gt;::midpoint) in archive vmlinux.a\n&gt;&gt;&gt; referenced by core.a6f5fc5794e7b7b3-cgu.0\n&gt;&gt;&gt;               rust/core.o:(&lt;f32&gt;::midpoint) in archive vmlinux.a\n\nld.lld: error: undefined symbol: __truncdfsf2\n&gt;&gt;&gt; referenced by core.a6f5fc5794e7b7b3-cgu.0\n&gt;&gt;&gt;               rust/core.o:(&lt;f32&gt;::midpoint) in archive vmlinux.a\nmake[2]: *** [scripts/Makefile.vmlinux:34: vmlinux] Error 1\nmake[1]: *** [/home/aliceryhl/rust-for-linux/Makefile:1156: vmlinux] Error 2\nmake: *** [Makefile:224: __sub-make] Error 2\n</code></pre></div>",
+        "id": 455637364,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1722516232
+    },
+    {
+        "content": "<p>Here's the config: <a href=\"https://gist.github.com/Darksonn/74b71df1258a2ee1e03b87b4ed400f64\">https://gist.github.com/Darksonn/74b71df1258a2ee1e03b87b4ed400f64</a></p>",
+        "id": 455637688,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1722516347
+    },
+    {
+        "content": "<p>If I open menuconfig and turn off rust, then it builds.</p>",
+        "id": 455637717,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1722516354
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"682956\">@Christian Schrefl</span> did the arm32 support I think</p>",
+        "id": 455735104,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1722539435
+    },
+    {
+        "content": "<p>Sorry I totally read that wrong, this thread isn't 32-bit</p>",
+        "id": 455735477,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1722539576
+    },
+    {
+        "content": "<p>We shouldn't be linking any float symbols in the final binary right? They definitely exist in core but it seems like they should be fine unresolved</p>",
+        "id": 455735665,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1722539632
+    },
+    {
+        "content": "<p>What we currently do is provide a weak symbol that panics. It is not great at all. First of all, because we manually list the symbols, which isn't great. But we should not even have those calls being generated to begin with (unless really some code needs them -- very little code needs it, and it is compiled differently in the C side).</p>\n<p>Ideally, we would have a compiler flag to disable all that where not needed (possibly even not accepting code referring to <code>f32</code> etc.). I think <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> took a look at some point but, while disabling the formatting bits was easy, the rest would not be so much.</p>\n<p>Still, it would be nice to get rid of the hack we have. Or at least reduce it a bit (e.g. can we avoid listing them one by one?).</p>",
+        "id": 456408853,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722816915
+    },
+    {
+        "content": "<p>It is not the first time I see <code>&lt;f32&gt;::midpoint</code> being the cause...</p>\n<p>Also, with <code>rustc 1.82.0-nightly (64ebd39da 2024-08-03)</code>, I also got a couple more on top:</p>\n<div class=\"codehilite\" data-code-language=\"txt\"><pre><span></span><code>ld.lld: error: undefined symbol: __eqdf2\n&gt;&gt;&gt; referenced by core.20495ea57a9f069d-cgu.0\n&gt;&gt;&gt;               rust/core.o:(&lt;f64&gt;::next_up) in archive vmlinux.a\n&gt;&gt;&gt; referenced by core.20495ea57a9f069d-cgu.0\n&gt;&gt;&gt;               rust/core.o:(&lt;f64&gt;::next_down) in archive vmlinux.a\n</code></pre></div>",
+        "id": 456408963,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722816991
+    },
+    {
+        "content": "<p>I thought we added a check in rustc to catch unintended fp intrinsics</p>",
+        "id": 456408993,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722817033
+    },
+    {
+        "content": "<p>So this depends on the rustc version? It looks like my rustc 1.78.0 builds my 6.11.0-rc1-arm64 vmlinux nicely:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">$</span><span class=\"w\"> </span><span class=\"n\">rustc</span><span class=\"w\"> </span><span class=\"o\">--</span><span class=\"n\">version</span>\n<span class=\"n\">rustc</span><span class=\"w\"> </span><span class=\"mf\">1.78.0</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"mi\">9</span><span class=\"n\">b00956e5</span><span class=\"w\"> </span><span class=\"mi\">2024</span><span class=\"o\">-</span><span class=\"mi\">04</span><span class=\"o\">-</span><span class=\"mi\">29</span><span class=\"p\">)</span>\n<span class=\"cp\">$</span><span class=\"w\"> </span><span class=\"n\">strings</span><span class=\"w\"> </span><span class=\"n\">vmlinux</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">grep</span><span class=\"w\"> </span><span class=\"s\">\"Linux version\"</span>\n<span class=\"n\">Linux</span><span class=\"w\"> </span><span class=\"n\">version</span><span class=\"w\"> </span><span class=\"mf\">6.11.0</span><span class=\"o\">-</span><span class=\"n\">rc1</span><span class=\"o\">-</span><span class=\"n\">arm64</span><span class=\"o\">....</span><span class=\"p\">.</span>\n</code></pre></div>",
+        "id": 456517512,
+        "sender_full_name": "Dirk Behme",
+        "timestamp": 1722857277
+    },
+    {
+        "content": "<p>It is likely due to the <code>CONFIG_CC_OPTIMIZE_FOR_SIZE=y</code> in her config.</p>",
+        "id": 456518562,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722857617
+    },
+    {
+        "content": "<p>(The fact that I see one more than her for the same config may have to do with the compiler, yeah, I used a nightly)</p>",
+        "id": 456518711,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722857651
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/v6.2E11-rc1.20doesn't.20build.20for.20arm64/near/456408993\">said</a>:</p>\n<blockquote>\n<p>I thought we added a check in rustc to catch unintended fp intrinsics</p>\n</blockquote>\n<p>In the compiler? Hmm... Could you please remind me?</p>",
+        "id": 456519002,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722857714
+    },
+    {
+        "content": "<p>I double checked there's only a test that checks <code>no_fp_fmt_parse</code> exists</p>",
+        "id": 456520547,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722857996
+    },
+    {
+        "content": "<p>Maybe we should add a check, perhaps by compiling against softfp and link against compile-rt with hardfp to see if no symbols are unresolved?</p>",
+        "id": 456520881,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722858053
+    },
+    {
+        "content": "<p>Usually the fix on rustc side is to mark those functions as <code>#[inline]</code></p>",
+        "id": 456521555,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722858183
+    },
+    {
+        "content": "<p>All of {midpoint,next_up,next_down} are indeed unstable functions not marked as inline...</p>",
+        "id": 456521674,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722858214
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> Perhaps we should discuss this for our next meeting with lang team</p>",
+        "id": 456521808,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722858240
+    },
+    {
+        "content": "<p>Added a few bits at: <a href=\"https://github.com/Rust-for-Linux/linux/issues/514\">https://github.com/Rust-for-Linux/linux/issues/514</a></p>",
+        "id": 456524327,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722858807
+    },
+    {
+        "content": "<p>And linked to here.</p>",
+        "id": 456524361,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1722858818
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/v6.2E11-rc1.20doesn't.20build.20for.20arm64/near/456518562\">said</a>:</p>\n<blockquote>\n<p>It is likely due to the <code>CONFIG_CC_OPTIMIZE_FOR_SIZE=y</code> in her config.</p>\n</blockquote>\n<p>Ok, I confirm that I have NOT set that.</p>",
+        "id": 456527561,
+        "sender_full_name": "Dirk Behme",
+        "timestamp": 1722859590
+    },
+    {
+        "content": "<p>It would be great to have some build time error when calls to the float operations are generated. This would remove the need for generating panicking intrinsics (at least for float ops).</p>",
+        "id": 456527811,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1722859674
+    },
+    {
+        "content": "<p>Well, we do this by leave symbols undefined</p>",
+        "id": 456527913,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722859699
+    },
+    {
+        "content": "<p>But overtime we have to add these back because there're new functions in libcore that call these</p>",
+        "id": 456528021,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1722859733
+    },
+    {
+        "content": "<p>But this currently just always errors as the float ops are used in the core library.<br>\nWhat I meant was allow using core without float ops so that we don't have to define them,</p>",
+        "id": 456528271,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1722859801
+    },
+    {
+        "content": "<p>Ideally we would not need any panicing intrinsics.</p>",
+        "id": 456528560,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1722859879
+    },
+    {
+        "content": "<p>Looks like Miguel posted a fix:<br>\n<a href=\"https://lore.kernel.org/all/20240806150619.192882-1-ojeda@kernel.org/\">https://lore.kernel.org/all/20240806150619.192882-1-ojeda@kernel.org/</a></p>",
+        "id": 456913989,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1722965139
+    },
+    {
+        "content": "<p>Should we update the Rust CI setup so it would have caught this problem?</p>",
+        "id": 459673739,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1723286389
+    },
+    {
+        "content": "<p>It depends on how many compute they can give us, and we want to add first a few other things, but I think it would be a good idea to have the <code>-Os</code> build there.</p>",
+        "id": 459674246,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1723286724
+    },
+    {
+        "content": "<p>i.e. we would need to go up to linking, which it is not done now, so that is a fairly big commitment.</p>",
+        "id": 459674834,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1723286946
+    },
+    {
+        "content": "<p>Maybe there should be a test that you can build core without linking floating point support, with the few known stubs, then work toward making it build without any stubs</p>",
+        "id": 459714063,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1723303753
+    },
+    {
+        "content": "<p>Right, that could probably be its own test.</p>",
+        "id": 459714119,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1723303779
+    },
+    {
+        "content": "<p>There are similar \"special builds for <code>core</code>\" tests like the ones we have for <code>no_fp_fmt_parse</code> and <code>no_global_oom_handling</code>, so perhaps they would be OK with that.</p>",
+        "id": 459722889,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1723307391
+    },
+    {
+        "content": "<p>i.e. those are already in the Rust repository.</p>",
+        "id": 459722983,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1723307428
+    }
+]

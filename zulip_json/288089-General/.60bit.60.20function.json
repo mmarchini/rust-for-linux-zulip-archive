@@ -1,0 +1,74 @@
+[
+    {
+        "content": "<p>I'm trying to write a type-safe function that given a bit index, generates a mask with all zeroes except the index, which should be 1.</p>\n<p>Here's what I have:</p>\n<div class=\"codehilite\"><pre><span></span><code>fn bit&lt;T: core::convert::From&lt;u8&gt; + core::ops::Shl&lt;U, Output = T&gt;, U&gt;(offset: U) -&gt; T {\n    T::from(1u8) &lt;&lt; offset\n}\n</code></pre></div>\n<p>It works well in most cases, but in some cases the compiler is not able to infer <code>T</code>, for example:</p>\n<div class=\"codehilite\"><pre><span></span><code>fn test2(x: u32) -&gt; bool {\n    x &amp; bit(2) != 0\n}\n</code></pre></div>\n<p>This fails with:</p>\n<div class=\"codehilite\"><pre><span></span><code>error[E0284]: type annotations needed: cannot satisfy `&lt;u32 as BitAnd&lt;_&gt;&gt;::Output == _`\n  --&gt; src/lib.rs:12:7\n   |\n12 |     x &amp; bit(2) != 0\n   |       ^ cannot satisfy `&lt;u32 as BitAnd&lt;_&gt;&gt;::Output == _`\n</code></pre></div>\n<p>I have the code here: <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=65f4c87be0974ee1b04b7d11e9ef54ca\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=65f4c87be0974ee1b04b7d11e9ef54ca</a></p>\n<p>If I use a macro instead, it works in both cases: <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=5d3a4a037e8dfec0084cb050bd93174e\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=5d3a4a037e8dfec0084cb050bd93174e</a></p>\n<p>Any ideas on how to make this work?</p>",
+        "id": 246108206,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626361782
+    },
+    {
+        "content": "<p>(BTW, it works if we explicitly specify <code>T</code>, for example, <code>x &amp; bit::&lt;u32, _&gt;(2) != 0</code>, but so much noise defeats the purpose of having the function.)</p>",
+        "id": 246108841,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626362068
+    },
+    {
+        "content": "<p>You could have <code>bit_and(x, 2)</code> and <code>bit_or(x, 2)</code> for <code>x &amp; (1 &lt;&lt; 2)</code> and <code>x | (1 &lt;&lt; 2)</code> instead of <code>x &amp; bit(2)</code> and <code>x | bit(2)</code>.</p>",
+        "id": 246115677,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1626364864
+    },
+    {
+        "content": "<p>Yes, we could do that. But then people would have to memorise those function names, it doesn't seem like an improvement.</p>\n<p>For some context: the kernel has a BIT macro and I'm converting a driver to rust. I'd like the bit-banging parts to look as similar as possible to C to reduce distraction.</p>\n<p>For example, there's a line in C that reads <code>x &amp;= ~BIT(y)</code>, in Rust with a macro it would be <code>x &amp;= !BIT!(y)</code>. I'm positive people are not going to be happy about it. I think <code>x &amp;= !bit(y)</code> would be slightly more palatable.</p>\n<p>Also, it looks like Rust defaults to <code>i32</code> when an unsuffixed integer type is under-constrained so it likely to lead to unexpected behaviour.</p>",
+        "id": 246120531,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626366829
+    },
+    {
+        "content": "<p>Using the macro, <code>println!(\"{:x}\", bit!(31) &gt;&gt; 1)</code> prints <code>c0000000</code></p>",
+        "id": 246122134,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626367514
+    },
+    {
+        "content": "<p>So my current implementation not only lacks ergonomics, it's also wrong :)</p>",
+        "id": 246122386,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626367633
+    },
+    {
+        "content": "<p>What about <code>bit32</code> and <code>bit64</code> instead? i.e. be explicit about the width.</p>",
+        "id": 246125532,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1626369012
+    },
+    {
+        "content": "<p>well, we'd need it for 8, 16, 32, and 64 bits -- not very ergonomic either</p>",
+        "id": 246135069,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626373228
+    },
+    {
+        "content": "<p>Does forcing <code>offset</code> to always be an <code>u32</code> help with type inference? That should be fine for all integer result types.</p>",
+        "id": 246139976,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1626375538
+    },
+    {
+        "content": "<p>Unfortunately it didn't help</p>",
+        "id": 246142259,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626376685
+    },
+    {
+        "content": "<p>I think I have a solution... The implementation isn't pretty but I think the ergonomics are good</p>",
+        "id": 246144295,
+        "sender_full_name": "Wedson Almeida Filho (Old Google account)",
+        "timestamp": 1626377691
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"414281\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/288089-General/topic/.60bit.60.20function/near/246135069\">said</a>:</p>\n<blockquote>\n<p>well, we'd need it for 8, 16, 32, and 64 bits -- not very ergonomic either</p>\n</blockquote>\n<p>I prefer explicitness myself, typing a couple digits is not a big deal and makes the return type clear for both humans and compilers. Another point is that Rust has suffixes such as <code>7u32</code>, thus <code>bit32(7)</code> does not look that bad.</p>\n<p>I can see kernel people complaining, though (but they may anyway complain about the implementation if it is complex, so...).</p>",
+        "id": 246154094,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1626382592
+    }
+]

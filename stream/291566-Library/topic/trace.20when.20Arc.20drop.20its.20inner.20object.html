@@ -1,0 +1,132 @@
+<html>
+<head><meta charset="utf-8"><title>trace when Arc drop its inner object · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html">trace when Arc drop its inner object</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="329229926"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329229926" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329229926">(Feb 21 2023 at 16:07)</a>:</h4>
+<p>Hi, I'm working on the add a tracepoint for <code>Arc::drop</code> when refcount reaches 0: <a href="https://github.com/fbq/linux-rust/commit/c36d185e728eace05221152ee1596d99f384f2a3">https://github.com/fbq/linux-rust/commit/c36d185e728eace05221152ee1596d99f384f2a3</a></p>
+<p>The reason is that <code>Arc::drop</code> sometimes could be expensive, and you don't want it in your fastpath, so step 0 is to find it out. And a tracepoint means perf and bpf get a chance to step into and do their work.</p>
+<p>One thing I could use some advise is about the tracepoint data, right now I'm using the <code>core::any::type_name</code> so that users could figure out the inner data type, and maybe put a filter on. But that also means more space for kernel text. I wonder whether I could use <code>core::any::TypeId</code> and somehow retrieve the type name with <code>TypeId</code> from debug information?</p>
+<p>Anyway, going to send it out later this week for broader review, let me know if you want to be Cced ;-)</p>
+
+
+
+<a name="329233220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329233220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329233220">(Feb 21 2023 at 16:20)</a>:</h4>
+<blockquote>
+<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>
+</blockquote>
+<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>
+
+
+
+<a name="329233775"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329233775" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329233775">(Feb 21 2023 at 16:23)</a>:</h4>
+<p>By the way the exact result of <code>type_name</code> is not guaranteed to be stable. Does linux provide any stability guarantees for tracepoints?</p>
+
+
+
+<a name="329234998"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329234998" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329234998">(Feb 21 2023 at 16:28)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233775">said</a>:</p>
+<blockquote>
+<p>By the way the exact result of <code>type_name</code> is not guaranteed to be stable. Does linux provide any stability guarantees for tracepoints?</p>
+</blockquote>
+<p>Interesting point. I guess the answer is no, since it's just a type name, but C doesn't have template, so right now Linux doesn't have a "generic" tracepoint, I think.</p>
+
+
+
+<a name="329260058"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329260058" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Stone (cuviper) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329260058">(Feb 21 2023 at 18:21)</a>:</h4>
+<p>I don't know the current feeling, but this 2009 article talked about tracepoints as ABI: <a href="https://lwn.net/Articles/330402/">https://lwn.net/Articles/330402/</a></p>
+<blockquote>
+<p>A tracepoint exists to make specific kernel information available to user space. So, in some real sense, it becomes part of the kernel ABI. As an ABI feature, a tracepoint becomes set in stone once it's shipped in a stable kernel. There is not a universal agreement on the immutability of kernel tracepoints, but the simple fact is that, once these tracepoints become established and prove their usefulness, changing them will cause user-space tracing tools to break. That means that, even if tracepoints are not seen as a stable ABI the way system calls are, there will still be considerable resistance to changing them.</p>
+</blockquote>
+
+
+
+<a name="329260207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329260207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Stone (cuviper) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329260207">(Feb 21 2023 at 18:21)</a>:</h4>
+<p>(I used to be involved from the SystemTap side)</p>
+
+
+
+<a name="329260524"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329260524" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Stone (cuviper) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329260524">(Feb 21 2023 at 18:23)</a>:</h4>
+<p>here's another look from 2017: <a href="https://lwn.net/Articles/737530/">https://lwn.net/Articles/737530/</a></p>
+
+
+
+<a name="329261143"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329261143" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Stone (cuviper) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329261143">(Feb 21 2023 at 18:26)</a>:</h4>
+<p>that said, <code>type_name</code> as a parameter seems fine to me; the tracepoint itself would not change</p>
+
+
+
+<a name="329280622"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329280622" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329280622">(Feb 21 2023 at 20:03)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233220">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>
+</blockquote>
+<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>
+</blockquote>
+<p>But can we make that happen? It doesn't seem like something wrong ;-)</p>
+
+
+
+<a name="329281051"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329281051" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329281051">(Feb 21 2023 at 20:05)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="585614">Josh Stone (cuviper)</span> <a href="#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329261143">said</a>:</p>
+<blockquote>
+<p>that said, <code>type_name</code> as a parameter seems fine to me; the tracepoint itself would not change</p>
+</blockquote>
+<p>Right, tracepoint itself cannot change, but its parameter certainly doesn't need to be the same between builds, thanks for the extra confirmation ;-)</p>
+
+
+
+<a name="329281795"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329281795" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329281795">(Feb 21 2023 at 20:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329280622">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="412316">bjorn3</span> <a href="#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233220">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>
+</blockquote>
+<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>
+</blockquote>
+<p>But can we make that happen? It doesn't seem like something wrong ;-)</p>
+</blockquote>
+<p>Or ,<code>TypeId</code> is just unique per CU?</p>
+
+
+
+<a name="329308920"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329308920" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329308920">(Feb 21 2023 at 22:58)</a>:</h4>
+<p>TypeId is globally unique (modulo hash collisions)</p>
+
+
+
+<a name="329309760"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329309760" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329309760">(Feb 21 2023 at 23:03)</a>:</h4>
+<p>Creating a section with TypeId -&gt; type name mapping would be possible, however I don't think having a function in the standard library for the lookup would work as wasm doesn't support merging the section from all cgus and giving this function the start and end location of the section. It would also need OS integration in case of dylibs. As for exposing the section as a stable feature to lookup yourself, that won't work either. We likely want to change the representation of TypeId and thus this section in the future to avoid all hash collisions. For example my making it a pointer to the mangled type name instead of a plain u64.</p>
+
+
+
+<a name="329309983"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/trace%20when%20Arc%20drop%20its%20inner%20object/near/329309983" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object.html#329309983">(Feb 21 2023 at 23:05)</a>:</h4>
+<p>Thanks! Let me think about it ;-)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

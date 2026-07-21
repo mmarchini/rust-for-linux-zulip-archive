@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>Starting a new thread to discuss upstreaming an abstraction for <a href=\"https://docs.kernel.org/core-api/xarray.html\">xarray</a> - original patch <a href=\"https://lore.kernel.org/rust-for-linux/20230224-rust-xarray-v3-1-04305b1173a5@asahilina.net/\">here</a> .</p>\n<p>This is semi-related to <a href=\"#narrow/stream/288089-General/topic/Red.2Fblack.20tree.20deprecation\">Read/black tree deprecation</a>, since we plan use <code>xarray</code> instead of <code>rbtree</code> for a use case in binder.</p>\n<p>Obligatory thanks to <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> who authored the original patch <span aria-label=\"clap\" class=\"emoji emoji-1f44f\" role=\"img\" title=\"clap\">:clap:</span></p>\n<p><span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span>, <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> and I met today and came up with the following (tentative) plan:</p>\n<ol>\n<li>Start a new patch set with a minimal implementation. So the first commit will expose only <a href=\"https://github.com/Rust-for-Linux/linux/blob/38cd35625e1dfd6f1e596530f296d64a071fc3f2/rust/kernel/xarray.rs#L128-L204\">new, replace, set, get, and remove</a>.</li>\n<li>Add <code>get_mut</code> along with <code>GuardMut</code> (mutable version of <a href=\"https://github.com/Rust-for-Linux/linux/blob/38cd35625e1dfd6f1e596530f296d64a071fc3f2/rust/kernel/xarray.rs#L35-L55\">Guard</a>).</li>\n<li>\n<p>Add <code>find</code> and <code>find_mut</code>. <a href=\"https://docs.kernel.org/core-api/xarray.html#c.xa_find\">Find</a> is similar to <code>get</code>, but returns the next larger index if there is no value at the provided index. We need this for binder.</p>\n<p>3a. Here we may try to encode the invariant that <a href=\"https://github.com/Rust-for-Linux/linux/blob/38cd35625e1dfd6f1e596530f296d64a071fc3f2/rust/kernel/xarray.rs#L184\">a lock must be acquired via xa_lock</a>, for certain operations (<code>get</code>/<code>find</code> so far), into the type system.</p>\n</li>\n<li>\n<p>Add the more interesting stuff that <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> needs: <a href=\"https://github.com/Rust-for-Linux/linux/blob/38cd35625e1dfd6f1e596530f296d64a071fc3f2/rust/kernel/xarray.rs#L211-L267\">alloc, alloc_limits, reserve, and reserve_limits</a>.</p>\n</li>\n</ol>\n<p>Perhaps 3a should just go with 1, even though there will only be 1 function <code>get</code> that uses it at that point in the series.</p>\n<p>I'll link a GH branch in the coming days. Any other thoughts? (cc: <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> )</p>",
+        "id": 369861137,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1687826135
+    },
+    {
+        "content": "<p>p.s. for reference, quote from: <a href=\"https://docs.kernel.org/core-api/xarray.html#locking\">https://docs.kernel.org/core-api/xarray.html#locking</a>:<br>\n\"If you want to take advantage of the lock to protect the data structures that you are storing in the XArray, you can call xa_lock() before calling xa_load(), then take a reference count on the object you have found before calling xa_unlock(). This will prevent stores from removing the object from the array between looking up the object and incrementing the refcount. You can also use RCU to avoid dereferencing freed memory, but an explanation of that is beyond the scope of this document.\"</p>",
+        "id": 369861313,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1687826205
+    },
+    {
+        "content": "<p>XArray shouldn't be movable? The <code>new</code> should return <code>impl PinInit&lt;Self&gt;</code> instead.</p>",
+        "id": 369999161,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1687861123
+    },
+    {
+        "content": "<p>Here is a branch: <a href=\"https://github.com/matthewtgilbride/linux/commits/rust-next-xarray\">https://github.com/matthewtgilbride/linux/commits/rust-next-xarray</a><br>\nThe commits go:</p>\n<ol>\n<li>basics (<code>new</code>/<code>replace</code>/<code>get</code>/<code>set</code>/<code>remove</code>, also includes <code>find</code>)</li>\n<li>doctests - could be merged into 1, but I wanted to leave <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> 's original commit alone other than adding <code>find</code>.</li>\n<li><code>_mut</code> variants for <code>get</code> and <code>find</code></li>\n<li>reservation mechanism</li>\n</ol>\n<p><span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> , would it be possible to add the kunit doctest commits to <code>rust-dev</code>, and then maybe I could open a PR against that branch to facilitate some feedback before sending this series to the official mailing list?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20bindings/near/369999161\">said</a>:</p>\n<blockquote>\n<p>XArray shouldn't be movable? The <code>new</code> should return <code>impl PinInit&lt;Self&gt;</code> instead.</p>\n</blockquote>\n<p>This flies over my head a bit...but I will happily follow whatever the right thing to do is.</p>\n<p>Another naive question along the same lines....should <code>set</code>, <code>replace</code>, and <code>remove</code> also take <code>self: Pin&lt;&amp;mut Self&gt;</code> instead of <code>self: Pin&lt;&amp;Self&gt;</code>, or is the idea that entries can be added/deleted without exclusive access?</p>",
+        "id": 370193084,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1687896480
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582232\">Matt Gilbride</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20bindings/near/370193084\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> , would it be possible to add the kunit doctest commits to <code>rust-dev</code>, and then maybe I could open a PR against that branch to facilitate some feedback before sending this series to the official mailing list?</p>\n</blockquote>\n<p>Yeah, definitely, we should have the KUnit series in <code>rust-dev</code> (in fact, that was the idea so that people could easily use it together with other upgrades like the toolchain one, since the KUnit Rust doctests will go through the KUnit tree).</p>",
+        "id": 370204287,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687899402
+    },
+    {
+        "content": "<p>(<span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> I may send a v2 with some small changes for KUnit, but I guess it is not a big deal if we put v1 already and then force push it later)</p>",
+        "id": 370204595,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687899498
+    },
+    {
+        "content": "<p>Sure, I will add it (as it is) now</p>",
+        "id": 370204766,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687899552
+    },
+    {
+        "content": "<p>Thanks Boqun!</p>",
+        "id": 370204809,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687899564
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"582232\">@Matt Gilbride</span> one tiny thing, I also have the bindgen 0.65.1 commit in the <code>rust-dev</code>, would that be a problem to you? I can drop it if you prefer, not a big deal for me.</p>",
+        "id": 370206537,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687900085
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20bindings/near/370206537\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"582232\">Matt Gilbride</span> one tiny thing, I also have the bindgen 0.65.1 commit in the <code>rust-dev</code>, would that be a problem to you? I can drop it if you prefer, not a big deal for me.</p>\n</blockquote>\n<p>Pushed out with the bindgen 0.65.1 commit, I can always drop that later if that's a problem</p>",
+        "id": 370230291,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687909058
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20bindings/near/370206537\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"582232\">Matt Gilbride</span> one tiny thing, I also have the bindgen 0.65.1 commit in the <code>rust-dev</code>, would that be a problem to you? I can drop it if you prefer, not a big deal for me.</p>\n</blockquote>\n<p>This is fine for me - one thing that tripped me up is that its <code>cargo install bindgen-cli</code> instead of <code>bindgen</code> as of v0.61.0.  I added a commit to the base of my PR here for that: <a href=\"https://github.com/Rust-for-Linux/linux/pull/1019\">https://github.com/Rust-for-Linux/linux/pull/1019</a></p>",
+        "id": 370818374,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1688051042
+    },
+    {
+        "content": "<p>I wrote up a draft message about migrating from rbtree to xarray in binder here: <a href=\"https://github.com/matthewtgilbride/linux/pull/3/files\">https://github.com/matthewtgilbride/linux/pull/3/files</a></p>\n<p>That's just a PR into my own repo for discussion purposes...let me now if there is a better way to gather feedback.  Also - once I send it to the mailing list - is a link to a markdown file on GH (or alternatively a public google doc link) appropriate?</p>",
+        "id": 374713521,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1689187875
+    },
+    {
+        "content": "<p>Just looking at this - FYI, for commits where I'm the primary author (in Git), you need to keep my signoff. If you want to submit them yourself, you can add your own signoff at the end (or if you list yourself as <code>Co-developed-by</code>, BTW I think <code>Co-Authored-by</code> is incorrect).</p>",
+        "id": 375122679,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1689310114
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20bindings/near/375122679\">said</a>:</p>\n<blockquote>\n<p>Just looking at this - FYI, for commits where I'm the primary author (in Git), you need to keep my signoff. If you want to submit them yourself, you can add your own signoff at the end (or if you list yourself as <code>Co-developed-by</code>, BTW I think <code>Co-Authored-by</code> is incorrect).</p>\n</blockquote>\n<p>Sure thing.  I'm still quite new to all the mailing list stuff so I am happy to do whatever credits you properly for the original authorship.  The commits in that <a href=\"https://github.com/Rust-for-Linux/linux/pull/1019\">PR</a> are quite a mess at the moment, but the tip of that tree represents the minimal surface that we <em>think</em> we need in binder.  I'm trying out using them there today.</p>",
+        "id": 376111430,
+        "sender_full_name": "Matt Gilbride",
+        "timestamp": 1689614456
+    }
+]

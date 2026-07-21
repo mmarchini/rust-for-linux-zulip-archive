@@ -1,0 +1,507 @@
+<html>
+<head><meta charset="utf-8"><title>devbound PinInit trait to avoid overuse of Devres · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html">devbound PinInit trait to avoid overuse of Devres</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="558228509"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558228509" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558228509">(Nov 19 2025 at 15:06)</a>:</h4>
+<p>I have noticed that a lot of abstractions return <code>impl PinInit&lt;Devres&lt;SomeType&gt;, Error&gt;</code>. This isn't always necessary, as there are places in which it is guaranteed to be dropped as soon as the device is unbound from the driver:</p>
+<p><strong>Example 1 (probe in a Bus device):</strong></p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SamplePlatformDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">iomem</span><span class="p">:</span><span class="w"> </span><span class="nc">Devres</span><span class="o">&lt;</span><span class="n">IoMem</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">platform</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SamplePlatformDriver</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span>
+<span class="w">        </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">platform</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">try_pin_init</span><span class="o">!</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iomem</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">io_request_by_index</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">ENODEV</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">request</span><span class="p">.</span><span class="n">iomap_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>Devres provides no additional guarantee here, as it is dropped anyway as soon as the driver is unbound.</p>
+<p><strong>Example 2 (Devres in Devres):</strong><br>
+(not a very realistic example, but it fullfils its purpose)</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">iomem</span><span class="p">:</span><span class="w"> </span><span class="nc">Devres</span><span class="o">&lt;</span><span class="n">IoMem</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Data</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">platform</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">Devres</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Devres</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">dev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span><span class="w"> </span><span class="n">try_pin_init</span><span class="o">!</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iomem</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">io_request_by_index</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">ENODEV</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">request</span><span class="p">.</span><span class="n">iomap_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>A field with Devres in a struct thats already wrapped in a Devres provides no addition guarantee.</p>
+<p><strong>Proposed solution:</strong></p>
+<p>Add a new trait <code>DevboundPinInit</code>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Infallible</span><span class="o">&gt;</span><span class="p">:</span><span class="w"> </span><span class="nb">Sized</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="c1">// the implementor needs to validate, that `dev` is the same device as they got passed as parent.</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">__pinned_devbound_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">device</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">slot</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_pin_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">device</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// return a PinInit wrapper that calls self.__pinned_devbound_init</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">P</span><span class="p">:</span><span class="w"> </span><span class="nc">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">__pinned_devbound_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">device</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">slot</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">__pinned_init</span><span class="p">(</span><span class="n">slot</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_pin_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">device</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>Change the return value of probe in every bus device from <code>PinInit</code> to <code>DevboundPinInit</code> (as it guarantees to be dropped as soon the driver is unbound).</p>
+<p>Change the parameter type in <code>Devres::new</code> from <code>PinInit</code> to <code>DevboundPinInit</code> to still allow Devres to be used, if we want to put in a Box or Arc for example.</p>
+<p>Add a new macro <code>try_devbound_pin_init</code> that takes care of implementing the trait:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">try_devbound_pin_init</span><span class="o">!</span><span class="p">(</span>
+<span class="w">    </span><span class="n">dev</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&lt;</span><span class="w"> </span><span class="n">same</span><span class="w"> </span><span class="n">syntax</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">try_pin_init</span><span class="o">!</span><span class="w"> </span><span class="o">&gt;</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Example 1 with this solution:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SamplePlatformDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">iomem</span><span class="p">:</span><span class="w"> </span><span class="nc">IoMem</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">platform</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SamplePlatformDriver</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span>
+<span class="w">        </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">platform</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">try_devbound_pin_init</span><span class="o">!</span><span class="p">(</span><span class="n">pdev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span><span class="w"> </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iomem</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">io_request_by_index</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">ENODEV</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">request</span><span class="p">.</span><span class="n">iomap_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>Example 2 with this solution:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">iomem</span><span class="p">:</span><span class="w"> </span><span class="nc">IoMem</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Data</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="c1">// This can still be wrapped into a Devres</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">platform</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">try_devbound_pin_init</span><span class="o">!</span><span class="p">(</span><span class="n">dev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span><span class="w"> </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iomem</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">io_request_by_index</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">ENODEV</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">request</span><span class="p">.</span><span class="n">iomap_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Advantages</strong></p>
+<ul>
+<li>more clean driver code</li>
+<li>no unnecessary devm actions (this shouldn't be an issue).</li>
+</ul>
+<p><strong>Disadvantages</strong></p>
+<ul>
+<li>Adds a lot of complexity to <code>pin-init</code>.</li>
+</ul>
+<p>I would like to hear your opinion and thoughts on the topic.</p>
+
+
+
+<a name="558242472"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558242472" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558242472">(Nov 19 2025 at 15:58)</a>:</h4>
+<p>I don't understand the problem statement. Also, <code>impl PinInit&lt;T&gt;</code> has nothing to do with when the object will be dropped, so I don't get how the first example code using your solution wolud compile (since <code>request.iomap_sized</code> will return a devres.</p>
+
+
+
+<a name="558250132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558250132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558250132">(Nov 19 2025 at 16:25)</a>:</h4>
+<p><span class="user-mention" data-user-id="546447">@Benno Lossin</span> </p>
+<blockquote>
+<p>I don't understand the problem statement.</p>
+</blockquote>
+<p>Devres is used in places where it technically wouldn't be required. This new trait would give the guarantee in the rust type system that the initialized object won't live longer than the device is bound to the driver. I am using a real driver this time as an example to make it more clear:</p>
+<p>drivers/pwm/pwm_th1520.rs: (<a href="https://git.kernel.org/pub/scm/linux/kernel/git/ukleinek/linux.git/log/?h=pwm/for-next">https://git.kernel.org/pub/scm/linux/kernel/git/ukleinek/linux.git/log/?h=pwm/for-next</a>)<br>
+<code>Th1520PwmDriverData</code> has the field <code>iomem: Devres&lt;IoMem&lt;TH1520_PWM_REG_SIZE&gt;&gt;</code>. The Devres is not required here, as <code>Th1520PwmDriverData</code> gets dropped after <code>pwm::Chip</code> gets dropped/unregistered. This happens shortly before the device is unbound from the driver.<br>
+Note that <code>IoMem&lt;TH1520_PWM_REG_SIZE&gt;</code> never lifes longer in the driver than the device is bound to the driver, regardless of the use of <code>Devres</code>.<br>
+The trait would allow <code>IoMem&lt;TH1520_PWM_REG_SIZE&gt;</code> to be directly used as a field, removing all the</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">iomem_accessor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="n">iomem</span><span class="p">.</span><span class="n">access</span><span class="p">(</span><span class="n">parent_dev</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">iomap</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iomem_accessor</span><span class="p">.</span><span class="n">deref</span><span class="p">();</span>
+</code></pre></div>
+<p>lines from the code and instead use <code>data.iomem</code> directly.</p>
+<blockquote>
+<p>Also, <code>impl PinInit&lt;T&gt;</code> has nothing to do with when the object will be dropped</p>
+</blockquote>
+<p>Yes, thats why there should be a second trait which adds a gurantee that the object doesn't live longer than the device is bound to the driver.</p>
+<blockquote>
+<p>so I don't get how the first example code using your solution would compile (since <code>request.iomap_sized</code> will return a devres.</p>
+</blockquote>
+<p><code>request.iomap_sized</code> would return <code>impl DevboundPinInit&lt;IoMem&gt;</code> instead after the change.<br>
+So the user has 2 choices:</p>
+<ul>
+<li>let it initialize on another DevboundPinInit (the initializer guarantees that it won't live longer than device is bound to the driver).</li>
+<li>use <code>Devres::new</code> to use it on a normal <code>PinInit</code></li>
+</ul>
+
+
+
+<a name="558251581"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558251581" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558251581">(Nov 19 2025 at 16:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="987779">Markus Probst</span> <a href="#narrow/channel/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres/near/558250132">said</a>:</p>
+<blockquote>
+<p>Devres is used in places where it technically wouldn't be required. This new trait would give the guarantee in the rust type system that the initialized object won't live longer than the device is bound to the driver.</p>
+</blockquote>
+<p>how does your proposal address this? I don't see any type level constructs that would do that. You could have safety requirements that do that, but you haven't specified those.</p>
+
+
+
+<a name="558251877"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558251877" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558251877">(Nov 19 2025 at 16:32)</a>:</h4>
+<p>I'd be curious to hear what <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> has to say about this. I think it's a good idea to get rid of those <code>access</code> calls when possible, but this solution might require too many hoops to jump through.</p>
+
+
+
+<a name="558253358"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558253358" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558253358">(Nov 19 2025 at 16:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres/near/558251581">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="987779">Markus Probst</span> <a href="#narrow/channel/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres/near/558250132">said</a>:</p>
+<blockquote>
+<p>Devres is used in places where it technically wouldn't be required. This new trait would give the guarantee in the rust type system that the initialized object won't live longer than the device is bound to the driver.</p>
+</blockquote>
+<p>how does your proposal address this? I don't see any type level constructs that would do that. You could have safety requirements that do that, but you haven't specified those.</p>
+</blockquote>
+<p>Thats why <code>DevboundPinInit::into_pin_data</code> is unsafe. The caller guarantees that the initialized object will be dropped before the device will be unbound.</p>
+<p>Then it can be initialized in the 2 places in which these guarantees exist:</p>
+<ul>
+<li><code>Devres::new</code> - <code>into_pin_data</code> will be called before passing it into <code>Revocable::new</code></li>
+<li><code>Device&lt;CoreInternal&gt;::set_drvdata</code> - <code>into_pin_data</code> will be called before passing it into <code>KBox::pin_init</code></li>
+</ul>
+<p>(it can also be initialized on another DevboundPinInit with the try_devbound_pin_init! macro, that should use __pinned_devbound_pin_init directly though).</p>
+
+
+
+<a name="558254195"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558254195" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558254195">(Nov 19 2025 at 16:42)</a>:</h4>
+<p>so the only two ways to use a <code>DevboundPinInit</code> safely are <code>Devres::new</code> and <code>try_devbound_pin_init!</code>, right?</p>
+
+
+
+<a name="558254244"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558254244" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558254244">(Nov 19 2025 at 16:42)</a>:</h4>
+<p>in that case, we could also just use a token marker that can be passed down the call stack</p>
+
+
+
+<a name="558254838"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558254838" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558254838">(Nov 19 2025 at 16:45)</a>:</h4>
+<p>Yes</p>
+
+
+
+<a name="558255433"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558255433" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558255433">(Nov 19 2025 at 16:46)</a>:</h4>
+<p>I think the token approach is simpler, so:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Devres</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">        </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">for</span><span class="o">&lt;'</span><span class="na">b</span><span class="o">&gt;</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="n">DevresToken</span><span class="o">&lt;'</span><span class="na">b</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Error</span><span class="p">:</span><span class="w"> </span><span class="nb">From</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="558255538"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558255538" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558255538">(Nov 19 2025 at 16:47)</a>:</h4>
+<p>and then your driver type can require <code>DevresToken&lt;'_&gt;</code> as a parameter to ensure it is created from within a devres</p>
+
+
+
+<a name="558257665"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558257665" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558257665">(Nov 19 2025 at 16:56)</a>:</h4>
+<p>Alternative solution:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">trait</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">fn</span><span class="w"> </span><span class="nf">pin_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">P</span><span class="p">:</span><span class="w"> </span><span class="nc">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">fn</span><span class="w"> </span><span class="nf">pin_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="bp">self</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">F</span><span class="p">:</span><span class="w"> </span><span class="nc">for</span><span class="o">&lt;'</span><span class="na">b</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">FnOnce</span><span class="o">&lt;</span><span class="n">DevtresToken</span><span class="o">&lt;'</span><span class="na">b</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">F</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">fn</span><span class="w"> </span><span class="nf">pin_init</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="bp">self</span><span class="p">(</span><span class="n">token</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Devres then:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Devres</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">        </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">Bound</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="na">a</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">'</span><span class="na">a</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Error</span><span class="p">:</span><span class="w"> </span><span class="nb">From</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Just to avoid <code>|_token|</code> if we don't need the token.</p>
+
+
+
+<a name="558258862"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558258862" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558258862">(Nov 19 2025 at 17:01)</a>:</h4>
+<p>Also <code>impl DevboundPinInit</code> is shorter, as it needs to be repeated on every driver implementation (the return type of <code>platform::Driver::probe</code> for example).</p>
+
+
+
+<a name="558260463"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558260463" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558260463">(Nov 19 2025 at 17:08)</a>:</h4>
+<p>This would also allow for</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DevboundArc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">DevboundArc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">clone</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>Avoids <code>Arc&lt;Devres&lt;T&gt;&gt;</code> and the <code>.access</code> call, which is needed if we use the resource in multiple handlers.</p>
+
+
+
+<a name="558267714"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558267714" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558267714">(Nov 19 2025 at 17:41)</a>:</h4>
+<p>an initializer of an <code>Arc</code> shouldn't return <code>PinInit</code></p>
+
+
+
+<a name="558267888"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558267888" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558267888">(Nov 19 2025 at 17:42)</a>:</h4>
+<p>and this will result in the <code>Arc</code> being inside of a <code>Devres</code>, is that really the thing that you want?</p>
+
+
+
+<a name="558268175"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558268175" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558268175">(Nov 19 2025 at 17:43)</a>:</h4>
+<p>No. DevboundArc::new will return PinInit, because it isn't allowed to move. This type is only allowed to be stored on types, that will be dropped before the driver is unbound. That way, the type is dropped before the driver is unbound, because the reference count will hit 0.</p>
+
+
+
+<a name="558268275"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558268275" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558268275">(Nov 19 2025 at 17:44)</a>:</h4>
+<p>(No Arc&lt;Devres&gt; necessary)</p>
+
+
+
+<a name="558268393"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558268393" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558268393">(Nov 19 2025 at 17:45)</a>:</h4>
+<p>you might be able to construct cycles with this <code>DevboundArc</code> <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="558268426"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558268426" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558268426">(Nov 19 2025 at 17:45)</a>:</h4>
+<p>at least when we get proper enum support for pin-init</p>
+
+
+
+<a name="558269101"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558269101" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558269101">(Nov 19 2025 at 17:49)</a>:</h4>
+<p>Can you give me a code example?</p>
+
+
+
+<a name="558270116"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558270116" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558270116">(Nov 19 2025 at 17:54)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">Cyclic</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">this</span><span class="p">:</span><span class="w"> </span><span class="nc">Mutex</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DevboundArc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">Cyclic</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">DevboundArc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">DevboundArc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">token</span><span class="p">,</span><span class="w"> </span><span class="n">Mutex</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="n">Cyclic</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">this</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="w"> </span><span class="p">})))</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">make_cyclic</span><span class="p">(</span><span class="bp">self</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">DevboundArc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">clone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">clone</span><span class="p">(</span><span class="n">token</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">this</span><span class="p">:</span><span class="w"> </span><span class="nc">MutexGuard</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">_</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">this</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DevboundArc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">this</span><span class="p">.</span><span class="n">as_pin_mut</span><span class="p">();</span>
+<span class="w">        </span><span class="n">Pin</span><span class="p">::</span><span class="n">set_init</span><span class="p">(</span><span class="n">this</span><span class="p">,</span><span class="w"> </span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="k">enum</span><span class="w"> </span><span class="nb">Option</span><span class="p">::</span><span class="nb">Some</span><span class="p">(</span><span class="n">clone</span><span class="p">)));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="558270173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558270173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558270173">(Nov 19 2025 at 17:55)</a>:</h4>
+<p>The <code>Pin::set_init</code> is like <a href="https://doc.rust-lang.org/std/pin/struct.Pin.html#method.set">https://doc.rust-lang.org/std/pin/struct.Pin.html#method.set</a> but for <code>pin-init</code></p>
+
+
+
+<a name="558270453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558270453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558270453">(Nov 19 2025 at 17:56)</a>:</h4>
+<p>(in fact using <code>pin_chain</code>, the example could be done in a single function, but I'll leave it as two for now)</p>
+
+
+
+<a name="558271667"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558271667" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558271667">(Nov 19 2025 at 18:04)</a>:</h4>
+<p>Ok yes, this would be an issue. I am not sure how to avoid it though.</p>
+
+
+
+<a name="558271832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558271832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558271832">(Nov 19 2025 at 18:05)</a>:</h4>
+<p>this also is an issue with the normal <code>Arc</code> and our <code>DevresToken</code> from before</p>
+
+
+
+<a name="558271883"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558271883" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558271883">(Nov 19 2025 at 18:05)</a>:</h4>
+<p>since having a <code>DevresToken</code> does not mean that you're not inside of an <code>Arc</code></p>
+
+
+
+<a name="558271908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558271908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558271908">(Nov 19 2025 at 18:05)</a>:</h4>
+<p>and that problem also exists for your initial solution</p>
+
+
+
+<a name="558273485"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558273485" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558273485">(Nov 19 2025 at 18:14)</a>:</h4>
+<p>Sure?</p>
+<p>The DevresToken has a lifetime (including your version). So, we just need to make it, that the T in PinInit&lt;T&gt; relies on the lifetime of that token.<br>
+Edit: Might not work.</p>
+<p>Side note: I am certain that my initial solution doesn't have that issue.</p>
+
+
+
+<a name="558274206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558274206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558274206">(Nov 19 2025 at 18:17)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">evil</span><span class="p">(</span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToke</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="n">Struct</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">PinInit</span><span class="p">::</span><span class="n">pin_chain</span><span class="p">(</span><span class="n">Struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">arc</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">DriverData</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">token</span><span class="p">)),</span>
+<span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="o">|</span><span class="n">finished</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">finished</span><span class="p">.</span><span class="n">arc</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">        </span><span class="c1">// now give other to another thread etc.</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="558274395"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558274395" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558274395">(Nov 19 2025 at 18:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="987779">Markus Probst</span> <a href="#narrow/channel/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres/near/558273485">said</a>:</p>
+<blockquote>
+<p>Side note: I am certain that my initial solution doesn't have that issue.</p>
+</blockquote>
+<p>yeah, I probably jumped the gun there a bit. the composing structure of the <code>try_devbound_pin_init!</code> helps here. But I'm not 100% sure it's sound yet</p>
+
+
+
+<a name="558282576"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558282576" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558282576">(Nov 19 2025 at 19:04)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SamplePlatformDriver</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">iomem</span><span class="p">:</span><span class="w"> </span><span class="nc">IoMem</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="n">platform</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SamplePlatformDriver</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span>
+<span class="w">        </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">platform</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">DevboundPinInit</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">|</span><span class="n">token</span><span class="p">:</span><span class="w"> </span><span class="nc">DevresToken</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;|</span><span class="w"> </span><span class="n">try_pin_init</span><span class="o">!</span><span class="p">(</span><span class="n">pdev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span><span class="w"> </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iomem</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">io_request_by_index</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">ENODEV</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">                </span><span class="n">request</span><span class="p">.</span><span class="n">iomap_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="mh">0x20</span><span class="o">&gt;</span><span class="p">(</span><span class="n">token</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="p">}</span>
+</code></pre></div>
+<p>With the lifetime restriction, you can't send it to another thread or store it outside of the struct.<br>
+Creating an Arc, and storing the same arc inside the arc (creating a cycle), should still be possible though.</p>
+
+
+
+<a name="558286585"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558286585" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558286585">(Nov 19 2025 at 19:29)</a>:</h4>
+<p>Having that lifetime is very bad from an ergonomic view, since that now infects the entirety of your program. Also what will that lifetime be filled in as, when you store a <code>Devres&lt;SamplePlatformDriver&gt;</code>?</p>
+
+
+
+<a name="558286726"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558286726" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558286726">(Nov 19 2025 at 19:30)</a>:</h4>
+<p>'static. We just require that the function is able to accept every lifetime. At the end it would only be executed for 'static.</p>
+
+
+
+<a name="558287312"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/devbound%20PinInit%20trait%20to%20avoid%20overuse%20of%20Devres/near/558287312" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/devbound.20PinInit.20trait.20to.20avoid.20overuse.20of.20Devres.html#558287312">(Nov 19 2025 at 19:34)</a>:</h4>
+<blockquote>
+<p>Having that lifetime is very bad from an ergonomic view, since that now infects the entirety of your program.</p>
+</blockquote>
+<p>Then there would only be my initial solution left, which adds complexity to pin-init.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

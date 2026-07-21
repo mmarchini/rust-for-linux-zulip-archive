@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>Hi Rust folks, you probably know me as the guy maintaining the Asahi Linux kernel tree and merging Lina's Rust GPU driver branch. I wanted to ask about the long-term plan for reducing unstable feature usage so that the compiler version can eventually be unpinned.</p>\n<p>Over the past few kernel versions, in the Asahi tree, we've been adding compiler forward compatibility version bumps ahead of mainline. Instead of doing this by pulling in all the <code>alloc</code> stuff wholesale, we make the minimum number of changes to make things work while keeping backwards compatibility (with <code>cfg(version())</code> conditionals). We do this to ease the job of distributions and users, so they don't have to pin old Rust versions all the time (with varying degrees of success). So we have a pretty good idea of what has been breaking and what hasn't, with version bumps.</p>\n<p>I understand that there is a good plan to eventually whittle down the unstable feature list used in the <code>kernel</code> crate and general driver crates. That part doesn't worry me. However, I'm afraid about the elephant in the room. These are the unstable feature counts used in our tree right now:</p>\n<ul>\n<li><code>kernel</code> crate: 11 features</li>\n<li>Driver/user crates:  4 features</li>\n<li><code>alloc</code> crate: <strong>105 features</strong></li>\n</ul>\n<p>As you might expect, this makes <code>alloc</code> the biggest problem when dealing with forwards compatibility with compiler versions. Digging back through kernel tags past, here's a bit of an overview:</p>\n<ul>\n<li>In 6.3 I added a hack to support Rust 1.70 (up from 1.66). That only affected <code>alloc</code></li>\n<li>In 6.4 I bumped that to 1.71. 84% of the patch by line count was hacking up <code>alloc</code> (the rest was fairly trivial changes to buildsystem/kernel stuff)</li>\n<li>In 6.5 Lina took care of porting to 1.72. That was, again, <code>alloc</code> only.</li>\n<li>In 6.6, we had a big issue with <code>const_trait_impl</code> going away in 1.73. That affected the OF platform device stuff. Lina figured out a workaround so we could drop that feature. The rest: more <code>alloc</code>.</li>\n</ul>\n<p>So... what's the plan for <code>alloc</code>? As part of the standard library, it uses unstable features with impunity, and that makes it intrinsically tied to compiler version. I haven't seen any discussion of what the plan is there. As long as Linux is vendoring <code>alloc</code> and attempting to keep it in sync with upstream, I don't see how we can ever move away from pinned compiler versions, regardless of whether the feature count for <code>kernel</code> and the rest drops to zero.</p>\n<p>Supporting unpinned compiler versions is very important to make life easy for distributions and to be able to support Rust-enabled builds without undue pain for everyone involved. Enabling RfL when you can compile with regular unpinned <code>rustc</code> is just a few package dependencies. Enabling RfL with a pinned compiler version requires distros to fork off the <code>rust</code> package into something specific for the kernel only, and then you have to deal with being unable to co-install it (we do that in Fedora Asahi with the <code>rust-kernel</code> package, it does the job, but it sucks that it's either or, you can't install it together with regular <code>rust</code>).</p>\n<p>Have I missed something? Is there a long-term plan for <code>alloc</code>?</p>",
+        "id": 404073868,
+        "sender_full_name": "marcan",
+        "timestamp": 1700898629
+    },
+    {
+        "content": "<p>I think the plan is that eventually we will not have to patch alloc</p>",
+        "id": 404080346,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1700901514
+    },
+    {
+        "content": "<p>Hopefully alloc will gain fallible allocations all over</p>",
+        "id": 404080400,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1700901552
+    },
+    {
+        "content": "<p>But cool with the fixing of Device without const_trait_impl, I will take a look at that <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 404080548,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1700901661
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404080548\">said</a>:</p>\n<blockquote>\n<p>But cool with the fixing of Device without const_trait_impl, I will take a look at that <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>\n</blockquote>\n<p>It's not pretty, I ended up turning a function into a macro to be able to make it generic without actually using traits, so it would stay const... there's probably a better way.</p>",
+        "id": 404080732,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1700901770
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404080346\">said</a>:</p>\n<blockquote>\n<p>I think the plan is that eventually we will not have to patch alloc</p>\n</blockquote>\n<p>I don't think that is going to be likely. As <span class=\"user-mention\" data-user-id=\"670129\">@marcan</span> stated, the <code>alloc</code> crate being part of the Rust standard library means that they are free to use unstable features. Realistically, our choices are the following:</p>\n<ul>\n<li>Fork <code>alloc</code> completely and gut it of what we don't need and stabilize the rest</li>\n<li>Vendor multiple versions of <code>alloc</code> and using that to define a supported rust version range</li>\n<li>Drop <code>alloc</code> and replace it with something custom for the Linux kernel</li>\n</ul>\n<p>None of these are particularly <em>awesome</em> choices, but I suspect that the first or last options are more viable than the second one.</p>",
+        "id": 404082248,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1700902503
+    },
+    {
+        "content": "<p>I think the idea is that if we can use <code>alloc</code> as shipped with Rust directly then it comes with the compiler (just like <code>core</code>) then it's always in sync, but then we need all the fallible alloc stuff fixed upstream, yeah...</p>",
+        "id": 404083097,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1700902913
+    },
+    {
+        "content": "<p>Is there an upstream rust issue tracking this? A quick search doesn't yield anything indicating that's something they are working on...</p>",
+        "id": 404083538,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1700903053
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404083538\">said</a>:</p>\n<blockquote>\n<p>Is there an upstream rust issue tracking this? A quick search doesn't yield anything indicating that's something they are working on...</p>\n</blockquote>\n<p>Not sure, probably <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> will know the status of that</p>",
+        "id": 404085225,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1700903871
+    },
+    {
+        "content": "<blockquote>\n<p>Have I missed something? Is there a long-term plan for <code>alloc</code>?</p>\n</blockquote>\n<p>I replied in LWN about this:</p>\n<blockquote>\n<p>The <code>alloc</code> topic has been in discussion since essentially the beginning of the project. The original plan discussed with upstream Rust (and others) is documented in-tree, please see the <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/alloc/README.md?h=v6.6\"><code>rust/alloc/README.md</code> file</a>. In short, the alloc fork is meant to be temporary and the discussions with upstream Rust are ongoing.</p>\n</blockquote>",
+        "id": 404121445,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1700927223
+    },
+    {
+        "content": "<p>Where are those discussions happening? Because from the outsider point of view, they aren't happening. Worse yet, that README file provides no references of where this effort is tracked with Rust upstream.</p>",
+        "id": 404122121,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1700927869
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404082248\">said</a>:</p>\n<blockquote>\n<p>I don't think that is going to be likely. As <span class=\"user-mention silent\" data-user-id=\"670129\">marcan</span> stated, the <code>alloc</code> crate being part of the Rust standard library means that they are free to use unstable features. Realistically, our choices are the following:</p>\n<ul>\n<li>Fork <code>alloc</code> completely and gut it of what we don't need and stabilize the rest</li>\n<li>Vendor multiple versions of <code>alloc</code> and using that to define a supported rust version range</li>\n<li>Drop <code>alloc</code> and replace it with something custom for the Linux kernel</li>\n</ul>\n<p>None of these are particularly <em>awesome</em> choices, but I suspect that the first or last options are more viable than the second one.</p>\n</blockquote>\n<p>Yes, we are well aware, and we have discussed for a long time the different options. It is hard to say now what the eventual solution will be, since it depends on how things evolve with the Rust project (we will be having some meetings soon where we want to again raise these points).</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404083097\">said</a>:</p>\n<blockquote>\n<p>I think the idea is that if we can use <code>alloc</code> as shipped with Rust directly then it comes with the compiler (just like <code>core</code>) then it's always in sync, but then we need all the fallible alloc stuff fixed upstream, yeah...</p>\n</blockquote>\n<p>Yeah, that is the ideal solution and what years ago we agreed to try, but we will see where we end up.</p>",
+        "id": 404122246,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1700927984
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404122121\">said</a>:</p>\n<blockquote>\n<p>Where are those discussions happening? Because from the outsider point of view, they aren't happening. Worse yet, that README file provides no references of where this effort is tracked with Rust upstream.</p>\n</blockquote>\n<p>Some of those discussions happened in private meetings, others in public. Please don't assume that discussions aren't happening just because you don't see them. You are always welcome to ask like here.</p>",
+        "id": 404123058,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1700928582
+    },
+    {
+        "content": "<p>I have heard repeatedly that they don’t want to add more try_x functions to support fallible allocation, but also haven’t heard much of a better proposal.</p>\n<p>An idea I had a while back is to make fallible/infallible allocation generic as part of the Alloc API, with the return type being generic over fallibility. Somebody is experimenting with that now <a href=\"https://github.com/rust-lang/rust/pull/117738\">https://github.com/rust-lang/rust/pull/117738</a></p>\n<p>It’s the option I have the highest hopes for because we more or less get it for free everywhere. And RFL can just forbid use of the panicking Vec&lt;T, Infallible&gt; (or whatever it may be)</p>",
+        "id": 404132698,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1700934647
+    },
+    {
+        "content": "<p>This may be an unpopular opinion, but I think it's too early to talk about avoiding using unstable features (even just in <code>kernel</code> crate), mostly due to no evidence that the Rust language is mature enough for kernel development. In other words, the unstable features wanted by kernel will increase, IMHO.</p>\n<p>I understand that's a pain for everyone working on a stable version of kernel if the upstream rustc version keeps bumping, but replacing an unstable feature with a workaround might not be a win, most of the time is a tech debt. Looking at C side, we use a few compiler extensions, which will never be stabilized in C standard. But it's just fine, because we have some confidence that their interface are stable. Maybe we can try the similar approach for Rust, but it would require the support from Rust community, namely, when we pick up an unstable feature, we can know whether its interface is (relatively) stable or not (we kinda already do this), and when an unstable feature used by us gets changed, we are looped-in to see how to handle that (or they just use our usage as a test case).</p>",
+        "id": 404133441,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1700935052
+    },
+    {
+        "content": "<blockquote>\n<p>Maybe we can try the similar approach for Rust, but it would require the support from Rust community, namely, when we pick up an unstable feature, we can know whether its interface is (relatively) stable or not (we kinda already do this), and when an unstable feature used by us gets changed, we are looped-in to see how to handle that (or they just use our usage as a test case).</p>\n</blockquote>\n<p>+1, something like this is the feedback I sent Niko on the \"Preview\" level, and I suggested the \"LinuxKernel-Stable\" one too like in the past.</p>",
+        "id": 404135959,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1700936351
+    },
+    {
+        "content": "<p>Yeah, that came to me as well ;-)\"Don't easily break LinuxKernel-Stable unstable features\" ;-) Of course, if the break change is needed, we can always help minimize the damage.</p>",
+        "id": 404136237,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1700936516
+    },
+    {
+        "content": "<p>This is a naive question: <span class=\"user-mention\" data-user-id=\"572825\">@Neal Gompa</span> , why can't distros build the kernel with a different version of rustc than the version they ship? I'd like to know what will break?</p>",
+        "id": 404199816,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1700974756
+    },
+    {
+        "content": "<p>Well, as long as you don't find a reason to need both at once, it should be okay. But the issue with it is that it's a question of maintenance. Having two packages of the compiler means you need to do security maintenance for two code streams of the Rust compiler. And with the Linux kernel especially, being stuck on older Rust versions can be dangerous. Additionally, upstream Rust is fairly aggressive in their support schedule, so it winds up being a double-whammy of problems.</p>",
+        "id": 404248076,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1700998934
+    },
+    {
+        "content": "<p>I think eventually we'll need to use a custom alloc crate, so it might worth looking into what's the core unstable feature that we need from alloc crate</p>",
+        "id": 404259969,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1701006492
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404248076\">said</a>:</p>\n<blockquote>\n<p>Well, as long as you don't find a reason to need both at once, it should be okay. But the issue with it is that it's a question of maintenance. Having two packages of the compiler means you need to do security maintenance for two code streams of the Rust compiler.</p>\n</blockquote>\n<p>It is not exactly the same support burden, since the kernel toolchain does not necessarily need to be meant for general usage. In any case, it is up to each distribution to decide when and how they want to start supporting Rust in the kernel, given the current constraints.</p>\n<p>To be clear, we are not the ones telling distributions to enable the Rust support (in fact, we told one of them that it is too early for general purpose ones like them, in our opinion, since there are no in-tree users etc.). Nevertheless, we are happy to help distributions (like we did in the past for you) if we can, within our constraints.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404248076\">said</a>:</p>\n<blockquote>\n<p>And with the Linux kernel especially, being stuck on older Rust versions</p>\n</blockquote>\n<p>The Linux kernel is not \"stuck\" on old Rust versions. In fact, we have been using the _latest_ Rust release available for a while now (we cannot guarantee it will always happen, but it has worked out so far for the last few releases).</p>\n<p>I have told you this several times, but you insist on claiming otherwise. So I suspect there is a big misunderstanding somewhere, possibly with respect to how the kernel development model/schedule works. As I told you in LWN, could you please explain what you are expecting?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"572825\">Neal Gompa</span> <a href=\"#narrow/stream/288089-General/topic/Unstable.20features.2C.20compiler.20versions.2C.20and.20.60alloc.60/near/404248076\">said</a>:</p>\n<blockquote>\n<p>can be dangerous.</p>\n</blockquote>\n<p>How is that \"dangerous\", exactly?</p>\n<p>If you are going to say \"because they are not supported by upstream Rust because they are not the very latest\", then please note that major distributions using older versions already support those, regardless of the kernel. Other projects also support older versions of Rust, such as Ferrocene.</p>",
+        "id": 404261034,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1701007236
+    },
+    {
+        "content": "<p>Yes, I'm aware that the Linux kernel and the Rust project are out of sync on release cadence. In some respects, it's a bit less painful for Fedora since we track upstream stable releases for both Rust and the Linux kernel. Most other distributions don't do either, and the end result can be unfortunate.</p>\n<p>From the perspective of the in-tree Rust-for-Linux, you're keeping up relatively well nowadays. And really, I wouldn't care much one way or another if it weren't for <code>alloc</code>.  A few cycles back, the bindgen upgrade allowed me to drop my most significant adaptation outside of patches to <code>alloc</code>, so nowadays it's not that big of a deal.</p>\n<p>Y'all are doing a better job, but the nature of the problem right now still doesn't change my recommendation to upstream Fedora for the time being.</p>",
+        "id": 404273664,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1701017548
+    },
+    {
+        "content": "<blockquote>\n<p>From the perspective of the in-tree Rust-for-Linux, you're keeping up relatively well nowadays.</p>\n</blockquote>\n<p>Since you say \"relatively well\", it seems like you still think things could be done in a better way. Can you please explain what is your proposal for improvement?</p>\n<p>To me, it sounds like you think somehow kernel maintainers have write access to mainline and that we can change versions at our whim. That would also explain your complaint about the patches.</p>\n<blockquote>\n<p>And really, I wouldn't care much one way or another if it weren't for <code>alloc</code> (...) so nowadays it's not that big of a deal.</p>\n</blockquote>\n<p>Well, you did seem to care enough to explicitly complain about the project's governance and development (among other things and maintainers) in LWN.</p>\n<blockquote>\n<p>Y'all are doing a better job</p>\n</blockquote>\n<p>No, we are not doing a \"better\" job just because we pick versions that suit you.</p>\n<p>Even if we followed another policy (which may happen in the future), like staying in 1.75 for 1 year for some reason, that does not mean we are doing a \"worse\" job. It just means we had to follow another policy.</p>\n<blockquote>\n<p>doesn't change my recommendation to upstream Fedora for the time being.</p>\n</blockquote>\n<p>I am not sure why this is relevant here (and you mentioned it elsewhere too). Whatever you recommend does not change our constraints.</p>\n<p>I also already told you that we ourselves tell general purpose distributions that it is early to enable the upstream Rust support.</p>\n<p>Again, we are more than happy to help potential users and downstream projects if we can, and we have shown that to you in the past, but this discussion is not being productive, especially with you ignoring most of my comments/questions. At this point, I suggest that if you really have a proposal, to come to one of our meetings to explain yourself properly.</p>",
+        "id": 404444627,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1701101563
+    },
+    {
+        "content": "<p>I decided to update the webpage:</p>\n<ul>\n<li>Given the discussion with Neal (Conan), I tried to make the wording for the versioning policy a bit more explicit in <a href=\"https://rust-for-linux.com/rust-version-policy\">https://rust-for-linux.com/rust-version-policy</a>.</li>\n<li>Given Hector's question, I added a section about <code>alloc</code> in <a href=\"https://rust-for-linux.com/unstable-features\">https://rust-for-linux.com/unstable-features</a>.</li>\n</ul>\n<p>I hope that helps others in the future. Thanks a lot Hector and Neal for taking the time to give us feedback.</p>",
+        "id": 404927943,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1701282905
+    },
+    {
+        "content": "<p>Thank you for the updates.</p>",
+        "id": 406579334,
+        "sender_full_name": "Neal Gompa",
+        "timestamp": 1701966600
+    }
+]

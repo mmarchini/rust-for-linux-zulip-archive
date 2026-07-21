@@ -1,0 +1,102 @@
+<html>
+<head><meta charset="utf-8"><title>✔ `Arc::into_raw()` should use `addr_of_mut!`? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html">✔ `Arc::into_raw()` should use `addr_of_mut!`?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="492140428"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492140428" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492140428">(Jan 06 2025 at 16:40)</a>:</h4>
+<p>Code <a href="https://rust.docs.kernel.org/src/kernel/sync/arc.rs.html#233">here</a>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">into_raw</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">ptr</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">();</span>
+<span class="w">        </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">forget</span><span class="p">(</span><span class="bp">self</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// SAFETY: The pointer is valid.</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">ptr</span><span class="p">::</span><span class="n">addr_of</span><span class="o">!</span><span class="p">((</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">data</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>If I understand pointer provenance correctly, pointers derived from <code>addr_of!()</code> don't have the provenance for writing, therefore the result of <code>Arc::into_raw()</code> cannot be used to construct an <code>Arc</code> via <code>Arc::from_raw()</code>, right?</p>
+
+
+
+<a name="492145497"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492145497" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492145497">(Jan 06 2025 at 17:08)</a>:</h4>
+<p>The docs say:</p>
+<blockquote>
+<p>If the place <code>expr</code> evaluates to is based on a raw pointer, then the result of <code>addr_of!</code> inherits all permissions from that raw pointer.</p>
+</blockquote>
+
+
+
+<a name="492146324"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492146324" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492146324">(Jan 06 2025 at 17:13)</a>:</h4>
+<p>Thank you. However, std implementation uses a <code>&amp;raw mut</code> instead of <code>&amp;raw</code>: <a href="https://doc.rust-lang.org/src/alloc/sync.rs.html#1581">https://doc.rust-lang.org/src/alloc/sync.rs.html#1581</a>.</p>
+<p>And if you can recall the discussion with Ralf: <a href="https://rust-lang.zulipchat.com/#narrow/channel/136281-t-opsem/topic/Replacing.20.60static.20mut.60/near/465391608">https://rust-lang.zulipchat.com/#narrow/channel/136281-t-opsem/topic/Replacing.20.60static.20mut.60/near/465391608</a></p>
+
+
+
+<a name="492146615"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492146615" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492146615">(Jan 06 2025 at 17:15)</a>:</h4>
+<p>I asked Ralf to add the sentence I quoted on a PR to add the paragraph containing it.</p>
+
+
+
+<a name="492146832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492146832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492146832">(Jan 06 2025 at 17:16)</a>:</h4>
+<p>So it means <code>addr_of!</code> should be treated as purely offset operation and that has been decided (i.e. the PR means that)?</p>
+
+
+
+<a name="492146877"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492146877" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492146877">(Jan 06 2025 at 17:16)</a>:</h4>
+<p>&lt;<a href="https://github.com/rust-lang/rust/pull/129653#discussion_r1732725767">https://github.com/rust-lang/rust/pull/129653#discussion_r1732725767</a>&gt;</p>
+
+
+
+<a name="492147210"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492147210" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492147210">(Jan 06 2025 at 17:18)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<a name="492147845"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492147845" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492147845">(Jan 06 2025 at 17:21)</a>:</h4>
+<p>However, I'm still not sure what we should do, we can:</p>
+<ol>
+<li>Be careful and use <code>addr_of_mut!()</code> as much as possible,</li>
+<li>Embrace the future and use <code>addr_of!()</code> whenever it fits.</li>
+<li>Admit that <code>addr_of!()</code> works in cases like <code>Arc::into_raw()</code> but don't rely on it for the new code.</li>
+</ol>
+
+
+
+<a name="492148089"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492148089" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492148089">(Jan 06 2025 at 17:23)</a>:</h4>
+<p>I think you're in favor of option 2?</p>
+
+
+
+<a name="492148215"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492148215" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492148215">(Jan 06 2025 at 17:23)</a>:</h4>
+<p>Using addr_of_mut would require a bunch of annoying casts.</p>
+
+
+
+<a name="492149153"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492149153" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492149153">(Jan 06 2025 at 17:28)</a>:</h4>
+<p>Fair enough.</p>
+
+
+
+<a name="492149557"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20%60Arc%3A%3Ainto_raw%28%29%60%20should%20use%20%60addr_of_mut%21%60%3F/near/492149557" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20.60Arc.3A.3Ainto_raw.28.29.60.20should.20use.20.60addr_of_mut.21.60.3F.html#492149557">(Jan 06 2025 at 17:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

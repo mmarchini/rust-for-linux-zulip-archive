@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>Right now Rust can ergonomically propagate errors silently (<code>?</code> operator), or noisily oops (<code>.unwrap()</code>, <code>.expect()</code>). However, in the kernel, we often have situations where certain conditions indicate a bug, but we don't want to oops since that would guarantee a crash. That's what the C <code>WARN()</code> macro is for, but it's not abstracted yet.</p>\n<p>Since Rust has excellent error handling, we want to propagate as much as possible, but we also want to be noisy when \"impossible\" things happen. Right now there is no ergonomic way to do that. At most you can use <code>if is_err() { warn(...) }</code> or <code>map_err(|_| warn(...))</code> but those aren't great...</p>\n<p>How about adding a WARN equivalent to <code>expect()</code>? It could be implemented both as a trait and as a macro:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">require</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$($i</span>:<span class=\"nc\">tt</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"cp\">$($i</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">).</span><span class=\"n\">map_err</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">_</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"WARNING! {}:{}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"fm\">file!</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"fm\">line!</span><span class=\"p\">());</span><span class=\"w\"> </span><span class=\"c1\">// Would be bindings::warn_slowpath_fmt() or whatever</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">Require</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">E</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">require</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">msg</span>: <span class=\"kp\">&amp;</span><span class=\"kt\">str</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">is_err</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"WARNING! {}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">msg</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Would be bindings::warn_slowpath_fmt() or whatever</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Require</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">require</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">msg</span>: <span class=\"kp\">&amp;</span><span class=\"kt\">str</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">bar</span><span class=\"p\">()</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">().</span><span class=\"n\">require</span><span class=\"p\">(</span><span class=\"s\">\"expected something\"</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">require</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">())</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The trait option looks more ergonomic and directly mirrors <code>expect()</code>, which is nice. The downside is that since it's not a macro, it can't capture file and line information (which in principle the C backend for <code>WARN</code> wants, though we could just let that default to something). The macro option can capture file and line information, so it's more suitable for cases without a message where the file and line information is the only thing leading you directly to the line of code it came from. Personally I would kind of want to have both (method version with a custom message and no file:line, and macro version with no message but automatic file:line)...</p>\n<p>Any thoughts on the idea and the name?</p>",
+        "id": 355142203,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683032228
+    },
+    {
+        "content": "<p>Actually, looking into it more, it seems the file/line info stuff is done via arch-specific section tricks, so we'd probably need arch-specific code to implement it similarly in Rust...</p>",
+        "id": 355145295,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683032896
+    },
+    {
+        "content": "<blockquote>\n<p>Any thoughts on the idea and the name?</p>\n</blockquote>\n<p>Quick note about naming: when we had similar cases (e.g. <code>pr_*</code> macros), and we wanted to improve a bit on some APIs/names/... before the initial merge, we were told to use the original C names if it made sense / as much as possible.</p>",
+        "id": 355147936,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683033455
+    },
+    {
+        "content": "<p>Right, but in this case it's different since these operate on <code>Result&lt;&gt;</code> types which is not something C has (and the C-side <code>WARN</code> etc don't operate on C int errnos either), so I think it makes sense to use a different name. We can still have plain <code>WARN()</code> or <code>WARN_ON()</code> functions or macros that do what the C ones do of course, but what I'm trying to solve here is a more specific Rust ergonomics thing ^^</p>",
+        "id": 355150083,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683033917
+    },
+    {
+        "content": "<p>I actually thought of using <code>.warn()</code> as the trait function before, but it feels a bit weird since it's only conditionally warning?</p>",
+        "id": 355150337,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683033975
+    },
+    {
+        "content": "<p>Re the asm, I think we need <code>feature(asm_const)</code> to implement the file/line stuff in Rust properly, but it should be possible with that.</p>",
+        "id": 355150532,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683034022
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355150337\">said</a>:</p>\n<blockquote>\n<p>I actually thought of using <code>.warn()</code> as the trait function before, but it feels a bit weird since it's only conditionally warning?</p>\n</blockquote>\n<p>Yeah, it is, though given <code>WARN</code> also does it conditionally, I guess it could make sense in that way.</p>",
+        "id": 355156746,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683035265
+    },
+    {
+        "content": "<p>I guess we would want Rust postfix macros here.</p>",
+        "id": 355157012,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683035316
+    },
+    {
+        "content": "<p>Yeah, postfix macros would be ideal... but it looks like that isn't even unstable yet ^^;;</p>",
+        "id": 355158335,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683035579
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355156746\">said</a>:</p>\n<blockquote>\n<p>Yeah, it is, though given <code>WARN</code> also does it conditionally, I guess it could make sense in that way.</p>\n</blockquote>\n<p>Yeah, it does kind of make sense. The main difference is warning on a condition vs. an <code>Err</code>...</p>\n<p><code>warn</code> is shorter anyway, so if people prefer it I'm fine with that!</p>",
+        "id": 355158747,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683035674
+    },
+    {
+        "content": "<p>warn_on_err() maybe?</p>",
+        "id": 355176642,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1683039279
+    },
+    {
+        "content": "<p>I think that's a bit too long... since this is about encouraging people to always do proper error handling, and ideally it is used pervasively, I think we want something that is a single world ideally.</p>",
+        "id": 355178434,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683039640
+    },
+    {
+        "content": "<p>it should only be used in places where err is unexpected but can still be handled, right? In places where we know a err may happen and we handle it, we don’t want to use it?</p>",
+        "id": 355181073,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1683040119
+    },
+    {
+        "content": "<p>Yeah, the idea is that it would replace all usage of expect() or unwrap() in codepaths where error handling is possible and safe. So it would be for cases where invariants have been violated (indicating a bug), but upholding those invariants is not safety critical. I have a lot of those...</p>",
+        "id": 355181287,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683040171
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355176642\">said</a>:</p>\n<blockquote>\n<p>warn_on_err() maybe?</p>\n</blockquote>\n<p>We may need a poll again :)</p>\n<p>By the way, that name sounds good to me (though long, yeah) if I didn't know about <code>ẀARN_ON</code>, but <code>WARN_ON</code> doesn't take a message.</p>",
+        "id": 355181661,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683040252
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355145295\">said</a>:</p>\n<blockquote>\n<p>Actually, looking into it more, it seems the file/line info stuff is done via arch-specific section tricks, so we'd probably need arch-specific code to implement it similarly in Rust...</p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355150532\">said</a>:</p>\n<blockquote>\n<p>Re the asm, I think we need <code>feature(asm_const)</code> to implement the file/line stuff in Rust properly, but it should be possible with that.</p>\n</blockquote>\n<p>I cannot follow why we need this, cant we just use <code>file!</code> and <code>line!</code>?</p>",
+        "id": 355223439,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1683049259
+    },
+    {
+        "content": "<p>or are you talking about the trait impl? because then it makes sense.</p>",
+        "id": 355233659,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1683051776
+    },
+    {
+        "content": "<p>The WARN implementation on most architectures uses assembly to build up a data structure in a special section, and then reference it from the warn location. That data structure needs a pointer to the file string (which can be done with asm <code>sym</code>), and a literal line number which needs asm <code>const</code>.</p>",
+        "id": 355314835,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683088322
+    },
+    {
+        "content": "<p>You'd use <code>file!()</code> to create a static string with the filename, and then reference it via asm <code>sym</code>, and then use <code>line!()</code> as an argument to asm <code>const</code>.</p>",
+        "id": 355314941,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683088382
+    },
+    {
+        "content": "<p>I think Lina's point is most archs implement WARN()/BUG() as some sort of trapping (e.g. on ARM64 is <code>brk</code> instruction), and in order to pass the pointer to <code>file!()</code> string literal, an asm section is used per WARN()/BUG() \"callsite\", since that's how to pass parameters to trapping.</p>",
+        "id": 355320110,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1683090878
+    },
+    {
+        "content": "<p>You could use concat! to create have the static defined inside the asm.</p>",
+        "id": 355565094,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1683135159
+    },
+    {
+        "content": "<p>I'm kind of surprised concat!() works with asm!() but it looks like it does, so it looks like we can avoid the feature that way ^^</p>",
+        "id": 355685215,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683185499
+    },
+    {
+        "content": "<p>You don't even need <code>concat!()</code>. <code>asm!()</code> accepts multiple string literals separated by commas. Any of them can also be a macro invocation expanding to a string literal. <code>asm!()</code> will internally concat all given string literals. This was done to help with macro expansed <code>asm!()</code>.</p>",
+        "id": 355696293,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1683188301
+    },
+    {
+        "content": "<p>But <code>line!()</code> is not a string literal, it's a number, so you still need <code>concat!()</code> for stringification right?</p>",
+        "id": 356095945,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683300556
+    },
+    {
+        "content": "<p>That is possible. I didn't check.</p>",
+        "id": 356150836,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1683315311
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/356095945\">said</a>:</p>\n<blockquote>\n<p>But <code>line!()</code> is not a string literal, it's a number, so you still need <code>concat!()</code> for stringification right?</p>\n</blockquote>\n<p>yeah <code>line!</code> return a not string value, you should conver it in a strin gin some way. Ideally here we can use a macro like </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[macro_export]</span>\n<span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">warn</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$when</span>: <span class=\"nc\">expr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$tok</span>: <span class=\"nc\">expr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$($msg</span>:<span class=\"nc\">tt</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"cp\">$when</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"cp\">$crate</span>::<span class=\"n\">kdiagnostic</span>::<span class=\"n\">KDiagnInfo</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">msg</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"fm\">format!</span><span class=\"p\">(</span><span class=\"cp\">$($msg</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"n\">KDiagnInfo</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">msg</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$tok</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"fm\">line!</span><span class=\"p\">().</span><span class=\"n\">to_string</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"fm\">file!</span><span class=\"p\">().</span><span class=\"n\">to_string</span><span class=\"p\">()).</span><span class=\"n\">warn</span><span class=\"p\">().</span><span class=\"n\">emit</span><span class=\"p\">()</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>this is how I implement the diagnostic in <code>kproc_macro</code> that sone I will make a 0.0.1 version</p>",
+        "id": 356222842,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1683355589
+    },
+    {
+        "content": "<p>I guess in you case you need just </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[macro_export]</span>\n<span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">warn</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$tok</span>: <span class=\"nc\">expr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$($msg</span>:<span class=\"nc\">tt</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"cp\">$tok</span><span class=\"p\">.</span><span class=\"n\">is_err</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"cp\">$crate</span>::<span class=\"n\">kdiagnostic</span>::<span class=\"n\">KDiagnInfo</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">msg</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"fm\">format!</span><span class=\"p\">(</span><span class=\"cp\">$($msg</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"o\">....</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 356222953,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1683355663
+    },
+    {
+        "content": "<p>That doesn't work with <code>asm!()</code> since you can't have actual expressions... and <code>stringify!()</code> doesn't work either because it seems to stringify its argument without further macro resolution, plus discrete strings passed to <code>asm!()</code> become separate statements, they aren't just concatenated together. Only <code>concat!()</code> works... <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=5163da80dc020d6f56ace61ad57164a9\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=5163da80dc020d6f56ace61ad57164a9</a></p>",
+        "id": 356228487,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1683358144
+    },
+    {
+        "content": "<p>mh that it is interesting</p>",
+        "id": 356254114,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1683366390
+    }
+]

@@ -1,0 +1,266 @@
+[
+    {
+        "content": "<p>Hi! I've been writing up a rust interface for KMS drivers written in rust, and little while ago I had asked for some advice regarding <a href=\"#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback\">https://rust-for-linux.zulipchat.com/#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback</a> <br>\nI was skimming through the wiki again this morning and I think I answered my question, mainly it looks like what I probably want for this is some sort of <code>LockedBy</code> equivalent that can handle <code>ww_mutex</code> so that I can make structs like <code>Plane&lt;T&gt;</code> opaque until the caller can actually prove they hold the right locks to access it's contents.<br>\nI'm now looking at implementing wrappers for <code>ww_mutex</code>, but since this lock acquisition scheme is not infallible (see <a href=\"https://lwn.net/Articles/548909/\">https://lwn.net/Articles/548909/</a> ) it doesn't seem like <code>sync::lock::Backend</code> would be suitable for this. Which brings me to ask: if I'm writing such wrappers, should I start by introducing a new variant of <code>sync::lock::Backend</code> designed for locks with fallible acquisition schemes? Or should I just go straight to writing a wrapper for <code>ww_mutex</code>, and worry about moving this stuff out to a trait later if we end up finding more users?</p>",
+        "id": 421729839,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708026898
+    },
+    {
+        "content": "<p>I don't think that the current lock design can cover <code>ww_mutex</code>. One important in <code>ww_mutex</code> is the <code>ww_acquire_ctx</code>, and Rust API will need to design the interface where <code>ctx</code> interact with <code>mutex</code>. Also what <code>ww_mutex</code>API implies is the user somehow tracks all the acquired locks (so that they can be unlocked when \"wound\"), for a safe API, I think you will need to maintain that in an vector-like data structure in the <code>ctx</code>.</p>",
+        "id": 421741417,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1708031425
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/421741417\">said</a>:</p>\n<blockquote>\n<p>I don't think that the current lock design can cover <code>ww_mutex</code>. One important in <code>ww_mutex</code> is the <code>ww_acquire_ctx</code>, and Rust API will need to design the interface where <code>ctx</code> interact with <code>mutex</code>. Also what <code>ww_mutex</code>API implies is the user somehow tracks all the acquired locks (so that they can be unlocked when \"wound\"), for a safe API, I think you will need to maintain that in an vector-like data structure in the <code>ctx</code>.</p>\n</blockquote>\n<p>awesome, I figured as much :) - thanks for confirming!</p>",
+        "id": 421741523,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708031472
+    },
+    {
+        "content": "<p>Go ahead, I can help review ;-)</p>",
+        "id": 421741565,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1708031491
+    },
+    {
+        "content": "<p>JFYI too: Seems like it might just be for drm_modeset lock for the moment as well instead of ww_mutex generally, since we can't really just use the plain ww mutex API for that (DRM adds some additional debugging functionality to it's modeset locks).</p>",
+        "id": 421754082,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708037338
+    },
+    {
+        "content": "<p>can we expose that lock without any ww_ pieces? I think drm exec also uses ww_ but maybe we also can hide it from drivers there.</p>",
+        "id": 421763678,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1708042119
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"670868\">Dave Airlie</span> <a href=\"#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/421763678\">said</a>:</p>\n<blockquote>\n<p>can we expose that lock without any ww_ pieces? I think drm exec also uses ww_ but maybe we also can hide it from drivers there.</p>\n</blockquote>\n<p>Just got out of a meeting but yeah - I think this is actually going to end up being the way to go, because I didnt realize until looking that you don't really directly deal with ww_ at all on the driver's side</p>",
+        "id": 421766499,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708043801
+    },
+    {
+        "content": "<p>in fact we might not even end up with any sort of independent <code>ModesetLock</code> object, and just may end up instead with <code>ModesetGuard</code> or something like that - and then have various modesetting objects with locks implement a common trait that provides methods for attempting to grab their respective locks</p>",
+        "id": 421766904,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708044052
+    },
+    {
+        "content": "<p>(also I should probably note, I don't think I've looked at drm exec at all, although from a quick glance it seems like it's more or less the same deal there - DRM handles creating locks and such)</p>",
+        "id": 421767078,
+        "sender_full_name": "Lyude",
+        "timestamp": 1708044138
+    },
+    {
+        "content": "<p>Hi again! It's been quite a while since the last post I made here. For a while the usecase for having a ww mutex binding ended up not panning out with the KMS bindings, but now that I've been cleaning up the gem shmem patches I've run into some spots where we could eventually use some sort of WwMutex wrapper. At some point I can get to it, but would this possibly be something we could have as a todo item for new contributors also?</p>",
+        "id": 513081781,
+        "sender_full_name": "Lyude",
+        "timestamp": 1745002417
+    },
+    {
+        "content": "<p>Note: it's not super high priority, the unsafe code we have works fine but, well, it is unsafe ;P.</p>",
+        "id": 513081862,
+        "sender_full_name": "Lyude",
+        "timestamp": 1745002445
+    },
+    {
+        "content": "<p>I would like to help with that</p>",
+        "id": 524040824,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1749876858
+    },
+    {
+        "content": "<p>(if it's still a TODO thing)</p>",
+        "id": 524040854,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1749876932
+    },
+    {
+        "content": "<p>Cc: <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> </p>\n<p>Hi <span class=\"user-mention\" data-user-id=\"928507\">@Onur Özkan</span> ,</p>\n<p>Yes, it is -- <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> already came across <code>ww_mutex</code> in the context of <code>drm_gpuvm</code> and <code>dma_resv</code>, where the latter can be a very thin abstraction layer above <code>ww_mutex</code>.</p>",
+        "id": 524052612,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1749893257
+    },
+    {
+        "content": "<p>I think we should probably move away from the <code>sync::lock::Backend</code> framework anyway. If it doesn't fit ww_mutex, then I would not worry about expanding it - just write a new separate abstraction.</p>",
+        "id": 524053097,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1749893795
+    },
+    {
+        "content": "<p>sounds cool, I will spend sometime on this</p>",
+        "id": 524053672,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1749894531
+    },
+    {
+        "content": "<p>A status update regarding <code>ww_mutex</code>: I looked into the <code>sync::lock::Backend</code> and the <code>kernel/locking</code> tree today. From what I can see, it's not just limiting <code>ww_mutex</code>, but also other locking primitives under the <code>kernel/locking</code> tree. I plan to refactor it into <code>sync::locking::Backend</code> so it can serve as a proper generic foundation for <code>kernel/locking</code> primitives. This would allow us to abstract more than just <code>ww_mutex</code>, which I plan to do one by one after completing the rewrite/refactor/redesign of <code>sync::lock::Backend</code>. Before going down this path, I wanted to share it here to make sure I am not heading in an unusual or unnecessary direction. Any concerns?</p>",
+        "id": 524126095,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1749988536
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524053097\">said</a>:</p>\n<blockquote>\n<p>I think we should probably move away from the <code>sync::lock::Backend</code> framework anyway. If it doesn't fit ww_mutex, then I would not worry about expanding it - just write a new separate abstraction.</p>\n</blockquote>\n<p>Based on this message, there shouldn't be any problem with my current plan but please correct me if I am wrong :)</p>",
+        "id": 524126235,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1749988675
+    },
+    {
+        "content": "<p>I can't answer fully without seeing the abstraction, but I generally believe that locks are currently more abstract than what they need to be.</p>",
+        "id": 524126784,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1749989253
+    },
+    {
+        "content": "<p>Instead of making Backend more generic, I would suggest focusing on providing ww_mutex first, some concepts in ww_mutex don’t apply to simple lock interfaces (like spinlock), so let’s not make Backend more complicated.</p>",
+        "id": 524138968,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1750001854
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524126784\">said</a>:</p>\n<blockquote>\n<p>I can't answer fully without seeing the abstraction, but I generally believe that locks are currently more abstract than what they need to be.</p>\n</blockquote>\n<p>I agree with that</p>",
+        "id": 524139149,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1750002031
+    },
+    {
+        "content": "<p>E.g. we really don’t need returning a -EDEADLOCK  from a lock function, because it can only help ww_mutex, so it makes no sense to abstract Backend to do that.</p>",
+        "id": 524139249,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1750002096
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524139249\">said</a>:</p>\n<blockquote>\n<p>E.g. we really don’t need returning a -EDEADLOCK  from a lock function, because it can only help ww_mutex, so it makes no sense to abstract Backend to do that.</p>\n</blockquote>\n<p>Yeah that would make no sense to do it that way, best would be adding generic type to the trait. But still, there will be some functions which will be usefuly only for certain backends</p>",
+        "id": 524142097,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750004851
+    },
+    {
+        "content": "<p>I guess I will just skip the current Backend as is</p>",
+        "id": 524142134,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750004887
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524138968\">said</a>:</p>\n<blockquote>\n<p>Instead of making Backend more generic, I would suggest focusing on providing ww_mutex first, some concepts in ww_mutex don’t apply to simple lock interfaces (like spinlock), so let’s not make Backend more complicated.</p>\n</blockquote>\n<p>Agreed</p>",
+        "id": 524146535,
+        "sender_full_name": "Lyude",
+        "timestamp": 1750009965
+    },
+    {
+        "content": "<p>FWIW: for a moment I did actually consider for a moment it might make sense to implement Backend for the case of ww mutexes without specific  contexts, but taking a look at the ww mutex code in the kernel it seems that even without a context it's still possible to hit -EDEADLK (though I'm not sure I really understand why)</p>",
+        "id": 524147804,
+        "sender_full_name": "Lyude",
+        "timestamp": 1750011576
+    },
+    {
+        "content": "<p>Okay, so <a href=\"https://github.com/onur-ozkan/linux/commit/b1674992e83574d92ac0905541a67ccb4a856379\">this is the initial patch</a> I'm planning to send for review. Last week, I sent <a href=\"https://github.com/onur-ozkan/linux/commit/5f6cd1b2d2fd166562bbd74fa7dd58a15e995fe6\">this minor patch</a>, but I'm not sure if I did it properly or if it just takes some time to get a response from reviewers (I haven't seen any response yet).</p>\n<p>What I did was simply pick two maintainers from the MAINTAINERS file and run this command:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">git</span><span class=\"w\"> </span><span class=\"n\">send</span><span class=\"o\">-</span><span class=\"n\">email</span><span class=\"w\"> </span><span class=\"o\">--</span><span class=\"n\">to</span><span class=\"o\">=</span><span class=\"n\">mturquette</span><span class=\"o\">@</span><span class=\"n\">baylibre</span><span class=\"p\">.</span><span class=\"n\">com</span><span class=\"p\">,</span><span class=\"n\">sboyd</span><span class=\"o\">@</span><span class=\"n\">kernel</span><span class=\"p\">.</span><span class=\"n\">org</span><span class=\"w\"> </span><span class=\"mi\">0001</span><span class=\"o\">-</span><span class=\"n\">Various</span><span class=\"o\">-</span><span class=\"n\">improvements</span><span class=\"o\">-</span><span class=\"n\">on</span><span class=\"o\">-</span><span class=\"n\">clock</span><span class=\"o\">-</span><span class=\"n\">abstractions</span><span class=\"p\">.</span><span class=\"n\">patch</span>\n</code></pre></div>\n<p>Also, I feel like the <code>ww_mutex</code> abstraction patch is relatively fat (or is it not? I am just too new to patch-based development), so I expect there might be a lot of back-and-forth during review. I'm not sure what the best approach is here, should I wait for some initial feedback on <a href=\"https://github.com/onur-ozkan/linux/commit/b1674992e83574d92ac0905541a67ccb4a856379\">this patch</a>, or just go ahead and send it now?</p>",
+        "id": 524267274,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750083318
+    },
+    {
+        "content": "<p>You need to send the patch to the mailing list so that everyone can see it.</p>",
+        "id": 524269974,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1750084161
+    },
+    {
+        "content": "<p>Please see <a href=\"https://rust-for-linux.com/contributing#submitting-patches\">https://rust-for-linux.com/contributing#submitting-patches</a> -- we have an example command there and other pointers (the rest of the page is also important, if you haven't seen it! :)</p>\n<p>Thanks!</p>",
+        "id": 524308501,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750096608
+    },
+    {
+        "content": "<p>Oh, seems like I sould re-send the patch with including you to the sending address :)</p>",
+        "id": 524308730,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750096704
+    },
+    {
+        "content": "<p>I missed that part, thank you</p>",
+        "id": 524308741,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750096711
+    },
+    {
+        "content": "<p>Just in case, that is one possible command for the \"Rust\" subsystem, but you may need to add other entries too like the page mentions, depending on the patch.</p>\n<p>For instance, as <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> mentioned in the list (<a href=\"https://lore.kernel.org/rust-for-linux/aFBbTMMTHrgHwVFJ@Mac.home/\">https://lore.kernel.org/rust-for-linux/aFBbTMMTHrgHwVFJ@Mac.home/</a>), you want to also add the <code>M</code>/<code>R</code>/<code>L</code> addresses for locking. You can use <code>get_maintainers.pl</code> to search for things and other advanced options.</p>\n<p>I hope that helps!</p>",
+        "id": 524309430,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750096957
+    },
+    {
+        "content": "<p>/me offering free Cc list checking ;-)</p>",
+        "id": 524309623,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1750097043
+    },
+    {
+        "content": "<p>I would suggest you take Boqun's offer (thanks Boqun) -- Cc list checking is not too fun, and getting those right is important nevertheless :)</p>",
+        "id": 524312545,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750098320
+    },
+    {
+        "content": "<p>Hi, I was going through the v5 review notes and saw that Benno mentioned this:</p>\n<blockquote>\n<p>I don't know the design of <code>struct ww_mutex</code>, but from the code below I gathered that it has some special error return values that signify that one should release other locks.</p>\n<p>Did anyone think about making a more Rusty API that would allow one to try to lock multiple mutexes at the same time (in a specified order) and if it fails, it would do the resetting automatically?</p>\n</blockquote>\n<p>As I just recently joined the conversation on Zulip and picked up this task to help out with the Rust side of the kernel, I don't feel like I'm the right person to answer this design question. What should I do at this point?</p>\n<p>Also, what should we do when there is a conflict of suggestion coming from 2 different reviewers? (e.g., one suggesting something do add while the other doesn't like it).</p>",
+        "id": 525325063,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750683218
+    },
+    {
+        "content": "<p>It's okay to say no to adding more things to your change.</p>\n<p>As for disagreements, one option is to reply and point out the disagreement. The reviewer may not have noticed the disagreement.</p>",
+        "id": 525326667,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1750683680
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"928507\">Onur Özkan</span> <a href=\"#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/525325063\">said</a>:</p>\n<blockquote>\n<p>Hi, I was going through the v5 review notes and saw that Benno mentioned this:</p>\n<blockquote>\n<p>I don't know the design of <code>struct ww_mutex</code>, but from the code below I gathered that it has some special error return values that signify that one should release other locks.</p>\n<p>Did anyone think about making a more Rusty API that would allow one to try to lock multiple mutexes at the same time (in a specified order) and if it fails, it would do the resetting automatically?</p>\n</blockquote>\n<p>As I just recently joined the conversation on Zulip and picked up this task to help out with the Rust side of the kernel, I don't feel like I'm the right person to answer this design question. What should I do at this point?</p>\n</blockquote>\n<p>Don't worry, I just replied to Benno.</p>",
+        "id": 525334559,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1750685866
+    },
+    {
+        "content": "<p>jfyi: We are currently waiting to hear back from the DRM folks about the design of the Rust <code>ww_mutex</code> API before moving forward (see the latest mail in the patch <a href=\"https://lore.kernel.org/all/DAURXDWGWEDV.2GZ129VC6IFKF@kernel.org/\">series</a>).</p>\n<p>Any input would be appreciated :)</p>",
+        "id": 525550176,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1750780678
+    },
+    {
+        "content": "<p>I read through a bit previous discussion, and seems that the <code>ww_mutex</code> requirement comes from the abstraction of <code>drm_plane</code>, <span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> it'll be nice if you can point us to an example that C code current does locking for <code>drm_plane</code>, which would help on the design of <code>ww_mutex</code>.</p>",
+        "id": 525550983,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1750780930
+    },
+    {
+        "content": "<p>I might come up with a couple of design ideas/suggestions in a week or so by checking the C sources that use <code>ww_mutex</code> while we wait for feedback from DRM</p>",
+        "id": 526248943,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1751177056
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/525550983\">said</a>:</p>\n<blockquote>\n<p>I read through a bit previous discussion, and seems that the <code>ww_mutex</code> requirement comes from the abstraction of <code>drm_plane</code>, <span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> it'll be nice if you can point us to an example that C code current does locking for <code>drm_plane</code>, which would help on the design of <code>ww_mutex</code>.</p>\n</blockquote>\n<p>For <code>drm_plane</code>? That would be on the KMS side of things, and I haven't run into any needs for ww mutexes there quite yet. ww mutexes do get used pretty often in kms but for all of the abstractions I've been writing they're pretty much all called in contexts where all of the locking is handled by the C functions that we call down to</p>",
+        "id": 526483570,
+        "sender_full_name": "Lyude",
+        "timestamp": 1751316060
+    },
+    {
+        "content": "<p>You might be thinking of <code>dma_resv</code></p>",
+        "id": 526483585,
+        "sender_full_name": "Lyude",
+        "timestamp": 1751316066
+    },
+    {
+        "content": "<p>This being said though, I do have some examples of it being used in KMS:</p>\n<p><a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/blob/rust/irq-spinlock/drivers/gpu/drm/nouveau/dispnv50/crc.c?ref_type=heads#L540\">https://gitlab.freedesktop.org/lyudess/linux/-/blob/rust/irq-spinlock/drivers/gpu/drm/nouveau/dispnv50/crc.c?ref_type=heads#L540</a></p>\n<p>here we setup an atomic display commit, add the relevant resources that we need (each get_*_state() call ends up acquiring a drm_modeset_lock, which is a thin wrapper around ww_mutex that uses the atomic context we initialize in drm_atomic_state). If we deadlock, we clear the atomic state and go back to the start and try again</p>",
+        "id": 526484225,
+        "sender_full_name": "Lyude",
+        "timestamp": 1751316348
+    },
+    {
+        "content": "<p>BTW - it might take me until next week to take a look at this but I'm more then happy to help out with the review of this</p>",
+        "id": 526484677,
+        "sender_full_name": "Lyude",
+        "timestamp": 1751316561
+    }
+]

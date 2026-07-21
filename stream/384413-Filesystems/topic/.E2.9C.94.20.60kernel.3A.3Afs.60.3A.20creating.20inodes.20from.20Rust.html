@@ -1,0 +1,58 @@
+<html>
+<head><meta charset="utf-8"><title>✔ `kernel::fs`: creating inodes from Rust · Filesystems · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/index.html">Filesystems</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/.E2.9C.94.20.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust.html">✔ `kernel::fs`: creating inodes from Rust</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="295807270"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/%E2%9C%94%20%60kernel%3A%3Afs%60%3A%20creating%20inodes%20from%20Rust/near/295807270" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vika Shleina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/.E2.9C.94.20.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust.html#295807270">(Aug 29 2022 at 09:16)</a>:</h4>
+<p>Hello. I am currently dissecting the <code>kernel::fs</code> module to see if I could build upon it or improve it in some way.</p>
+<p>Reading the manual for the VFS layer, I noticed that a certain struct called <code>inode_operations</code> needs to be populated on an inode so it would support typical filesystem actions, such as creating new files under a directory or reading them. A sample in <code>samples/rust/rust_fs.rs</code> seems to create an empty filesystem, but the inode creation is hardcored in the <code>kernel::fs</code> module and marked as "temporary code to create the root inode and dentry" which "will be replaced once we allow inodes and dentries to be created directly from Rust code".</p>
+<p>While creating abstractions for the functions in the <code>bindings</code> crate that are called in <code>NewSuperBlock&lt;'a, T, NeedsRoot&gt;::init_root</code> does not seem a hard task, making the implementor of the <code>kernel::fs::Type</code> responsible for the creation of the root inode seems to require extending the <code>fs::Type</code> interface due to the orphan rule, or else the following error will be produced by <code>rustc</code>:</p>
+<div class="codehilite"><pre><span></span><code>error[E0116]: cannot define inherent `impl` for a type outside of the crate where the type is defined
+   --&gt; samples/rust/rust_fs.rs:63:1
+    |
+63  | / impl&lt;&#39;a&gt; fs::NewSuperBlock&lt;&#39;a, RustFs, fs::NeedsRoot&gt; {
+64  | |     pub fn init_root(self) -&gt; Result&lt;&amp;&#39;a fs::SuperBlock&lt;RustFs&gt;&gt; {
+65  | |         // The following is temporary code to create the root inode and dentry. It will be replaced
+66  | |         // once we allow inodes and dentries to be created directly from Rust code.
+...   |
+114 | |     }
+115 | | }
+    | |_^ impl for type defined outside of crate.
+    |
+    = note: define and implement a trait or new type instead
+</code></pre></div>
+<p>I think adding a function on <code>fs::Type</code> trait that would return an inode and a dentry to be declared as the root of the filesystem would be one possible solution. Am I digging in the right direction or is there a better way to define and implement this?</p>
+
+
+
+<a name="295832885"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/%E2%9C%94%20%60kernel%3A%3Afs%60%3A%20creating%20inodes%20from%20Rust/near/295832885" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/.E2.9C.94.20.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust.html#295832885">(Aug 29 2022 at 12:21)</a>:</h4>
+<p>I'm away now, but see <a href="https://github.com/wedsonaf/linux/tree/fs">https://github.com/wedsonaf/linux/tree/fs</a> -- it has the latest version of fs. I'll read your message and respond in more detail next week</p>
+
+
+
+<a name="295842191"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/%E2%9C%94%20%60kernel%3A%3Afs%60%3A%20creating%20inodes%20from%20Rust/near/295842191" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vika Shleina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/.E2.9C.94.20.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust.html#295842191">(Aug 29 2022 at 13:14)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="414281">Wedson Almeida Filho</span> <a href="#narrow/stream/291566-Library/topic/.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust/near/295832885">said</a>:</p>
+<blockquote>
+<p>I'm away now, but see <a href="https://github.com/wedsonaf/linux/tree/fs">https://github.com/wedsonaf/linux/tree/fs</a> -- it has the latest version of fs.</p>
+</blockquote>
+<p>Quick scan shows that the content of this tree actually answers my question and maybe even obsoletes it completely. Thank you, I'll add this repo as another remote and compare the changes in more detail later!</p>
+
+
+
+<a name="295842205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/%E2%9C%94%20%60kernel%3A%3Afs%60%3A%20creating%20inodes%20from%20Rust/near/295842205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/.E2.9C.94.20.60kernel.3A.3Afs.60.3A.20creating.20inodes.20from.20Rust.html#295842205">(Aug 29 2022 at 13:14)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="526435">Vika Shleina</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

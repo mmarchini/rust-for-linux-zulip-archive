@@ -1,0 +1,43 @@
+<html>
+<head><meta charset="utf-8"><title>Platform Device abstraction · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Platform.20Device.20abstraction.html">Platform Device abstraction</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="327027947"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Platform%20Device%20abstraction/near/327027947" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Platform.20Device.20abstraction.html#327027947">(Feb 10 2023 at 11:42)</a>:</h4>
+<p>Hi folks! I'm currently working on an abstraction for the function platform_device_register_simple(), which needs a pointer to the struct resource. I was wondering if there is a way to get a struct resource * from the struct Resource currently implemented.  Thanks for the help!</p>
+
+
+
+<a name="328463573"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Platform%20Device%20abstraction/near/328463573" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Platform.20Device.20abstraction.html#328463573">(Feb 17 2023 at 12:57)</a>:</h4>
+<p>Hi! I'm working on abstractions to register and unregister a platform device. As I'm dealing with a virtual device (vgem), I need to use legacy initialization for platform devices. I'm trying to add the pdev as a field in my module struct (pdev: platform::Device), but the compiler is pointing out that *mut platform_device cannot be shared between threads safely.  Is there a way to add pdev to the struct?</p>
+
+
+
+<a name="328639412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Platform%20Device%20abstraction/near/328639412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Platform.20Device.20abstraction.html#328639412">(Feb 18 2023 at 10:25)</a>:</h4>
+<p>The <code>platform::Device</code> should only really exist during initialization I think, you shouldn't need to keep it around anywhere. It only has methods for getting resources and other things that should only happen early. Once initialization is done, if you need to keep a reference to the device object around, you should use <code>device::Device</code> which can be safely cloned and passed around.</p>
+<p>If for the new things you're working on you do need to keep a <code>platform::Device</code> around to do some new platform device specific operations later, <del>I think it's probably safe to just <code>unsafe impl Sync for Device {}</code> and <code>unsafe impl Send for Device {}</code> in <code>platform.rs</code> ^^</del>... actually, I think that would be unsound because <code>platform::Device</code> isn't doing any reference counting, so you could end up with a dangling reference. I don't even think giving the user an API to get a <code>platform::Device</code> as an owned object would be sound at all with the current model. We're going to need to add refcounting to do that. The platform abstraction in my tree just passes a reference to it in the <code>probe()</code> function which is sound because the user can't clone it or keep it around after <code>probe()</code> finishes, so there is no way for the pointer to end up dangling... but that's no longer the case when the user owns a <code>platform::Device</code> directly.</p>
+
+
+
+<a name="328670093"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Platform%20Device%20abstraction/near/328670093" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Platform.20Device.20abstraction.html#328670093">(Feb 18 2023 at 13:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/291565-Help/topic/Platform.20Device.20abstraction/near/328639412">said</a>:</p>
+<blockquote>
+<p>The <code>platform::Device</code> should only really exist during initialization I think, you shouldn't need to keep it around anywhere. It only has methods for getting resources and other things that should only happen early. Once initialization is done, if you need to keep a reference to the device object around, you should use <code>device::Device</code> which can be safely cloned and passed around.</p>
+<p>If for the new things you're working on you do need to keep a <code>platform::Device</code> around to do some new platform device specific operations later, <del>I think it's probably safe to just <code>unsafe impl Sync for Device {}</code> and <code>unsafe impl Send for Device {}</code> in <code>platform.rs</code> ^^</del>... actually, I think that would be unsound because <code>platform::Device</code> isn't doing any reference counting, so you could end up with a dangling reference. I don't even think giving the user an API to get a <code>platform::Device</code> as an owned object would be sound at all with the current model. We're going to need to add refcounting to do that. The platform abstraction in my tree just passes a reference to it in the <code>probe()</code> function which is sound because the user can't clone it or keep it around after <code>probe()</code> finishes, so there is no way for the pointer to end up dangling... but that's no longer the case when the user owns a <code>platform::Device</code> directly.</p>
+</blockquote>
+<p>When it comes to virtual devices such as vkms and vgem, I need to use the <a href="https://docs.kernel.org/driver-api/driver-model/platform.html#legacy-drivers-device-probing">legacy platform device initialization</a>. So, afaik I would need to own a <code>platform::Device</code> directly. The registration is looking something like <a href="https://github.com/mairacanal/linux/blob/d55a33bfbddea30990dc103d22992ec360b204cb/drivers/gpu/drm/rust-gem/vgem.rs#L61">https://github.com/mairacanal/linux/blob/d55a33bfbddea30990dc103d22992ec360b204cb/drivers/gpu/drm/rust-gem/vgem.rs#L61</a> and I need to hold pdev in order to drop its reference only when exiting the module.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> I am currently in need of mb/rmb/wmb. I wonder if we should keep the C name, or make use of the ordering that we have, so</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Full</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// mb</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Acquire</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// rmb</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Release</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// wmb</span>\n<span class=\"n\">dma_mb</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.)</span>\n<span class=\"n\">smp_mb</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.)</span>\n</code></pre></div>",
+        "id": 580718837,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774029398
+    },
+    {
+        "content": "<p>I think we just keep the C name as we already do: <a href=\"https://rust.docs.kernel.org/kernel/sync/barrier/index.html\">https://rust.docs.kernel.org/kernel/sync/barrier/index.html</a></p>",
+        "id": 580719172,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774029513
+    },
+    {
+        "content": "<p>rmb() is not quite an Acquire</p>",
+        "id": 580719252,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774029538
+    },
+    {
+        "content": "<p>read<br>\nrmb()<br>\nwrite</p>\n<p>can be reorderd.</p>",
+        "id": 580719334,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774029563
+    },
+    {
+        "content": "<p>Right. And I can see RISC-V does implement __rmb in a way that permits this reordering <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 580720450,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774029914
+    },
+    {
+        "content": "<p>I am quite good at reasoning with acq/rel semantics, but I'm still not proficient with other semantics</p>",
+        "id": 580720653,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774029987
+    },
+    {
+        "content": "<p>You will be :)</p>",
+        "id": 580721992,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774030458
+    },
+    {
+        "content": "<p>IIUC similarly <code>wmb</code> is not <code>Release</code> because it doesn't prevent write-barrier-read reordering?</p>",
+        "id": 580722072,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774030491
+    },
+    {
+        "content": "<p><code>Release</code> doesn't do that either, you mean <code>read-barrier-write</code>, right?</p>",
+        "id": 580722280,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774030577
+    },
+    {
+        "content": "<p>oops, I did mean that</p>",
+        "id": 580722340,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774030597
+    },
+    {
+        "content": "<p>you can also ask claude or any other LLM to generate a litmus test that could be verified by herd, that way it's easier to play around.</p>",
+        "id": 580722457,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774030650
+    },
+    {
+        "content": "<p>I was told that LLM can do a good job on generating litmus test.</p>",
+        "id": 580722498,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1774030668
+    },
+    {
+        "content": "<p>Currently I have something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Full</span><span class=\"p\">);</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Acquire</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Map to mb() but documented to only need LOAD-&gt;{LOAD,STORE} ordering</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Release</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Map to mb() but documented to only need {LOAD,STORE}-&gt;STORE ordering</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Read</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Map to rmb</span>\n<span class=\"n\">mb</span><span class=\"p\">(</span><span class=\"n\">Write</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Map to wmb</span>\n</code></pre></div>\n<p>I have also had a design where the primitive is a pair <code>(Before, After)</code>, so <code>mb(Read)</code> is short-hand for <code>mb((Read, Read))</code> and <code>mb(Acquire)</code> is short-hand for <code>mb((Read, Full))</code>. This maps very well to hardware primitives, although it looks like this cannot represent <code>AcqRel</code> ordering (because it provides LOAD-&gt;LOAD, LOAD-&gt;STORE, STORE-&gt;STORE, so it cannot be represented as pair). So probably not worth having the complexity.</p>",
+        "id": 582209648,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774627122
+    },
+    {
+        "content": "<p>(I want to eventually propose to add <code>{smp_,dma_,}mb_{acquire,release}</code> to C too, but I won't do that until I have some numbers on the performance benefit of having dma_mb_release)</p>",
+        "id": 582210034,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774627224
+    },
+    {
+        "content": "<p>Herd changes I have currently for the new mbs, in case someone is interested</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/tools/memory-model/linux-kernel.bell b/tools/memory-model/linux-kernel.bell</span>\n<span class=\"gh\">index fe65998002b9..9b3322fc5b9c 100644</span>\n<span class=\"gd\">--- a/tools/memory-model/linux-kernel.bell</span>\n<span class=\"gi\">+++ b/tools/memory-model/linux-kernel.bell</span>\n<span class=\"gu\">@@ -25,6 +25,8 @@ instructions RMW[Accesses]</span>\n<span class=\"w\"> </span>enum Barriers = 'wmb (*smp_wmb*) ||\n<span class=\"w\"> </span>       'rmb (*smp_rmb*) ||\n<span class=\"w\"> </span>       'MB (*smp_mb*) ||\n<span class=\"gi\">+       'mb-acquire (*smp_mb_acquire*) ||</span>\n<span class=\"gi\">+       'mb-release (*smp_mb_release*) ||</span>\n<span class=\"w\"> </span>       'barrier (*barrier*) ||\n<span class=\"w\"> </span>       'rcu-lock (*rcu_read_lock*)  ||\n<span class=\"w\"> </span>       'rcu-unlock (*rcu_read_unlock*) ||\n<span class=\"gh\">diff --git a/tools/memory-model/linux-kernel.cat b/tools/memory-model/linux-kernel.cat</span>\n<span class=\"gh\">index d7e7bf13c831..d7be7c03bb25 100644</span>\n<span class=\"gd\">--- a/tools/memory-model/linux-kernel.cat</span>\n<span class=\"gi\">+++ b/tools/memory-model/linux-kernel.cat</span>\n<span class=\"gu\">@@ -33,6 +33,8 @@ let po-unlock-lock-po = po ; [UL] ; (po|rf) ; [LKR] ; po</span>\n<span class=\"w\"> </span>let R4rmb = R \\ Noreturn   (* Reads for which rmb works *)\n<span class=\"w\"> </span>let rmb = [R4rmb] ; fencerel(Rmb) ; [R4rmb]\n<span class=\"w\"> </span>let wmb = [W] ; fencerel(Wmb) ; [W]\n<span class=\"gi\">+let mb-acquire = [R4rmb] ; fencerel(Mb-acquire) ; [M]</span>\n<span class=\"gi\">+let mb-release = [M] ; fencerel(Mb-release) ; [W]</span>\n<span class=\"w\"> </span>let mb = ([M] ; fencerel(Mb) ; [M]) |\n<span class=\"w\"> </span>   (*\n<span class=\"w\"> </span>    * full-barrier RMWs (successful cmpxchg(), xchg(), etc.) act as\n<span class=\"gu\">@@ -64,9 +66,10 @@ let mb = ([M] ; fencerel(Mb) ; [M]) |</span>\n<span class=\"w\"> </span>let gp = po ; [Sync-rcu | Sync-srcu] ; po?\n<span class=\"w\"> </span>let strong-fence = mb | gp\n\n<span class=\"gd\">-let nonrw-fence = strong-fence | po-rel | acq-po</span>\n<span class=\"gi\">+let nonrw-fence = strong-fence | po-rel | acq-po | mb-acquire | mb-release</span>\n<span class=\"w\"> </span>let fence = nonrw-fence | wmb | rmb\n<span class=\"gd\">-let barrier = fencerel(Barrier | Rmb | Wmb | Mb | Sync-rcu | Sync-srcu |</span>\n<span class=\"gi\">+let barrier = fencerel(Barrier | Rmb | Wmb | Mb | Mb-acquire | Mb-release |</span>\n<span class=\"gi\">+        Sync-rcu | Sync-srcu |</span>\n<span class=\"w\"> </span>       Before-atomic | After-atomic | Acquire | Release |\n<span class=\"w\"> </span>       Rcu-lock | Rcu-unlock | Srcu-lock | Srcu-unlock) |\n<span class=\"w\"> </span>   (po ; [Release]) | ([Acquire] ; po)\n<span class=\"gu\">@@ -97,7 +100,7 @@ let ppo = to-r | to-w | (fence &amp; int) | (po-unlock-lock-po &amp; int)</span>\n<span class=\"w\"> </span>(* Propagation: Ordering from release operations and strong fences. *)\n<span class=\"w\"> </span>let A-cumul(r) = (rfe ; [Marked])? ; r\n<span class=\"w\"> </span>let rmw-sequence = (rf ; rmw)*\n<span class=\"gd\">-let cumul-fence = [Marked] ; (A-cumul(strong-fence | po-rel) | wmb |</span>\n<span class=\"gi\">+let cumul-fence = [Marked] ; (A-cumul(strong-fence | po-rel | mb-release) | wmb |</span>\n<span class=\"w\"> </span>   po-unlock-lock-po) ; [Marked] ; rmw-sequence\n<span class=\"w\"> </span>let prop = [Marked] ; (overwrite &amp; ext)? ; cumul-fence* ;\n<span class=\"w\"> </span>   [Marked] ; rfe? ; [Marked]\n<span class=\"gh\">diff --git a/tools/memory-model/linux-kernel.def b/tools/memory-model/linux-kernel.def</span>\n<span class=\"gh\">index 49e402782e49..e32aea2c01a9 100644</span>\n<span class=\"gd\">--- a/tools/memory-model/linux-kernel.def</span>\n<span class=\"gi\">+++ b/tools/memory-model/linux-kernel.def</span>\n<span class=\"gu\">@@ -20,6 +20,8 @@ smp_store_mb(X,V) { __store{ONCE}(X,V); __fence{MB}; }</span>\n<span class=\"w\"> </span>smp_mb() { __fence{MB}; }\n<span class=\"w\"> </span>smp_rmb() { __fence{rmb}; }\n<span class=\"w\"> </span>smp_wmb() { __fence{wmb}; }\n<span class=\"gi\">+smp_mb_acquire() { __fence{mb-acquire}; }</span>\n<span class=\"gi\">+smp_mb_release() { __fence{mb-release}; }</span>\n<span class=\"w\"> </span>smp_mb__before_atomic() { __fence{before-atomic}; }\n<span class=\"w\"> </span>smp_mb__after_atomic() { __fence{after-atomic}; }\n<span class=\"w\"> </span>smp_mb__after_spinlock() { __fence{after-spinlock}; }\n</code></pre></div>",
+        "id": 582211987,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774627690
+    },
+    {
+        "content": "<p>I'm also in need of this (nova cmdq has some incorrect fences AFAICT). Gary, are you planning on sending a patch to add these soon?</p>",
+        "id": 582962269,
+        "sender_full_name": "Eliot Courtney",
+        "timestamp": 1775027585
+    },
+    {
+        "content": "<p>Yes, cmdq is what motivates all of these</p>",
+        "id": 582988983,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1775035906
+    }
+]

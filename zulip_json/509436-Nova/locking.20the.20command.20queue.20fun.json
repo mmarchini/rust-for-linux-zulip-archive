@@ -1,0 +1,164 @@
+[
+    {
+        "content": "<p>I wanted to try sending the unloading guest driver <br>\n<a href=\"https://gitlab.freedesktop.org/nouvelles/kernel/-/tree/nova-core-unloading?ref_type=heads\">https://gitlab.freedesktop.org/nouvelles/kernel/-/tree/nova-core-unloading?ref_type=heads</a></p>\n<p>It sends the message, but I had to start locking the command queue with a mutex to get it right, however I've had use unsafe unchecked_mut casts for reasons I'm not 100% sure off, but the guard I get doesn't have DerefMut which I think is due to pinning. It might be we should move the mutex to an inner inside the cmdq itself, but that makes using dev a bit more painful.</p>",
+        "id": 572058428,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1770266512
+    },
+    {
+        "content": "<p>I think both <span class=\"user-mention\" data-user-id=\"598482\">@Joel Fernandes</span> and <span class=\"user-mention\" data-user-id=\"1022631\">@Eliot Courtney</span> were looking into locking for GSP command queue, so I'm tagging them now.</p>",
+        "id": 572064611,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770271137
+    },
+    {
+        "content": "<p>Here:</p>\n<div class=\"codehilite\"><pre><span></span><code>pub(crate) fn unload(&amp;self, bar: &amp;Bar0) -&gt; Result {\n    let mut guard = self.cmdq.lock();\n    let cmdq_pin = guard.as_mut();\n    let mut cmdq = unsafe { cmdq_pin.get_unchecked_mut() };\n    commands::unload_guest_driver(&amp;mut cmdq, bar)\n}\n</code></pre></div>\n\n<p>...\"unsafe\" is required because Cmdq is pinned, and by design you must not be allowed to get a plain &amp;mut to it, because that would allow moving a pinned item.</p>\n<p>So it's unsafe because you're promising not to move it. The compiler cannot verify this promise.</p>\n<p>...but I have a strong feeling that I'm saying things you already know. But you did say \"for reasons I'm not 100% sure of\", and that's the part I was trying to respond to first.</p>",
+        "id": 572067709,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770271785
+    },
+    {
+        "content": "<p>thanks for filling in the gaps, I pinned/mutex thing was something I was reading about yesterday as I was playing with it, but it's good to know we know what it is. Now I suppose the question is how to get rid of it if needed, I think the cmdq would need a bit of refactoring to avoid it</p>",
+        "id": 572246333,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1770324589
+    },
+    {
+        "content": "<p>btw I have an ongoing series doing the same thing IIUC: <a href=\"https://lore.kernel.org/rust-for-linux/20251216-nova-unload-v1-0-6a5d823be19d@nvidia.com/\">https://lore.kernel.org/rust-for-linux/20251216-nova-unload-v1-0-6a5d823be19d@nvidia.com/</a></p>",
+        "id": 572269691,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770335570
+    },
+    {
+        "content": "<p>it doesn't take care of Blackwell though, <span class=\"user-mention\" data-user-id=\"782725\">@John Hubbard</span> does your Blackwell series manage unloading as well?</p>",
+        "id": 572269737,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770335598
+    },
+    {
+        "content": "<p>Nope, the pre-existing unloading problems are still there with Blackwell patches, I'm afraid.</p>",
+        "id": 572269834,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770335670
+    },
+    {
+        "content": "<p>with the use of FSP I guess the unload sequence must be different?</p>",
+        "id": 572270057,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770335822
+    },
+    {
+        "content": "<p>Probably? But I would have to check. I can do that in a few hours here...</p>",
+        "id": 572270185,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770335911
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> <span class=\"user-mention\" data-user-id=\"782725\">@John Hubbard</span> AFAICS, there is no reason that <code>Cmdq</code> itself has to be pinned, so we can just implement <code>Unpin</code>.</p>",
+        "id": 572273688,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770338012
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">diff</span><span class=\"w\"> </span><span class=\"o\">--</span><span class=\"n\">git</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">boot</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">boot</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"n\">index</span><span class=\"w\"> </span><span class=\"n\">cb5e6ee0524e</span><span class=\"o\">..</span><span class=\"mi\">1</span><span class=\"n\">c356bcf773b</span><span class=\"w\"> </span><span class=\"mi\">100644</span>\n<span class=\"o\">---</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">boot</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"o\">+++</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">boot</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"o\">@@</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"mi\">281</span><span class=\"p\">,</span><span class=\"mi\">9</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"mi\">281</span><span class=\"p\">,</span><span class=\"mi\">7</span><span class=\"w\"> </span><span class=\"o\">@@</span><span class=\"w\"> </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">unload</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">device</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Core</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">chipset</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Chipset</span>\n\n<span class=\"w\">         </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">bios</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Vbios</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">         </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"o\">-</span><span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">cmdq_pin</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">();</span>\n<span class=\"o\">-</span><span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">cmdq</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">cmdq_pin</span><span class=\"p\">.</span><span class=\"n\">get_unchecked_mut</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"o\">-</span><span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">commands</span><span class=\"p\">::</span><span class=\"n\">unload_guest_driver</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">cmdq</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">);</span>\n<span class=\"o\">+</span><span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">commands</span><span class=\"p\">::</span><span class=\"n\">unload_guest_driver</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">);</span>\n\n<span class=\"w\">         </span><span class=\"n\">read_poll_timeout</span><span class=\"p\">(</span>\n<span class=\"w\">             </span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">gsp_falcon</span><span class=\"p\">.</span><span class=\"n\">read_mailbox0</span><span class=\"p\">(</span><span class=\"n\">bar</span><span class=\"p\">)),</span>\n<span class=\"n\">diff</span><span class=\"w\"> </span><span class=\"o\">--</span><span class=\"n\">git</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"n\">index</span><span class=\"w\"> </span><span class=\"mi\">46819</span><span class=\"n\">a82a51a</span><span class=\"o\">..</span><span class=\"mi\">9</span><span class=\"n\">dd2432b8ff3</span><span class=\"w\"> </span><span class=\"mi\">100644</span>\n<span class=\"o\">---</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"o\">+++</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"o\">/</span><span class=\"n\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">rs</span>\n<span class=\"o\">@@</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"mi\">432</span><span class=\"p\">,</span><span class=\"mi\">6</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"mi\">432</span><span class=\"p\">,</span><span class=\"mi\">8</span><span class=\"w\"> </span><span class=\"o\">@@</span><span class=\"w\"> </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Cmdq</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">     </span><span class=\"n\">gsp_mem</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">DmaGspMem</span><span class=\"p\">,</span>\n<span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"o\">+</span><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">Unpin</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Cmdq</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"o\">+</span>\n<span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Cmdq</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">     </span><span class=\"sd\">/// Offset of the data after the PTEs.</span>\n<span class=\"w\">     </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">POST_PTE_OFFSET</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">GspMem</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">cpuq</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 572273698,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770338018
+    },
+    {
+        "content": "<p>won't it need to be pinned once we add locking to it though?</p>",
+        "id": 572274148,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770338317
+    },
+    {
+        "content": "<p><code>Unpin</code> is an auto trait, I don't think it needs to be implemented manually (in fact, if manual implementation is needed, something is off)</p>",
+        "id": 572274354,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770338486
+    },
+    {
+        "content": "<p>If you have locking, the mutex is pinned, but you can still get mutable reference from the guard if you have <code>Unpin</code></p>",
+        "id": 572274386,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770338512
+    },
+    {
+        "content": "<p>what I mean is that we might want to add locking <em>inside</em> the <code>Cmdq</code>. In that case, it might be sensible to already work with the assumption that it will be pinned.</p>",
+        "id": 572274551,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770338633
+    },
+    {
+        "content": "<p>Oh, I see. In that case, you would have <code>#[pin_data]</code> and you can just project.</p>",
+        "id": 572274585,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770338656
+    },
+    {
+        "content": "<p>Yeah, in this case we need projections.</p>",
+        "id": 572274605,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770338669
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/509436-Nova/topic/locking.20the.20command.20queue.20fun/near/572274354\">said</a>:</p>\n<blockquote>\n<p><code>Unpin</code> is an auto trait, I don't think it needs to be implemented manually (in fact, if manual implementation is needed, something is off)</p>\n</blockquote>\n<p>Yeah, I was wondering about this as well, but I can't catch the reason why it's <code>!Unpin</code>at a quick glance. (Can't really look into this currently.)</p>",
+        "id": 572275350,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770339148
+    },
+    {
+        "content": "<p>If the <code>guard</code> type is dereferenced and it's not <code>Unpin</code> the compiler should give an explaination (otherwise, we can report it to rustc for improvement).</p>",
+        "id": 572275893,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770339515
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">error</span><span class=\"p\">[</span><span class=\"n\">E0596</span><span class=\"p\">]:</span><span class=\"w\"> </span><span class=\"nc\">cannot</span><span class=\"w\"> </span><span class=\"n\">borrow</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">dereference</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">lock</span><span class=\"p\">::</span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">gsp</span><span class=\"p\">::</span><span class=\"n\">cmdq</span><span class=\"p\">::</span><span class=\"n\">Cmdq</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">lock</span><span class=\"p\">::</span><span class=\"n\">mutex</span><span class=\"p\">::</span><span class=\"n\">MutexBackend</span><span class=\"o\">&gt;</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">mutable</span>\n<span class=\"w\">   </span><span class=\"o\">-</span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">boot</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"p\">:</span><span class=\"mi\">284</span><span class=\"p\">:</span><span class=\"mi\">47</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">284</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">         </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">commands</span><span class=\"p\">::</span><span class=\"n\">unload_guest_driver</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                                               </span><span class=\"o\">^^^^^^^^^^</span><span class=\"w\"> </span><span class=\"n\">cannot</span><span class=\"w\"> </span><span class=\"n\">borrow</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">mutable</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">help</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">trait</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">DerefMut</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">modify</span><span class=\"w\"> </span><span class=\"n\">through</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">dereference</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">but</span><span class=\"w\"> </span><span class=\"n\">it</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">not</span><span class=\"w\"> </span><span class=\"n\">implemented</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">lock</span><span class=\"p\">::</span><span class=\"n\">Guard</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">gsp</span><span class=\"p\">::</span><span class=\"n\">cmdq</span><span class=\"p\">::</span><span class=\"n\">Cmdq</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">lock</span><span class=\"p\">::</span><span class=\"n\">mutex</span><span class=\"p\">::</span><span class=\"n\">MutexBackend</span><span class=\"o\">&gt;</span><span class=\"err\">`</span>\n</code></pre></div>",
+        "id": 572276086,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770339644
+    },
+    {
+        "content": "<p>Looks like <code>Cmdq</code> is not <code>Unpin</code> because <code>Device</code> contains an <code>Opaque</code>, and the <code>ARef&lt;Device&gt;</code> of <code>Cmdq</code> inherits its <code>Unpin</code> through its <code>PhantomData</code>? Do we want <code>ARef</code> to be unmoveable in these cases?</p>",
+        "id": 572277282,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770340466
+    },
+    {
+        "content": "<p>This is already fixed in <a href=\"https://lore.kernel.org/all/20251218-unpin-for-aref-v2-1-30d77129cbc6@google.com/\">https://lore.kernel.org/all/20251218-unpin-for-aref-v2-1-30d77129cbc6@google.com/</a> which is in linux-next, but probably not yet on your working branch</p>",
+        "id": 572278048,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770341064
+    },
+    {
+        "content": "<p>oh then <code>Cmdq</code> should become <code>Unpin</code> then. Not that we want it to be. :)</p>",
+        "id": 572279356,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770341967
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"782725\">@John Hubbard</span> <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span> at least from nouveau the unload sequence on hopper+ is just send the command and wait in a loop for the riscv to halt</p>",
+        "id": 572285659,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1770346841
+    },
+    {
+        "content": "<p>That matches what I'm seeing in Open RM, which is:</p>\n<ol>\n<li>Send UNLOCK_WPR command to GSP-RM (non-blocking)</li>\n<li>Wait for GSP RISC-V core to become inactive</li>\n<li>Call gspStateUnload_HAL() to cleanup GSP state</li>\n<li>kfspStateUnload releases memory descriptors (FRTS, GSP-FMC, boot args)</li>\n<li>FSP itself: NO explicit shutdown - FSP continues running</li>\n</ol>",
+        "id": 572285834,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770346980
+    },
+    {
+        "content": "<p>Ok, that looks much simpler, which is great</p>",
+        "id": 572287596,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770348379
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span> I haven't looked at your unload patchset yet, but I probably need that first, then Blackwell, then I can add the FSP unload steps, I think.</p>",
+        "id": 572287701,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1770348460
+    }
+]

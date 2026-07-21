@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>The kernel has lots of places where a ref-counted object has a unique owner, and provides exclusive features to that owner. For instance, the <code>userdata</code> pointers allow the owner to store back-pointers into the object, while other code accesses the ref-counted object in a generic way without ever looking at <code>userdata</code>. This is fairly easy to model in Rust. However, what do we do if the <code>userdata</code> is not a void-pointer, but a trailing byte buffer where the size is specified dynamically at object-creation, and used to directly store data of the owner?</p>\n<p>I can easily mark the kernel object as DST with a trailing buffer, but then everything becomes a wide-pointer, which seems excessive. I'd rather be able to reduce a Box or Arc in size (stripping the trailing buffer) to turn a specificly typed reference to a generic one (stripping this trailing byte buffer from the type, or reducing it to size 0). This works fine in C, since <code>kfree</code> and friends don't take the total size as argument. But is this ok to do with <code>Box</code>? Or does anyone have an alternative?</p>\n<p>And when designing new code in Rust, do we have a strategy how to solve this? The entire thing can be avoided by using a backpointer with <code>userdata</code>, but then you cannot share cachelines and allocations.</p>",
+        "id": 467492099,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725446636
+    },
+    {
+        "content": "<p>I imagine that since it has a refcount, those refcounts keep it alive to some extent even when the owner is no longer needed?</p>",
+        "id": 467493092,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725446876
+    },
+    {
+        "content": "<p>Or is the refcount only part of the owner?</p>",
+        "id": 467493230,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725446905
+    },
+    {
+        "content": "<p>You could have two pointer types <code>ARef&lt;JustTheOwner&gt;</code> and <code>ARef&lt;OwnerWithKnownUserData&lt;MyUserData&gt;&gt;</code> and just make sure that both structs agree on the layout of the owner. Then you can have either kind of reference to the owner.</p>",
+        "id": 467493810,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725447059
+    },
+    {
+        "content": "<p>You'll need some way to know how to free the user data given only an <code>ARef&lt;JustTheOwner&gt;</code> but I imagine you can store a function pointer to run the destructor of the user data somewhere in the owner.</p>",
+        "id": 467494041,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725447113
+    },
+    {
+        "content": "<p>The owner ctx is not ref-counted, but retains a ref-count on the generic object for its lifetime. So once the ref-count goes to 0, the owner data is guaranteed to be uninitialized/deinitialized.</p>",
+        "id": 467499410,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725448327
+    },
+    {
+        "content": "<p>Yeah, ARef works, but kinda hacky. Any elegant way to do it with Arc?</p>",
+        "id": 467499580,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725448378
+    },
+    {
+        "content": "<p>(for new code, not for bindings)</p>",
+        "id": 467499654,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725448395
+    },
+    {
+        "content": "<p>The <code>Arc</code> type explicitly only supports the case where it has full control over where the refcount goes.</p>",
+        "id": 467499679,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725448401
+    },
+    {
+        "content": "<p>If you're ok with how Arc lays out the refcount outside of your struct, then you can use it. We'll probably need some guarantee that the relevant allocator doesn't care about the size matching, but I think with the upcoming allocator series we could define a trait saying that this allocator guarantees that the size doesn't matter when freeing.</p>",
+        "id": 467499956,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725448481
+    },
+    {
+        "content": "<p>So basically a transmute from <code>Arc&lt;Big&gt;</code> to <code>Arc&lt;Small&gt;</code> with <code>struct Big { small: Small, ... }</code>? I don't see why it wouldn't work, but it certainly violates the current requirements of the allocator definitions.</p>",
+        "id": 467750514,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725522780
+    },
+    {
+        "content": "<p>This works for my use-case. Though there are some other core kernel concepts I don't think I can model that way. Like <code>struct device</code>, which you can embed anywhere, not just the front, of your structures.</p>",
+        "id": 467751127,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725522905
+    },
+    {
+        "content": "<p>I agree that it doesn't work for <code>struct device</code>.</p>",
+        "id": 467751278,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725522948
+    },
+    {
+        "content": "<p>I will use the transmute for now. Thanks for the hint!</p>",
+        "id": 467751437,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725522990
+    },
+    {
+        "content": "<p>Talking of it, is it possible to create a runtime-dynamically-sized <code>Arc</code> in the kernel? Right now, all exposed constructors require a sized type. I can then coerce that into an unsized type for convenience, but it still requires the type-size to be known at compile time. Or am I missing something?</p>",
+        "id": 467785685,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725529260
+    },
+    {
+        "content": "<p>I imagine we could have a constructor that takes a size and alignment, and creates an <code>Arc</code> that can hold such type by returning a raw pointer. You then initialize the value and use <code>Arc::from_raw</code> to actually create the <code>Arc</code>.</p>",
+        "id": 467786285,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725529390
+    },
+    {
+        "content": "<p>To be clear, all of this depends on having the upcoming allocator patchset that lets you free with unknown size.</p>",
+        "id": 467786603,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725529446
+    },
+    {
+        "content": "<p>Well, it works right now, since Box never makes use of that knowledge, right? But it is not explicitly allowed right now.</p>",
+        "id": 467786859,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725529495
+    },
+    {
+        "content": "<p>You're probably guaranteed to get lucky right now, but it's best not to rely on that kind of thing.</p>",
+        "id": 467787365,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1725529583
+    },
+    {
+        "content": "<p>Right. But for out-of-tree hacking it works fine.</p>",
+        "id": 467787789,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1725529652
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"748963\">David Rheinsberg</span> has marked this topic as resolved.</p>",
+        "id": 468090801,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1725606331
+    }
+]

@@ -1,0 +1,113 @@
+<html>
+<head><meta charset="utf-8"><title>`bit` function · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html">`bit` function</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="246108206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246108206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246108206">(Jul 15 2021 at 15:09)</a>:</h4>
+<p>I'm trying to write a type-safe function that given a bit index, generates a mask with all zeroes except the index, which should be 1.</p>
+<p>Here's what I have:</p>
+<div class="codehilite"><pre><span></span><code>fn bit&lt;T: core::convert::From&lt;u8&gt; + core::ops::Shl&lt;U, Output = T&gt;, U&gt;(offset: U) -&gt; T {
+    T::from(1u8) &lt;&lt; offset
+}
+</code></pre></div>
+<p>It works well in most cases, but in some cases the compiler is not able to infer <code>T</code>, for example:</p>
+<div class="codehilite"><pre><span></span><code>fn test2(x: u32) -&gt; bool {
+    x &amp; bit(2) != 0
+}
+</code></pre></div>
+<p>This fails with:</p>
+<div class="codehilite"><pre><span></span><code>error[E0284]: type annotations needed: cannot satisfy `&lt;u32 as BitAnd&lt;_&gt;&gt;::Output == _`
+  --&gt; src/lib.rs:12:7
+   |
+12 |     x &amp; bit(2) != 0
+   |       ^ cannot satisfy `&lt;u32 as BitAnd&lt;_&gt;&gt;::Output == _`
+</code></pre></div>
+<p>I have the code here: <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=65f4c87be0974ee1b04b7d11e9ef54ca">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=65f4c87be0974ee1b04b7d11e9ef54ca</a></p>
+<p>If I use a macro instead, it works in both cases: <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=5d3a4a037e8dfec0084cb050bd93174e">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=5d3a4a037e8dfec0084cb050bd93174e</a></p>
+<p>Any ideas on how to make this work?</p>
+
+
+
+<a name="246108841"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246108841" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246108841">(Jul 15 2021 at 15:14)</a>:</h4>
+<p>(BTW, it works if we explicitly specify <code>T</code>, for example, <code>x &amp; bit::&lt;u32, _&gt;(2) != 0</code>, but so much noise defeats the purpose of having the function.)</p>
+
+
+
+<a name="246115677"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246115677" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246115677">(Jul 15 2021 at 16:01)</a>:</h4>
+<p>You could have <code>bit_and(x, 2)</code> and <code>bit_or(x, 2)</code> for <code>x &amp; (1 &lt;&lt; 2)</code> and <code>x | (1 &lt;&lt; 2)</code> instead of <code>x &amp; bit(2)</code> and <code>x | bit(2)</code>.</p>
+
+
+
+<a name="246120531"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246120531" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246120531">(Jul 15 2021 at 16:33)</a>:</h4>
+<p>Yes, we could do that. But then people would have to memorise those function names, it doesn't seem like an improvement.</p>
+<p>For some context: the kernel has a BIT macro and I'm converting a driver to rust. I'd like the bit-banging parts to look as similar as possible to C to reduce distraction.</p>
+<p>For example, there's a line in C that reads <code>x &amp;= ~BIT(y)</code>, in Rust with a macro it would be <code>x &amp;= !BIT!(y)</code>. I'm positive people are not going to be happy about it. I think <code>x &amp;= !bit(y)</code> would be slightly more palatable.</p>
+<p>Also, it looks like Rust defaults to <code>i32</code> when an unsuffixed integer type is under-constrained so it likely to lead to unexpected behaviour.</p>
+
+
+
+<a name="246122134"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246122134" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246122134">(Jul 15 2021 at 16:45)</a>:</h4>
+<p>Using the macro, <code>println!("{:x}", bit!(31) &gt;&gt; 1)</code> prints <code>c0000000</code></p>
+
+
+
+<a name="246122386"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246122386" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246122386">(Jul 15 2021 at 16:47)</a>:</h4>
+<p>So my current implementation not only lacks ergonomics, it's also wrong :)</p>
+
+
+
+<a name="246125532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246125532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246125532">(Jul 15 2021 at 17:10)</a>:</h4>
+<p>What about <code>bit32</code> and <code>bit64</code> instead? i.e. be explicit about the width.</p>
+
+
+
+<a name="246135069"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246135069" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246135069">(Jul 15 2021 at 18:20)</a>:</h4>
+<p>well, we'd need it for 8, 16, 32, and 64 bits -- not very ergonomic either</p>
+
+
+
+<a name="246139976"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246139976" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246139976">(Jul 15 2021 at 18:58)</a>:</h4>
+<p>Does forcing <code>offset</code> to always be an <code>u32</code> help with type inference? That should be fine for all integer result types.</p>
+
+
+
+<a name="246142259"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246142259" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246142259">(Jul 15 2021 at 19:18)</a>:</h4>
+<p>Unfortunately it didn't help</p>
+
+
+
+<a name="246144295"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246144295" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho (Old Google account) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246144295">(Jul 15 2021 at 19:34)</a>:</h4>
+<p>I think I have a solution... The implementation isn't pretty but I think the ergonomics are good</p>
+
+
+
+<a name="246154094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60bit%60%20function/near/246154094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60bit.60.20function.html#246154094">(Jul 15 2021 at 20:56)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="414281">Wedson Almeida Filho</span> <a href="#narrow/stream/288089-General/topic/.60bit.60.20function/near/246135069">said</a>:</p>
+<blockquote>
+<p>well, we'd need it for 8, 16, 32, and 64 bits -- not very ergonomic either</p>
+</blockquote>
+<p>I prefer explicitness myself, typing a couple digits is not a big deal and makes the return type clear for both humans and compilers. Another point is that Rust has suffixes such as <code>7u32</code>, thus <code>bit32(7)</code> does not look that bad.</p>
+<p>I can see kernel people complaining, though (but they may anyway complain about the implementation if it is complex, so...).</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

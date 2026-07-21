@@ -1,0 +1,148 @@
+<html>
+<head><meta charset="utf-8"><title>Storage for Bus abstaction · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html">Storage for Bus abstaction</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="565542685"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565542685" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kari Argillander <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565542685">(Dec 28 2025 at 02:19)</a>:</h4>
+<p>I'm currently reworking serdev abstraction.</p>
+<p>Main issue is that after we call open() for serdev then it start call our callback functions. So this happens during probe and we have not yet set drvdata so we really cannot allow that as drvdata is needed. I can workaround and basically delay those. But I cannot know in those callbacks function that we have not yet done probe.</p>
+<p>My current design goes that we set drvdata where we have atomic which we check in those callbacks. So now abstraction layer is also using drvdata. This works but feels over complicated.</p>
+<p>Then I start thinking that maybe we use RegistrationOps::RegType and do struct where we have serdev + abstraction data. Then in callbacks we cast pointer which we get from serdev core back to serdev + abstraction data.</p>
+<p>Other options which I have thinker but I do not like:</p>
+<ul>
+<li>device::Device gives abstraction layer storage space basically abstaction_data (Kbox)</li>
+<li>We ask storage space from c-layer (in this case C serdev struct)</li>
+</ul>
+<p>So basically which is better for abstraction storage RegType or drvdata or do some have better idea?</p>
+
+
+
+<a name="565545832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565545832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565545832">(Dec 28 2025 at 04:07)</a>:</h4>
+<p>Not very familar with serdev, but in geneal when <code>probe</code> is called the device hasn't been registered so the drvdata won't be available.</p>
+
+
+
+<a name="565546124"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565546124" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565546124">(Dec 28 2025 at 04:21)</a>:</h4>
+<p>I think in your case, you'd probably want some custom data being attached to the device on the get-go when open()-ing it?</p>
+
+
+
+<a name="565562898"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565562898" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kari Argillander <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565562898">(Dec 28 2025 at 11:22)</a>:</h4>
+<blockquote>
+<p>Not very familar with serdev, but in geneal when <code>probe</code> is called the device hasn't been registered so the<br>
+drvdata won't be available.</p>
+</blockquote>
+<p>So during probe implementor of this abstraction is forced to call open(). We force that by having following probe signature: After that open is called serdev core will start calling other callback function even though we have not yet finish whole probe.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span>
+<span class="w">        </span><span class="n">sdev</span><span class="p">:</span><span class="w"> </span><span class="nc">serdev</span><span class="p">::</span><span class="n">Opener</span><span class="o">&lt;&amp;</span><span class="n">serdev</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="p">(</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">serdev</span><span class="p">::</span><span class="n">ProbeFinishToken</span><span class="p">),</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+</code></pre></div>
+<p>So I need to have custom data which is only meaningful for abstraction to test if probe is finish or not. So basically AbstractionPrivateData. But question is where to store this so we can access this data during callbacks. Do we store this along with driver drvdata or along with serdev_device_driver.</p>
+<p>Idea of storing data with serdev_device_driver:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">SerdevAbstraction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">serdev</span><span class="p">:</span><span class="w"> </span><span class="nc">bindings</span><span class="p">::</span><span class="n">serdev_device_driver</span><span class="p">,</span>
+<span class="w">    </span><span class="n">probe_done</span><span class="p">:</span><span class="w"> </span><span class="nc">Atomic</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">Driver</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="w"> </span><span class="n">driver</span><span class="p">::</span><span class="n">RegistrationOps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Adapter</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">RegType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SerdevAbstraction</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">register</span><span class="p">(</span>
+<span class="w">        </span><span class="n">sdrv</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">RegType</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="o">..</span><span class="p">.</span>
+</code></pre></div>
+<p>We would do register like this in callback we could cast *serdev_device_driver to SerdevAbstraction.</p>
+<p>Or with Drvdata we would do two step initializing. This way we set_drvdata beginning of probe_callback but initialize driver field end of probe_callback</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Drvdata</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">Driver</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">probe_done</span><span class="p">:</span><span class="w"> </span><span class="nc">Atomic</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">driver</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafeCell</span><span class="o">&lt;</span><span class="n">MaybeUninit</span><span class="o">&lt;</span><span class="p">(</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">ProbeFinishToken</span><span class="p">)</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I'm currently leaning doing SerdevAbstraction and casting.</p>
+
+
+
+<a name="565565243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565565243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kari Argillander <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565565243">(Dec 28 2025 at 12:05)</a>:</h4>
+<p>It seems that that SerdevAbstraction thing does not actually work. At least that Drvdata seems to work so I go with that now.</p>
+
+
+
+<a name="565565459"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565565459" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kari Argillander <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565565459">(Dec 28 2025 at 12:08)</a>:</h4>
+<p>So idea is that in probe we do</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">            </span><span class="n">dev</span><span class="p">.</span><span class="n">set_drvdata</span><span class="p">(</span><span class="n">Drvdata</span><span class="p">::</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">::</span><span class="n">new_uninit</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">            </span><span class="c1">// SAFETY: Safe as we just set drvdata.</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">dev</span><span class="p">.</span><span class="n">drvdata_borrow</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Drvdata</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">driver_init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">T</span><span class="p">::</span><span class="n">probe</span><span class="p">(</span><span class="n">opener</span><span class="p">,</span><span class="w"> </span><span class="n">info</span><span class="p">);</span>
+<span class="w">            </span><span class="c1">// SAFETY: Only called once during of `Drvdata` lifetime.</span>
+<span class="w">            </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="n">init_driver</span><span class="p">(</span><span class="n">driver_init</span><span class="p">)</span><span class="o">?</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>That way we multistate initialize drvdata an that atomic makes sure that we only access actual driver data after probe is called successfully.</p>
+
+
+
+<a name="565584250"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/565584250" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#565584250">(Dec 28 2025 at 18:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1004616">Kari Argillander</span> <a href="#narrow/channel/291565-Help/topic/Storage.20for.20Bus.20abstaction/near/565562898">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>Not very familar with serdev, but in geneal when <code>probe</code> is called the device hasn't been registered so the<br>
+drvdata won't be available.</p>
+</blockquote>
+<p>So during probe implementor of this abstraction is forced to call open(). We force that by having following probe signature: After that open is called serdev core will start calling other callback function even though we have not yet finish whole probe.</p>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span>
+<span class="w">        </span><span class="n">sdev</span><span class="p">:</span><span class="w"> </span><span class="nc">serdev</span><span class="p">::</span><span class="n">Opener</span><span class="o">&lt;&amp;</span><span class="n">serdev</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="p">(</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">serdev</span><span class="p">::</span><span class="n">ProbeFinishToken</span><span class="p">),</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Token without a branded lifetime can't be used as a proof of doing something (because you could have one user funneling their token to another (using channels or using reentrance).</p>
+<p>Perhaps a better approach to the abstraction is to first think about how would you design the Rust-side interface (without constraints from the C-side) and see how the interface layer could do.</p>
+
+
+
+<a name="576689318"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/576689318" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#576689318">(Mar 02 2026 at 14:27)</a>:</h4>
+<p>I am also working on the rust serdev abstraction and the only remaining issue is this.<br>
+My tree: <a href="https://gitlab.com/linuxonsynology/linux/-/commits/rust_serdev">https://gitlab.com/linuxonsynology/linux/-/commits/rust_serdev</a>.</p>
+<p>I currently use this for testing purposes: (as device driver data)</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// TODO</span>
+<span class="cp">#[doc(hidden)]</span>
+<span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Drvdata</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">Driver</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">driver</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafeCell</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">MaybeUninit</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">probe_complete</span><span class="p">:</span><span class="w"> </span><span class="nc">Completion</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>, which is not great but works for testing.</p>
+<p>I need to at least store one <code>Completion</code> before probe is run to ensure safety.<br>
+I must be able to access that <code>Completion</code> with just a pointer to <code>serdev_device</code>.</p>
+
+
+
+<a name="578947484"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Storage%20for%20Bus%20abstaction/near/578947484" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Markus Probst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Storage.20for.20Bus.20abstaction.html#578947484">(Mar 12 2026 at 15:00)</a>:</h4>
+<p>As an update: I did go with the route of adding a rust_private_data field to serdev_device.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

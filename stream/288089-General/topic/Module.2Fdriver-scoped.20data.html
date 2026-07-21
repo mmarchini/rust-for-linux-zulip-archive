@@ -1,0 +1,1613 @@
+<html>
+<head><meta charset="utf-8"><title>Module/driver-scoped data · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html">Module/driver-scoped data</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="564311425"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564311425" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564311425">(Dec 17 2025 at 17:49)</a>:</h4>
+<p>This summarizes my recent thoughts on the topic</p>
+<h2>What's needed</h2>
+<p>The ability to define data shared among a driver (or module), which are accessible inside <code>probe</code> callbacks. Or (even better), accessible to most part of driver code.</p>
+<p>An example would be creating a debugfs directory on driver load, and each individual probe can add a subdirectory.</p>
+<p>Another example is the existing <code>global_lock!</code> today, but this is trying to find a more generic approach to all data (that potentially need <code>Drop</code>, too).</p>
+<h2>Approaches</h2>
+<h3>Unsafe</h3>
+<p>One can define <code>static mut</code> or create a <code>static</code> that is uninitialized unsafely, and unsafely initialize it.</p>
+<p>The issue for this is that unsafe initialization is needed, and manual drop is needed in the <code>impl Drop for Module</code>, as statics don't have their destructor executed.</p>
+<h3>Put it inside struct that <code>impl Module</code></h3>
+<p>One immediate thought is to put the data inside the struct that implements module, e.g.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">MyModule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dir</span><span class="p">:</span><span class="w"> </span><span class="nc">kernel</span><span class="p">::</span><span class="n">debugfs</span><span class="p">::</span><span class="n">Dir</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>and possible expose a way to get data associated with the current module (while performing a check to see if data is actually implemented).</p>
+<p>However, this is problematic as you want to access data before module init is completed. <code>probe</code> can be called before module initialization is done, and at that point the <code>MyModule</code> is not yet fully initialized.</p>
+<p>Partially accessing the module fields probably need major rethink and re-work for pin-init.</p>
+<h3><code>OnceLock</code>-like approach</h3>
+<p>Having a boolean flag (static key, if needed) and use <code>OnceLock</code>-like approach is a plausible way. This ensures that data can be safely accessed and initialized.</p>
+<p>However this does not handle the destruction part. This can be solved in various ways:</p>
+<ol>
+<li>
+<p>Add <code>dtor</code> support to module system</p>
+<p>* Currently module system support ctor, but only supports a single exit function</p>
+</li>
+<li>
+<p>Keep a linked list of dtors to run within the module, and have the generated glue for module walk through the destrutor list and execute them.</p>
+</li>
+</ol>
+<h3>Discourage globals -- passing pointers around always?</h3>
+<p>This is problematic for a couple of reasons:</p>
+<ol>
+<li>
+<p>Driver's probe callbacks today do not receive data pointers</p>
+<p>* In C code, people just use globals, so there isn't any case where the registration would need to hand some data across to the probe fn.</p>
+</li>
+<li>
+<p>Performance</p>
+<p>* You'd need to use an <code>Arc</code> to wrap the data<br>
+  * The access becomes indirect access instead of global loads</p>
+</li>
+</ol>
+
+
+
+<a name="564316235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564316235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564316235">(Dec 17 2025 at 18:14)</a>:</h4>
+<p>Actually, I have an interesting idea.</p>
+<p>It contains a few parts (skip name bikeshedding for now):</p>
+<ol>
+<li>A macro that defines a global and unique type for each global (somewhat similar to lazy-static), let's call them <code>FOO</code></li>
+<li>A token type, <code>GlobalOwned&lt;G&gt;</code> which represents that a global has been initialized. Dropping it runs the destructor of global.  This will be stored in the module data. So <code>OwnedToken</code> will be stored.</li>
+<li>A token type, <code>GlobalRef&lt;'a, G&gt;</code> which will deref to the global's storage. This can be derived from <code>GlobalOwned&lt;G&gt;</code> and associated with the lifetime of <code>GlobalOwned&lt;G&gt;</code>. Borrowck will ensure that while we're holding the ref, the global has been initialized and not yet dropped.</li>
+<li>The module will pass <code>GlobalRef</code> to driver when registering. This is a ZST, so it does not actually have to exist in memory. Hence, <code>probe</code> callback and obtain it from a thin-air (minus some caveat similar to <span class="user-mention silent" data-user-id="554954">Matthew Maurer</span> 's trick discussed in Kangrejos)</li>
+<li>Module can then access the global using this token type inside probe callback. It can also further pass it to other data if it wishes.</li>
+</ol>
+<p>Drawback: <code>GlobalRef</code> has a lifetime param, so would all structs that reference it.</p>
+<p>I am not sure whether I want this approach or the <code>OnceLock</code>-like approach</p>
+
+
+
+<a name="564340811"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564340811" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Matthew Maurer <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564340811">(Dec 17 2025 at 20:54)</a>:</h4>
+<p>Re: discouraging globals, could we put references to statics into the match table, and pass the "global" in through the <code>IdInfo</code> parameter?</p>
+<p>Since we use macros to declare our match tables already, it would also be feasible to have them generate initialization/destruction code for table-attached statics. We could then make it so that the driver traits being implemented expect an <code>init</code> function to be called before using the table and a <code>drop</code> function to be called when the driver is being released.</p>
+<p>The main downside I see for this is that OF vs ACPI-based stuff wouldn't share declarations of the statics.</p>
+<p>This doesn't solve global data initialization/dropping for non-devices, but re-using the table scope seems a good way to avoid globals.</p>
+
+
+
+<a name="564341797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564341797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564341797">(Dec 17 2025 at 21:01)</a>:</h4>
+<p>I don't think tying things to <code>IdInfo</code> is a good idea -- if anything it would be a new mechanism that looks similar to <code>IdInfo</code>.</p>
+
+
+
+<a name="564399551"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564399551" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564399551">(Dec 18 2025 at 08:03)</a>:</h4>
+<p>I don't understand the limitation on putting a pointer to the data in the module struct?</p>
+
+
+
+<a name="564399646"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564399646" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564399646">(Dec 18 2025 at 08:04)</a>:</h4>
+<p>Allocate and initialize in module init function, stick an to the thing in the module struct?</p>
+
+
+
+<a name="564399809"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564399809" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564399809">(Dec 18 2025 at 08:05)</a>:</h4>
+<p>Oh, you want access in probe, which potentially happens before module init. I wasn't reading close enough.</p>
+
+
+
+<a name="564400904"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564400904" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564400904">(Dec 18 2025 at 08:12)</a>:</h4>
+<p>I don't understand why module init would potentially be run concurrently with probe. At least in C, this is not the case.</p>
+
+
+
+<a name="564401315"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401315" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401315">(Dec 18 2025 at 08:14)</a>:</h4>
+<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>
+
+
+
+<a name="564401334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401334">(Dec 18 2025 at 08:14)</a>:</h4>
+<p>We could allow a type to be constructed in <code>impl InPlaceModule for DriverModule</code>.</p>
+
+
+
+<a name="564401396"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401396" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401396">(Dec 18 2025 at 08:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401315">said</a>:</p>
+<blockquote>
+<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>
+</blockquote>
+<p>Right, but I see no blocker for us to allow this.</p>
+
+
+
+<a name="564401508"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401508" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401508">(Dec 18 2025 at 08:15)</a>:</h4>
+<p>It's kind of tricky to access it safely. During module load and unload, the value may be missing.</p>
+
+
+
+<a name="564401566"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401566" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401566">(Dec 18 2025 at 08:16)</a>:</h4>
+<p>I think it is better to allow driver implementations to hook into the driver init impl and tie something to the lifetime of the module, than to start with globals.</p>
+
+
+
+<a name="564401984"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564401984" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564401984">(Dec 18 2025 at 08:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401508">said</a>:</p>
+<blockquote>
+<p>It's kind of tricky to access it safely. During module load and unload, the value may be missing.</p>
+</blockquote>
+<p>Well, if we make it reference counted, it will be there as long as anyone has a handle for it.</p>
+
+
+
+<a name="564402198"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564402198" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564402198">(Dec 18 2025 at 08:20)</a>:</h4>
+<p>Also, the lifetime would be bounded by <code>module_init</code> and <code>module_exit</code>, so we know when it is safe to access.</p>
+
+
+
+<a name="564434076"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564434076" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564434076">(Dec 18 2025 at 11:18)</a>:</h4>
+<p>Probe can run as soon as driver is registered I believe</p>
+
+
+
+<a name="564440643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564440643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564440643">(Dec 18 2025 at 11:55)</a>:</h4>
+<p>We control when we register the driver. We can make sure to initialize the module data before we register the driver.</p>
+
+
+
+<a name="564440933"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564440933" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564440933">(Dec 18 2025 at 11:57)</a>:</h4>
+<p>That's how C side does it, but this does rule out putting these as fields of the module, as <code>Registration</code> needs to go there too.</p>
+
+
+
+<a name="564441715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564441715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564441715">(Dec 18 2025 at 12:01)</a>:</h4>
+<p>I guess we have the option of always returing <code>EPROBE_DEFER</code> if the module_init hasn't returned, but I am not sure if driver-core would be happy with this approach <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> .</p>
+
+
+
+<a name="564447321"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564447321" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564447321">(Dec 18 2025 at 12:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564401315">said</a>:</p>
+<blockquote>
+<p>I don't think probe can run in parallel with init, but even if it doesn't, right now there's no way to access the module struct from probe.</p>
+</blockquote>
+<p>A call to <code>driver_register()</code> can directly end up in <code>probe()</code>, such that you can have a call stack where eventually <code>probe()</code> is called from <code>module_init()</code>.</p>
+
+
+
+<a name="564448118"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564448118" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564448118">(Dec 18 2025 at 12:33)</a>:</h4>
+<p>It may happen when <code>driver_autoprobe</code> is <code>true</code>, which is almost always the case (there are only a few exceptions with e.g. VFIO, etc.) and the device is already present in the corresponding bus when the driver is registered.</p>
+
+
+
+<a name="564448276"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564448276" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564448276">(Dec 18 2025 at 12:34)</a>:</h4>
+<p>It is also worth noting that there may also be a race condition when the matching device is not yet present in the system, but becomes available while the driver is already registered and <code>module_init()</code> is still running.</p>
+
+
+
+<a name="564448915"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564448915" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564448915">(Dec 18 2025 at 12:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564441715">said</a>:</p>
+<blockquote>
+<p>I guess we have the option of always returing <code>EPROBE_DEFER</code> if the module_init hasn't returned, but I am not sure if driver-core would be happy with this approach <span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> .</p>
+</blockquote>
+<p>IIUC the proposal is to let the driver-core check the origin of a driver registration (i.e. the module) and whether the module has some (atomic?) flag set that indicates whether the module has been fully initialized and otherwise return <code>EPROBE_DEFER</code>?</p>
+
+
+
+<a name="564449590"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564449590" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564449590">(Dec 18 2025 at 12:41)</a>:</h4>
+<p>Yep</p>
+
+
+
+<a name="564449737"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564449737" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564449737">(Dec 18 2025 at 12:41)</a>:</h4>
+<p>We can do this in Rust binding side</p>
+
+
+
+<a name="564450100"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450100" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450100">(Dec 18 2025 at 12:43)</a>:</h4>
+<p>What about other asynchronous cases, such as scheduling some work from module_init()?</p>
+
+
+
+<a name="564450328"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450328" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450328">(Dec 18 2025 at 12:44)</a>:</h4>
+<p>We can initialize the data before creating <code>Registration</code></p>
+
+
+
+<a name="564450340"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450340" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450340">(Dec 18 2025 at 12:44)</a>:</h4>
+<p>Accessing module fields would check the same flag and panic if this happens</p>
+
+
+
+<a name="564450468"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450468" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450468">(Dec 18 2025 at 12:45)</a>:</h4>
+<p>So we can be certain that the data is always valid when probe is called.</p>
+
+
+
+<a name="564450559"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450559" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450559">(Dec 18 2025 at 12:45)</a>:</h4>
+<p>We can then pass some kind of pointer to the data to the probe function.</p>
+
+
+
+<a name="564450571"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450571" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450571">(Dec 18 2025 at 12:45)</a>:</h4>
+<p>Either way, I'm not sold on <code>EPROBE_DEFER</code>. I think if we want to defer things, we should write a small module initializer abstraction that takes a callback that is executed when the module structure is fully initialized and calls the actual work from there.</p>
+
+
+
+<a name="564450653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450653">(Dec 18 2025 at 12:46)</a>:</h4>
+<p>I don't think we need to defer probing.</p>
+
+
+
+<a name="564450741"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450741" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450741">(Dec 18 2025 at 12:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559">said</a>:</p>
+<blockquote>
+<p>We can then pass some kind of pointer to the data to the probe function.</p>
+</blockquote>
+<p>I've explained in the original post why this isn't an option</p>
+
+
+
+<a name="564450782"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450782" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450782">(Dec 18 2025 at 12:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450741">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559">said</a>:</p>
+<blockquote>
+<p>We can then pass some kind of pointer to the data to the probe function.</p>
+</blockquote>
+<p>I've explained in the original post why this isn't an option</p>
+</blockquote>
+<p>I'll go reread that.</p>
+
+
+
+<a name="564450840"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450840" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450840">(Dec 18 2025 at 12:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450653">said</a>:</p>
+<blockquote>
+<p>I don't think we need to defer probing.</p>
+</blockquote>
+<p>No, we just need to defer the register call to after the module structure has been initialized.</p>
+
+
+
+<a name="564450996"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564450996" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564450996">(Dec 18 2025 at 12:48)</a>:</h4>
+<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>
+
+
+
+<a name="564451060"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451060" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451060">(Dec 18 2025 at 12:48)</a>:</h4>
+<p>The user needs to ensure whatever is accessible from probe is initialized in the first phase</p>
+
+
+
+<a name="564451132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451132">(Dec 18 2025 at 12:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450741">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450559">said</a>:</p>
+<blockquote>
+<p>We can then pass some kind of pointer to the data to the probe function.</p>
+</blockquote>
+<p>I've explained in the original post why this isn't an option</p>
+</blockquote>
+<p>I think you refer to your explanation that probe can be called before module_init has completed. However, the reason for this is that we register the driver. Probe will not be called before we register the driver. If we initialize the data before we create the <code>Registration</code>, this issue goes away.</p>
+
+
+
+<a name="564451256"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451256" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451256">(Dec 18 2025 at 12:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996">said</a>:</p>
+<blockquote>
+<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>
+</blockquote>
+<p>Yes, this is what I was trying to communicate.</p>
+
+
+
+<a name="564451296"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451296" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451296">(Dec 18 2025 at 12:49)</a>:</h4>
+<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>
+
+
+
+<a name="564451451"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451451" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451451">(Dec 18 2025 at 12:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296">said</a>:</p>
+<blockquote>
+<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>
+</blockquote>
+<p>I can put it in the module struct if I put it behind an Arc.</p>
+
+
+
+<a name="564451523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451523">(Dec 18 2025 at 12:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996">said</a>:</p>
+<blockquote>
+<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>
+</blockquote>
+<p>Yeah, that's pretty much what I mean, the <code>driver::Registration</code> should impl a Trait with a callback that's called in phase 2, such that it can call <code>driver_register()</code> from there.</p>
+
+
+
+<a name="564451590"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451590" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451590">(Dec 18 2025 at 12:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451451">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296">said</a>:</p>
+<blockquote>
+<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>
+</blockquote>
+<p>I can put it in the module struct if I put it behind an Arc.</p>
+</blockquote>
+<p>You'd then need to pass this <code>Arc</code> to the probe function, and there's currently no way</p>
+
+
+
+<a name="564451911"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451911" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451911">(Dec 18 2025 at 12:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451523">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564450996">said</a>:</p>
+<blockquote>
+<p>I guess there's an option to have a two-phase initialization, first one initializes data that is accessible from <code>probe</code>, and the second one does registration.</p>
+</blockquote>
+<p>Yeah, that's pretty much what I mean, the <code>driver::Registration</code> should impl a Trait with a callback that's called in phase 2, such that it can call <code>driver_register()</code> from there.</p>
+</blockquote>
+<p>I don't think this is necessary. Arguably it can be quite confusing if this callback fails and the rollback then needs to be implicit and the user cannot handle the error explicitly.</p>
+<p>I'd rather just have a <code>init</code> and <code>early_init</code> so user can just do registration normally in <code>init</code>. They just need to make sure they don't call it from <code>early_init</code>.</p>
+
+
+
+<a name="564451912"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564451912" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564451912">(Dec 18 2025 at 12:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451590">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451451">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451296">said</a>:</p>
+<blockquote>
+<p>You cannot put this in the module struct -- <code>Registration</code> goes there too. You also cannot pass a pointer to <code>probe</code> which doesn't take a data pointer from module.</p>
+</blockquote>
+<p>I can put it in the module struct if I put it behind an Arc.</p>
+</blockquote>
+<p>You'd then need to pass this <code>Arc</code> to the probe function, and there's currently no way</p>
+</blockquote>
+<p>That is unfortunate.</p>
+
+
+
+<a name="564452466"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564452466" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564452466">(Dec 18 2025 at 12:55)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564451911">said</a>:</p>
+<blockquote>
+<p>I don't think this is necessary. Arguably it can be quite confusing if this callback fails and the rollback then needs to be implicit and the user cannot handle the error explicitly.</p>
+</blockquote>
+<p>If the callback fails, we can just drop the module structure, no?</p>
+<blockquote>
+<p>I'd rather just have a <code>init</code> and <code>early_init</code> so user can just do registration normally in <code>init</code>. They just need to make sure they don't call it from <code>early_init</code>.</p>
+</blockquote>
+<p>It shouldn't be on the user to declare proper order and if messed up cause panics otherwise.</p>
+
+
+
+<a name="564452653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564452653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564452653">(Dec 18 2025 at 12:56)</a>:</h4>
+<p>Yes, <code>module</code> can be dropped, however for user they won't be able to handle the registration failure, to them it becomes effectively undistinguishable from module unload, which is bad.</p>
+
+
+
+<a name="564453062"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453062" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453062">(Dec 18 2025 at 12:59)</a>:</h4>
+<p>There isn't really anything to handle, if the Registration fails you just bail out.</p>
+
+
+
+<a name="564453243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453243">(Dec 18 2025 at 13:00)</a>:</h4>
+<p>I.e. it's not different from a plain <code>module_foo_driver!()</code> call.</p>
+
+
+
+<a name="564453361"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453361" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453361">(Dec 18 2025 at 13:00)</a>:</h4>
+<p>I personally won't consider a OOPS triggerable only during <code>init</code> or <code>exit</code> to be too problematic; this is something that can be easily found (and adding a custom lint for this sort of misuse is easy).</p>
+
+
+
+<a name="564453423"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453423" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453423">(Dec 18 2025 at 13:00)</a>:</h4>
+<p>Your idea is basically just that we only ever auto-generate <code>init</code> call and user fills in <code>early_init</code> only?</p>
+
+
+
+<a name="564453745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453745">(Dec 18 2025 at 13:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453361">said</a>:</p>
+<blockquote>
+<p>I personally won't consider a OOPS triggerable only during <code>init</code> or <code>exit</code> to be too problematic; this is something that can be easily found (and adding a custom lint for this sort of misuse is easy).</p>
+</blockquote>
+<p>Well, you have to have the hardware to be able to catch the oops, because it will only ever happen if your driver is actually probed and timing is relevant as well, so you even have to be lucky to catch it.</p>
+
+
+
+<a name="564453782"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564453782" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564453782">(Dec 18 2025 at 13:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453423">said</a>:</p>
+<blockquote>
+<p>Your idea is basically just that we only ever auto-generate <code>init</code> call and user fills in <code>early_init</code> only?</p>
+</blockquote>
+<p>Yes.</p>
+
+
+
+<a name="564454077"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564454077" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564454077">(Dec 18 2025 at 13:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564453745">said</a>:</p>
+<blockquote>
+<p>Well, you have to have the hardware to be able to catch the oops, because it will only ever happen if your driver is actually probed and timing is relevant as well, so you even have to be lucky to catch it.</p>
+</blockquote>
+<p>Basically you only need the rule of "early_init" cannot (transitively) call registration functions. And this is pretty easy for static analyzers.</p>
+
+
+
+<a name="564454313"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564454313" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564454313">(Dec 18 2025 at 13:05)</a>:</h4>
+<p>Also for human reviewers (and note that on C side we currently relying exclusively on reviewers to catch this sort of ordering bugs)</p>
+
+
+
+<a name="564454432"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564454432" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564454432">(Dec 18 2025 at 13:06)</a>:</h4>
+<p>Iff we have a way to check on every build automatically, then I think it's fine.</p>
+
+
+
+<a name="564454583"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564454583" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564454583">(Dec 18 2025 at 13:06)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/564454313">said</a>:</p>
+<blockquote>
+<p>Also for human reviewers (and note that on C side we currently relying exclusively on reviewers to catch this sort of ordering bugs)</p>
+</blockquote>
+<p>But we <strong>can</strong> do better with Rust. :)</p>
+
+
+
+<a name="564455523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564455523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564455523">(Dec 18 2025 at 13:11)</a>:</h4>
+<p>Actually, with what mechanism are we going to collect the list of all callbacks to call?</p>
+
+
+
+<a name="564469032"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564469032" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564469032">(Dec 18 2025 at 14:10)</a>:</h4>
+<p>Maybe a static list that we clean up at the end of the initialization sequence?</p>
+
+
+
+<a name="564469464"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564469464" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564469464">(Dec 18 2025 at 14:12)</a>:</h4>
+<p>This static needs to be unique per module, and there's no such construct as per-module variables unless we resort to use macros for all registrations (which are all just functions if ignoring convience macros)</p>
+
+
+
+<a name="564470148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564470148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564470148">(Dec 18 2025 at 14:14)</a>:</h4>
+<p>We only have a single module per compilation unit, so we also only need a name for the static that doesn't get into the way of drivers, e.g. <code>__MODULE_INIT_CALLBACK_LIST</code>, similar to <code>__LOG_PREFIX</code>.</p>
+
+
+
+<a name="564476412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/564476412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#564476412">(Dec 18 2025 at 14:39)</a>:</h4>
+<p>Such statics are only referenced from macros. <code>__LOG_PREFIX</code> is referenced by path within the formatting macros. I'll see if I can add something to <code>ThisModule</code> to achieve something similar.</p>
+
+
+
+<a name="567889448"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/567889448" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#567889448">(Jan 14 2026 at 01:42)</a>:</h4>
+<p>Quick question: Is .drvdata misnamed? There is device driver level (module) data such as module parameters, and there is per-device data.</p>
+<p>And so far we only have access to one (per-device data) and it is named in a way that sounds like the other, yes? <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+
+
+
+<a name="567965337"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/567965337" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#567965337">(Jan 14 2026 at 11:44)</a>:</h4>
+<p>Do you refer to <code>Device::drvdata()</code> [1]? If so, that's the correct name; it is the driver's device private data.</p>
+<p>The module data, such as module parameters, is not at the device driver level and it is not called "device driver level data".</p>
+<p>It is not (necessarily) specific to a driver and it is not specific to a device either, i.e. there may be an arbitrary number of devices bound to a driver and therefore an arbitrary number of driver instances.</p>
+<p>[1] <a href="https://rust.docs.kernel.org/kernel/device/struct.Device.html#method.drvdata">https://rust.docs.kernel.org/kernel/device/struct.Device.html#method.drvdata</a></p>
+
+
+
+<a name="568098941"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568098941" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568098941">(Jan 14 2026 at 23:35)</a>:</h4>
+<p>Yes, that's what I was asking about. I guess the names works if-and-only-if one uses the fully qualified name: Device::drvdata.</p>
+
+
+
+<a name="568099660"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568099660" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568099660">(Jan 14 2026 at 23:43)</a>:</h4>
+<p>It does still throw me off, because it sounds like "given a device, go find the driver data (which is sort of global)", as opposed to "for this device, find per-device driver data(?)", but maybe that's just me.</p>
+
+
+
+<a name="568102151"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568102151" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568102151">(Jan 15 2026 at 00:05)</a>:</h4>
+<p>There is nothing like "global driver data". The C function is called <code>dev_get_drvdata()</code>, which is exactly the same except for the <code>get</code> which does not make any sense in the C version.</p>
+
+
+
+<a name="568108953"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568108953" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568108953">(Jan 15 2026 at 01:10)</a>:</h4>
+<p>I see, OK you followed the C. Thanks for explaining.</p>
+
+
+
+<a name="568210077"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568210077" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568210077">(Jan 15 2026 at 13:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="782725">John Hubbard</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/567889448">said</a>:</p>
+<blockquote>
+<p>Quick question: Is .drvdata misnamed? There is device driver level (module) data such as module parameters, and there is per-device data.</p>
+<p>And so far we only have access to one (per-device data) and it is named in a way that sounds like the other, yes? <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+</blockquote>
+<p>I think drvdata is not misnamed, but the our <code>Driver</code> trait kinda is. The probe method constructs an instance of <code>Driver</code> and we put it into the <code>drvdata</code>. But the instance is actually device data (from driver's perspective).</p>
+
+
+
+<a name="568210322"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568210322" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568210322">(Jan 15 2026 at 13:27)</a>:</h4>
+<p>No, it is the driver's data, which the driver temporarily stores in the device as long as it is bound to this device.</p>
+
+
+
+<a name="568210644"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568210644" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568210644">(Jan 15 2026 at 13:28)</a>:</h4>
+<p>It's driver's per-device data. So it shouldn't be called <code>Driver</code></p>
+
+
+
+<a name="568210774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568210774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568210774">(Jan 15 2026 at 13:29)</a>:</h4>
+<p>Having multiple instances of <code>Driver</code> where there's one driver and multiple device is just misnomer</p>
+
+
+
+<a name="568210928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568210928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568210928">(Jan 15 2026 at 13:29)</a>:</h4>
+<p>Well, you do have multiple driver instances, one per device.</p>
+
+
+
+<a name="568211232"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568211232" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568211232">(Jan 15 2026 at 13:30)</a>:</h4>
+<p>You have a single object of driver (e.g. <code>pci_driver</code>)</p>
+
+
+
+<a name="568211529"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568211529" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568211529">(Jan 15 2026 at 13:31)</a>:</h4>
+<p>From a language point the instances should be at least called "drivee"</p>
+
+
+
+<a name="568218957"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568218957" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568218957">(Jan 15 2026 at 13:58)</a>:</h4>
+<p>Traits like <code>pci::Driver</code> do not represent the C <code>struct device_driver</code>(which is the base struct for structs like <code>struct pci_driver</code>).</p>
+<p>Those <code>struct device_driver</code>structures are represented by (and live in) <code>driver::Registration</code>, whereas e.g. the <code>pci::Driver</code> trait represents an instance of the driver.</p>
+
+
+
+<a name="568251367"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568251367" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568251367">(Jan 15 2026 at 15:55)</a>:</h4>
+<p>I know, but that's why I think it's a misnomer</p>
+
+
+
+<a name="568287943"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568287943" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568287943">(Jan 15 2026 at 18:44)</a>:</h4>
+<p>Can we improve the name(s)? It would help when trying to remember which does what. :)</p>
+
+
+
+<a name="568289454"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568289454" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568289454">(Jan 15 2026 at 18:54)</a>:</h4>
+<p>The name of what?</p>
+
+
+
+<a name="568290247"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568290247" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568290247">(Jan 15 2026 at 18:58)</a>:</h4>
+<p>Also, let me put it in other words: The (per device) private data is exactly what represents an instance of a driver.</p>
+
+
+
+<a name="568290753"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568290753" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568290753">(Jan 15 2026 at 19:01)</a>:</h4>
+<p>The entities we have are a (bus) device, which represents the physical device, the registration of a driver and instances of a driver which are created whenever a device is matched with a driver registration.</p>
+
+
+
+<a name="568290945"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568290945" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568290945">(Jan 15 2026 at 19:02)</a>:</h4>
+<p>The fact that a driver instance is stored as private data of a device is an implementation detail.</p>
+
+
+
+<a name="568292418"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292418" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292418">(Jan 15 2026 at 19:09)</a>:</h4>
+<p>I think some of the difficulty is with "instance of a driver". Because there is (or should be) only one instance of a driver, whereas there can be multiple instances of a device.</p>
+
+
+
+<a name="568292468"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292468" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292468">(Jan 15 2026 at 19:10)</a>:</h4>
+<p>No, this is wrong.</p>
+
+
+
+<a name="568292636"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292636" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292636">(Jan 15 2026 at 19:10)</a>:</h4>
+<p>I think what whatever mental model John and I have is more close resemblance to the C code that we have</p>
+
+
+
+<a name="568292757"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292757" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292757">(Jan 15 2026 at 19:11)</a>:</h4>
+<p>The driver itself is just code, but an instance of a driver represents the state of the driver for a certain device, i.e. an instance.</p>
+
+
+
+<a name="568292823"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292823" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292823">(Jan 15 2026 at 19:11)</a>:</h4>
+<p>Perhaps. And if the Rust side is different, then what we can do is to make the Rust names <em>clearly</em> different, to help with seeing that.</p>
+
+
+
+<a name="568292855"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292855" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292855">(Jan 15 2026 at 19:12)</a>:</h4>
+<p>You don't create instances of code, though, so to me an instance of driver doesn't make much sense. It's supposed to be a singleton</p>
+
+
+
+<a name="568292998"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568292998" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568292998">(Jan 15 2026 at 19:12)</a>:</h4>
+<p>Danilo, that's just not quite...right. :)</p>
+<p>As soon as you make "an instance of the driver", it's really a per-device set of data. There is no additional driver instance.</p>
+
+
+
+<a name="568293034"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293034" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293034">(Jan 15 2026 at 19:13)</a>:</h4>
+<p>Exactly! The driver is a singleton.</p>
+
+
+
+<a name="568293270"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293270" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293270">(Jan 15 2026 at 19:14)</a>:</h4>
+<p>In C it is exactly the same, the object you create in probe() and store in the device's private data pointer is what people consider the instance of the driver.</p>
+<p>See nouveau for instance, the object that is stored is <code>struct nouveau_drm</code>, i.e. an instance of the nouveau driver.</p>
+<p><a href="https://elixir.bootlin.com/linux/v6.18.5/source/drivers/gpu/drm/nouveau/nouveau_drm.c#L755">https://elixir.bootlin.com/linux/v6.18.5/source/drivers/gpu/drm/nouveau/nouveau_drm.c#L755</a></p>
+
+
+
+<a name="568293331"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293331" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293331">(Jan 15 2026 at 19:15)</a>:</h4>
+<p>$ ll /proc/driver/<br>
+total 0<br>
+dr-xr-xr-x 11 root root 0 Jan 15 10:19 nvidia<br>
+dr-xr-xr-x  5 root root 0 Jan 15 11:14 nvidia-caps<br>
+dr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-modeset<br>
+dr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-nvlink<br>
+dr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-nvswitch<br>
+dr-xr-xr-x  4 root root 0 Jan 15 11:14 nvidia-uvm<br>
+-r--r--r--  1 root root 0 Jan 15 11:14 nvram<br>
+-r--r--r--  1 root root 0 Jan 15 11:14 rtc</p>
+
+
+
+<a name="568293485"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293485" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293485">(Jan 15 2026 at 19:16)</a>:</h4>
+<p>There is only one driver there, even though there may be multiple GPUs that it handles.</p>
+
+
+
+<a name="568293589"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293589" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293589">(Jan 15 2026 at 19:16)</a>:</h4>
+<p>It's not an instance of the driver though, it's an instance of driver's data. Calling it an instance of driver is inconsistent with the way the term is used (in Linux today or in other kenels).</p>
+
+
+
+<a name="568293617"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293617" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293617">(Jan 15 2026 at 19:16)</a>:</h4>
+<p>If you think calling it <code>Device</code> is too overloaded, I hope we can at least call it <code>DriverData</code></p>
+
+
+
+<a name="568293676"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293676" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293676">(Jan 15 2026 at 19:17)</a>:</h4>
+<p>so it is clear that it is not <em>a driver</em>, but an instance of driver's data.</p>
+
+
+
+<a name="568293677"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293677" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293677">(Jan 15 2026 at 19:17)</a>:</h4>
+<p>It should be DeviceData, right?</p>
+
+
+
+<a name="568293691"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293691" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293691">(Jan 15 2026 at 19:17)</a>:</h4>
+<p>Yeah, there is only one driver and multiple instances of it, one for each device that we store in the device private data pointer.</p>
+
+
+
+<a name="568293796"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293796" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293796">(Jan 15 2026 at 19:18)</a>:</h4>
+<p>But that idea never shows up. I think it got invented on the Rust end.</p>
+
+
+
+<a name="568293827"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293827" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293827">(Jan 15 2026 at 19:18)</a>:</h4>
+<p>It perfectly corresponds with a normal object oriented model, i.e. an Object has shared code, i.e. probe(), unbind(), etc. and per instance data.</p>
+
+
+
+<a name="568293903"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293903" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293903">(Jan 15 2026 at 19:18)</a>:</h4>
+<p>I don't think that's the way "instance" is supposed to be used. A singleton has one instance, period. It's just plain confusion otherwise.</p>
+
+
+
+<a name="568293931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293931">(Jan 15 2026 at 19:18)</a>:</h4>
+<p>Sure, but the kernel is only about X% object oriented. :)</p>
+
+
+
+<a name="568293952"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293952" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293952">(Jan 15 2026 at 19:19)</a>:</h4>
+<p>Rust is not OOP either</p>
+
+
+
+<a name="568293991"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568293991" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568293991">(Jan 15 2026 at 19:19)</a>:</h4>
+<p>A OOP language would probably call it <code>DeviceFactory</code></p>
+
+
+
+<a name="568294071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294071">(Jan 15 2026 at 19:19)</a>:</h4>
+<p>That makes no sense, drivers don't create devices.</p>
+
+
+
+<a name="568294135"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294135" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294135">(Jan 15 2026 at 19:19)</a>:</h4>
+<p>But drivers <em>do</em> create device instances.</p>
+
+
+
+<a name="568294173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294173">(Jan 15 2026 at 19:20)</a>:</h4>
+<p>No, they don't.</p>
+
+
+
+<a name="568294252"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294252" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294252">(Jan 15 2026 at 19:20)</a>:</h4>
+<p>At least not bus device instances, they may create class device instances, such as a DRM device, but they never create a PCI device.</p>
+
+
+
+<a name="568294302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294302">(Jan 15 2026 at 19:20)</a>:</h4>
+<p>This comes from the bus.</p>
+
+
+
+<a name="568294396"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294396" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294396">(Jan 15 2026 at 19:21)</a>:</h4>
+<p>OK, so the bus would be the DeviceFactory, in Gary's imaginary OOP naming system. :)</p>
+
+
+
+<a name="568294424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294424">(Jan 15 2026 at 19:21)</a>:</h4>
+<p>Kinda.</p>
+
+
+
+<a name="568294607"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294607" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294607">(Jan 15 2026 at 19:22)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">$</span><span class="w"> </span><span class="n">ls</span><span class="w"> </span><span class="o">/</span><span class="n">sys</span><span class="o">/</span><span class="n">module</span><span class="o">/</span><span class="n">onboard_usb_dev</span><span class="o">/</span><span class="n">drivers</span>
+<span class="n">platform</span><span class="p">:</span><span class="nc">onboard</span><span class="o">-</span><span class="n">usb</span><span class="o">-</span><span class="n">dev</span><span class="w">  </span><span class="n">usb</span><span class="p">:</span><span class="nc">onboard</span><span class="o">-</span><span class="n">usb</span><span class="o">-</span><span class="n">dev</span>
+</code></pre></div>
+<p>In my model, a module has some drivers (which are completely distinct, and most module has just one), and each driver. Each driver can bind with some bus devices and create devices of their own kind.</p>
+
+
+
+<a name="568294742"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294742" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294742">(Jan 15 2026 at 19:23)</a>:</h4>
+<p>They can create a class device, yes.</p>
+
+
+
+<a name="568294835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294835">(Jan 15 2026 at 19:24)</a>:</h4>
+<p>But that is a separate concept and has nothing to do with the device / driver binding matched through a bus.</p>
+
+
+
+<a name="568294938"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568294938" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568294938">(Jan 15 2026 at 19:24)</a>:</h4>
+<p>I think the confusing bit is that class device is explicitly created, and the bus device is just bound to, so there's we're trying to find a good term to describe what's the thing that gets attached to the bound device.</p>
+
+
+
+<a name="568295013"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295013" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295013">(Jan 15 2026 at 19:24)</a>:</h4>
+<p>A  driver instance. :)</p>
+
+
+
+<a name="568295054"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295054" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295054">(Jan 15 2026 at 19:25)</a>:</h4>
+<p>I <em>strongly</em> disagree that term is called <code>Driver</code> (instance or not). I get your point that it shouldn't be called <code>Device</code>.</p>
+
+
+
+<a name="568295122"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295122" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295122">(Jan 15 2026 at 19:25)</a>:</h4>
+<p>We have instances of drivers already, and they're what's inside /sys/module/*/drivers</p>
+
+
+
+<a name="568295151"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295151" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295151">(Jan 15 2026 at 19:25)</a>:</h4>
+<p>Aka, a singleton, one for each registration</p>
+
+
+
+<a name="568295276"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295276" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295276">(Jan 15 2026 at 19:26)</a>:</h4>
+<p>I also disagree with "driver instance" naming in the strongest way, as well.</p>
+<p>It does not match what the kernel is doing.</p>
+<p>What Gary said.</p>
+
+
+
+<a name="568295873"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295873" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295873">(Jan 15 2026 at 19:30)</a>:</h4>
+<p>I personally think <code>DriverData</code>/<code>DeviceData</code> are both acceptable names to me (depends on which aspect you view this from, from device's angle or driver's angle). Probably with a touch of documentation comment that explains this is drvdata in C.</p>
+
+
+
+<a name="568295932"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568295932" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568295932">(Jan 15 2026 at 19:30)</a>:</h4>
+<p>Or, perhaps, we can name it <code>Binding</code> as the relation between driver and device?</p>
+
+
+
+<a name="568296032"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568296032" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568296032">(Jan 15 2026 at 19:31)</a>:</h4>
+<p>The C side is sketchy on naming too, that's probably how we slid into this mess: dev_set_drvdata() is setting per-device data.</p>
+
+
+
+<a name="568296131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568296131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568296131">(Jan 15 2026 at 19:32)</a>:</h4>
+<p>How about PerDeviceData?</p>
+
+
+
+<a name="568296146"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568296146" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568296146">(Jan 15 2026 at 19:32)</a>:</h4>
+<p>Ok, let me explain. What we have is sysfs are types of drivers, not instances, e.g.:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="o">/</span><span class="n">sys</span><span class="o">/</span><span class="n">module</span><span class="o">/</span><span class="n">psmouse</span><span class="o">/</span><span class="n">drivers</span><span class="o">/</span><span class="n">serio</span><span class="p">:</span><span class="nc">psmouse</span>
+</code></pre></div>
+<p>The type of this driver is serio:psmouse, i.e. a generic driver that can operate PS2 mouse devices.</p>
+<p>This serio:psmouse type has methods, such as probe(), remove() etc. Once a matching serial device is connected to the machine, we create an instance of serio:psmouse in probe(). This instance is then stored in the serial device's private data field.</p>
+
+
+
+<a name="568296715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568296715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568296715">(Jan 15 2026 at 19:35)</a>:</h4>
+<p><code>serio:psmouse</code> is <em>the</em> driver, not the type of driver, though.</p>
+
+
+
+<a name="568296954"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568296954" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568296954">(Jan 15 2026 at 19:36)</a>:</h4>
+<p>Also:</p>
+<p>$ tree /proc/driver/nvidia<br>
+/proc/driver/nvidia<br>
+├── capabilities<br>
+│   ├── fabric-imex-mgmt<br>
+│   ├── gpu0<br>
+│   │   └── mig<br>
+│   └── mig<br>
+│       ├── config<br>
+│       └── monitor<br>
+├── gpus<br>
+│   └── 0000:61:00.0<br>
+│       ├── information<br>
+│       ├── power<br>
+│       └── registry<br>
+├── params<br>
+├── patches<br>
+│   └── README<br>
+├── registry<br>
+├── suspend<br>
+├── suspend_depth<br>
+├── version<br>
+└── warnings<br>
+    └── README</p>
+
+
+
+<a name="568297203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568297203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568297203">(Jan 15 2026 at 19:38)</a>:</h4>
+<p>Just trying to show that the kernel reports: "a driver has devices", as opposed to "driver instances".</p>
+
+
+
+<a name="568297296"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568297296" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568297296">(Jan 15 2026 at 19:38)</a>:</h4>
+<p>A driver never owns devices.</p>
+
+
+
+<a name="568297555"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568297555" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568297555">(Jan 15 2026 at 19:40)</a>:</h4>
+<p>OK, well however you want to say it, there are multiple devices <em>under</em> a singleton driver, in /proc/driver</p>
+
+
+
+<a name="568297727"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568297727" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568297727">(Jan 15 2026 at 19:41)</a>:</h4>
+<blockquote>
+<p>When a driver is attached to a device, the device is inserted into the driver’s list of devices.</p>
+</blockquote>
+<p><a href="https://docs.kernel.org/driver-api/driver-model/binding.html">https://docs.kernel.org/driver-api/driver-model/binding.html</a></p>
+
+
+
+<a name="568297772"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568297772" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568297772">(Jan 15 2026 at 19:41)</a>:</h4>
+<p>"the driver"</p>
+
+
+
+<a name="568298334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568298334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568298334">(Jan 15 2026 at 19:45)</a>:</h4>
+<p>The text, when talking about "drivers", means multiple different kinds of drivers, and not different devices bind to the same data.</p>
+
+
+
+<a name="568298724"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568298724" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568298724">(Jan 15 2026 at 19:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="782725">John Hubbard</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568297555">said</a>:</p>
+<blockquote>
+<p>OK, well however you want to say it, there are multiple devices <em>under</em> a singleton driver, in /proc/driver</p>
+</blockquote>
+<p>The driver model is not in procfs, this seems to be some nvidia OOT thing, the driver model is represented by sysfs.</p>
+<p>In sysfs you do have symbolic links of the devices that are bound to a driver, this binding is what defines an instance.</p>
+
+
+
+<a name="568298774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568298774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568298774">(Jan 15 2026 at 19:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568297727">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>When a driver is attached to a device, the device is inserted into the driver’s list of devices.</p>
+</blockquote>
+<p><a href="https://docs.kernel.org/driver-api/driver-model/binding.html">https://docs.kernel.org/driver-api/driver-model/binding.html</a></p>
+</blockquote>
+<p>The documentation is extremely old and wrong, drivers don't have a list of devices.</p>
+
+
+
+<a name="568298779"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568298779" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568298779">(Jan 15 2026 at 19:47)</a>:</h4>
+<p>Then we should call this <code>binding</code>, not <code>driver</code>.</p>
+
+
+
+<a name="568298949"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568298949" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568298949">(Jan 15 2026 at 19:48)</a>:</h4>
+<p>I think you should not confuse how the code is implemented with the mental model. Of course conceptually the list of devices that the driver has bind to is the "list of devices"</p>
+
+
+
+<a name="568299141"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299141" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299141">(Jan 15 2026 at 19:50)</a>:</h4>
+<p>In the mental model there is no list of devices for a driver either.</p>
+
+
+
+<a name="568299167"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299167" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299167">(Jan 15 2026 at 19:50)</a>:</h4>
+<p>"The documentation is extremely old and wrong, drivers don't have a list of devices."</p>
+<p>I admire this bold claim, but I expect that a patch to change it would fail. WWGS (What Would Greg KH Say)? :)</p>
+
+
+
+<a name="568299371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299371">(Jan 15 2026 at 19:51)</a>:</h4>
+<p>I don't know, I'm not Greg. :)</p>
+
+
+
+<a name="568299405"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299405" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299405">(Jan 15 2026 at 19:51)</a>:</h4>
+<p>$ tree /sys/module/nvidia/drivers<br>
+/sys/module/nvidia/drivers<br>
+├── pci:nvidia -&gt; ../../../bus/pci/drivers/nvidia<br>
+├── pci:nvidia-nvswitch -&gt; ../../../bus/pci/drivers/nvidia-nvswitch<br>
+└── platform:nv_platform -&gt; ../../../bus/platform/drivers/nv_platform</p>
+
+
+
+<a name="568299476"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299476" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299476">(Jan 15 2026 at 19:52)</a>:</h4>
+<p>A list of driver types in a modules, so?</p>
+
+
+
+<a name="568299496"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299496" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299496">(Jan 15 2026 at 19:52)</a>:</h4>
+<p>One item for each type of driver.</p>
+
+
+
+<a name="568299666"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299666" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299666">(Jan 15 2026 at 19:53)</a>:</h4>
+<p>I think it's very straightforward that the <code>struct device</code> is named <code>Device</code>, and <code>struct device_driver</code> is named <code>Driver</code>. Anything that deviates from this is just confusion</p>
+
+
+
+<a name="568299766"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568299766" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568299766">(Jan 15 2026 at 19:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="782725">John Hubbard</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568299496">said</a>:</p>
+<blockquote>
+<p>One item for each type of driver.</p>
+</blockquote>
+<p>This means that the nvidia module implements three driver types. That seems orthogonal to what we are discussing.</p>
+
+
+
+<a name="568300053"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568300053" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568300053">(Jan 15 2026 at 19:56)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568299666">said</a>:</p>
+<blockquote>
+<p>I think it's very straightforward that the <code>struct device</code> is named <code>Device</code>, and <code>struct device_driver</code> is named <code>Driver</code>. Anything that deviates from this is just confusion</p>
+</blockquote>
+<p>I don't see why we should deviate from a well-known and working naming convention if we are so insistent on sticking to the C names.</p>
+
+
+
+<a name="568300080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568300080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568300080">(Jan 15 2026 at 19:56)</a>:</h4>
+<p>Anyway, enough for today.</p>
+
+
+
+<a name="568300532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568300532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568300532">(Jan 15 2026 at 19:59)</a>:</h4>
+<p>If we ever abstract a <code>struct device_driver</code> we can name the surrounding struct <code>Driver</code>, that is fine.</p>
+
+
+
+<a name="568303773"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568303773" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568303773">(Jan 15 2026 at 20:18)</a>:</h4>
+<p>The point is, there are multiple things that we call drivers, i.e. in C we call the structs to register a driver e.g. <code>struct pci_driver</code>, but we also call the implementation of the callbacks of e.g. a <code>struct pci_driver</code> a driver.</p>
+<p>For instance, nouveau is a driver (implementation), nova is driver (implementation), etc.</p>
+<p>So, let's look at:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">fw</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Here<code>NovaCore </code>is an implementation (or a specific type) of a <code>pci::Driver</code>. When a new <code>pci::Device</code> is now detected in the system then this PCI device is matched with the driver and <code>probe()</code> is called. So, <code>probe()</code> really is the constructor of a driver type. I.e. we create an instance of this driver type, now that we have to store information for this specific device that we have been matched with.</p>
+<p>So, <code>probe()</code> then returns an instance of the <code>NovaCore</code>driver type. This instance represents the binding of the NovaCore driver type and a PCI device, which we also store in this PCI device.</p>
+<p>Alternatively - and I think this is what you propose - we could have something like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="p">;</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">NovaCoreData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">fw</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NovaCoreData</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>But what does this improve? We now have a useless empty type <code>NovaCore</code> that we use for nothing but implement <code>pci::Driver</code> for. And we represent the instance of the <code>NovaCore</code> driver as a separate <code>NovaCoreData</code> type. Seems pretty useless and eventually people will most likely just end up just doing this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">fw</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">Self</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="568311359"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568311359" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568311359">(Jan 15 2026 at 21:03)</a>:</h4>
+<p>The mental model is that a specific driver, such as <code>NovaCore</code> consists out of shared code (probe(), unbind(), etc.) and per instance data (where a new instance is created for every matched device).</p>
+<p>I.e. exactly the pattern of a normal Object: shared code (methods), and per instance data.</p>
+<p>This is also exactly the same in C, the driver consists out of shared code, probe() is called for a new instance when a device is matched and the instance is stored in the matched device with dev_set_drvdata().</p>
+
+
+
+<a name="568346963"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568346963" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> John Hubbard <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568346963">(Jan 16 2026 at 02:39)</a>:</h4>
+<p>Maybe a naming change could use Gary's bindings idea, like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// The Nova PCI driver.</span>
+<span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="p">;</span>
+
+<span class="sd">/// Per-device data created by probe(), stored in the device's drvdata.</span>
+<span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">NovaBinding</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">gpu</span><span class="p">:</span><span class="w"> </span><span class="nc">Gpu</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">_reg</span><span class="p">:</span><span class="w"> </span><span class="nc">Devres</span><span class="o">&lt;</span><span class="n">auxiliary</span><span class="p">::</span><span class="n">Registration</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">IdInfo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Binding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NovaBinding</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">ID_TABLE</span><span class="p">:</span><span class="w"> </span><span class="nc">pci</span><span class="p">::</span><span class="n">IdTable</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">PCI_TABLE</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Binding</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">unbind</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">binding</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Binding</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">binding</span><span class="p">.</span><span class="n">gpu</span><span class="p">.</span><span class="n">unbind</span><span class="p">(</span><span class="n">pdev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>and: </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Driver</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">IdInfo</span><span class="p">:</span><span class="w"> </span><span class="o">'</span><span class="nb">static</span><span class="p">;</span>
+
+<span class="w">    </span><span class="sd">/// The per-device data created by [`Driver::probe`] and stored in the device's `drvdata`.</span>
+<span class="w">    </span><span class="sd">///</span>
+<span class="w">    </span><span class="sd">/// This represents the binding between the driver and a specific device. A new instance</span>
+<span class="w">    </span><span class="sd">/// is created for each device that matches the driver's ID table.</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Binding</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">ID_TABLE</span><span class="p">:</span><span class="w"> </span><span class="nc">IdTable</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">device</span><span class="p">::</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">id_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Binding</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">unbind</span><span class="p">(</span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">device</span><span class="p">::</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">binding</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Binding</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">binding</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="568376042"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568376042" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568376042">(Jan 16 2026 at 08:02)</a>:</h4>
+<p>This is exactly what I’ve discussed above already, with the only difference being <code>s/Data/Binding/</code>:</p>
+<p><a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773">https://rust-for-linux.zulipchat.com/#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773</a></p>
+
+
+
+<a name="568391592"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568391592" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568391592">(Jan 16 2026 at 09:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568303773">said</a>:</p>
+<blockquote>
+<p>Alternatively - and I think this is what you propose - we could have something like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="p">;</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">NovaCoreData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">fw</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NovaCoreData</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>But what does this improve? We now have a useless empty type <code>NovaCore</code> that we use for nothing but implement <code>pci::Driver</code> for. And we represent the instance of the <code>NovaCore</code> driver as a separate <code>NovaCoreData</code> type. Seems pretty useless and eventually people will most likely just end up just doing this:</p>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">fw</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">Self</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>The idea is that now you actually have a type that represents driver. So if your driver need some data structure shared between multiple device bindings, you put it into the type.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">debugfs</span><span class="p">:</span><span class="w"> </span><span class="nc">Dir</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">NovaCore</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NovaCoreData</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Core</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Use self.debugfs</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="568391905"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568391905" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568391905">(Jan 16 2026 at 09:35)</a>:</h4>
+<p>This makes creation of the driver singleton explicit -- you create it when you register your driver. Just like when C code creates a <code>pci_driver</code>. It also makes sure that we don't overload the name "driver".</p>
+
+
+
+<a name="568392428"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568392428" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568392428">(Jan 16 2026 at 09:37)</a>:</h4>
+<p>If a driver impl doesn't need anything, good. Then it just do <code>struct MyDriver;</code>, which is quite common in Rust. I don't think we need to "save a type".</p>
+
+
+
+<a name="568392946"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568392946" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568392946">(Jan 16 2026 at 09:41)</a>:</h4>
+<p>I think I can get debugfs change needed by Nova to work with this idea very cleanly. No globals, no debugfs lookups, no failing path. I can work on a prototype next week and we can discuss from there if you're unconvinced.</p>
+
+
+
+<a name="568406784"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568406784" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568406784">(Jan 16 2026 at 10:55)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/568391905">said</a>:</p>
+<blockquote>
+<p>This makes creation of the driver singleton explicit -- you create it when you register your driver. Just like when C code creates a <code>pci_driver</code>. It also makes sure that we don't overload the name "driver".</p>
+</blockquote>
+<p>The misunderstanding relies in the fact that a <code>struct pci_driver</code> does not define or represent the driver as a whole.</p>
+<p>A driver conceptually consists out of much more: the implementation of the bus device callbacks, implementation of the class devices callbacks, IRQ registrations, I/O mappings and other physical device resources. All those are instantiated on a per-device basis.</p>
+<p>The <code>struct pci_driver</code> is only the structure a (PCI) driver type is registered through in the driver core. I.e. it does not represent the driver as a whole, but only one single instance of a registration of a driver. So, yes an instance of <code>struct pci_driver</code> is kind of a singleton (at least from the perspective of a certain driver, e.g. nova-core). The only thing you ever do with this structure is to make a specific driver type present in the system by registering it. This is why we have the <code>driver::Registration</code> type in Rust.</p>
+<p>(And yes, you could probably argue that <code>struct pci_driver</code> should rather be named <code>struct pci_driver_registration</code> instead.)</p>
+<p>But the driver as a whole (e.g. nova-core, nouveau, etc.) is - through its per-device state - instanciated per-device and is not a singleton.</p>
+<p>Think about it, when we say "the nouveau driver", we do not only mean the <code>struct pci_driver</code> which is used for registration in the bus and in the driver core. We mean the whole thing, with all of its code, device resources and a per-device state, i.e. a per-device instance.</p>
+<p>In ancient times, drivers in the kernel did not have a per-device state and a lot of drivers kept their data in globals, i.e. not even per driver registration, but per module.</p>
+<p>One of the big goals of the introduction of the driver-model back then was to fix this by introducing instances of drivers that are created per-device (i.e. a per-device state), such that it became transparent to drivers how many times they are instanciated by the driver core when multiple matching devices were found in the system.</p>
+<p>Now, back to your proposal:</p>
+<p>What you are proposing to add is per-driver-registration data. This sits quite in between per-module and per-device data. I.e. a module can have multiple driver registrations.</p>
+<p>For instance, the nouveau module does have (and the nova-core module will have) a platform driver registration <em>and</em> a PCI driver registration, since the driver can support hardware on both busses.</p>
+<p>This shows why the solution of per-driver-registration data is not the solution of the problem. The problem is that we really want to support accessing per-module data. Introducing per-driver-registration data instead is just a workaround.</p>
+<p>Surely, you could continue the game and reference count the data and pass it to multiple driver registrations, but what are you doing for modules that do not even connect with the driver core at all, i.e. modules that do not have driver registrations in the first place? One example for this is binder. How can binder access per-module data?</p>
+
+
+
+<a name="568417507"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/568417507" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#568417507">(Jan 16 2026 at 11:58)</a>:</h4>
+<p>For binder it can still pass the reference around with file ops. AFAIK global is really used for convience</p>
+
+
+
+<a name="572202149"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/572202149" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#572202149">(Feb 05 2026 at 16:51)</a>:</h4>
+<p>I think in long run, we should:</p>
+<ul>
+<li>Support self-referential structs with pin-init, so you can reference a field from another</li>
+<li>Add data to registration, so you can carry a reference to module fields into a registration (or, multiple registrations, e.g. both platform and PCI regs)</li>
+</ul>
+<p>In short term though, I am trying to get things work by runtime checks in a form of <code>LazyRevocable</code>, where you it is initialized manually inside module init and revoked before module unload. It does have a slight overhead of needing to check for state, however this shouldn't be an issue in many cases (at least it won't be for Nova and debugfs).</p>
+<p>I have a POC branch here: <a href="https://github.com/nbdd0121/linux/commits/lazy_revocable_nova_wip/">https://github.com/nbdd0121/linux/commits/lazy_revocable_nova_wip/</a> which I adds <code>LazyRevocable</code> on top of <span class="user-mention" data-user-id="897540">@Timur Tabi</span> 's series. This doesn't work yet, as <code>Revocable</code> today only supports RCU, and for debugfs I believe SRCU is needed, but the design is roughly there.</p>
+
+
+
+<a name="572220687"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/572220687" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#572220687">(Feb 05 2026 at 18:22)</a>:</h4>
+<p>8 messages were moved from this topic to <a class="stream-topic" data-stream-id="561532" href="/#narrow/channel/561532-pin-init/topic/safe.20self-referential.20structs/with/572220686">#pin-init &gt; safe self-referential structs</a> by <span class="user-mention silent" data-user-id="546447">Benno Lossin</span>.</p>
+
+
+
+<a name="576922890"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576922890" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576922890">(Mar 03 2026 at 09:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/572202149">said</a>:</p>
+<blockquote>
+<p>This doesn't work yet, as <code>Revocable</code> today only supports RCU, and for debugfs I believe SRCU is needed, but the design is roughly there.</p>
+</blockquote>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span><br>
+I'm currently adding debugfs support for the Tyr driver. For module‑scoped debugfs data, would you recommend using LazyRevocable as the short‑term solution?</p>
+<p>Also, is anyone actively working on adding SRCU support to Revocable/LazyRevocable?</p>
+
+
+
+<a name="576936532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576936532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576936532">(Mar 03 2026 at 10:19)</a>:</h4>
+<p>I haven't been working on it currently due to other priorities. If you want to work on it, perhaps a good first step is to create abstractions for SRCU?</p>
+
+
+
+<a name="576936641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576936641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576936641">(Mar 03 2026 at 10:20)</a>:</h4>
+<p>One idea I have in mind is to have it protected by hazard pointers, so there's no need of RCU at all.</p>
+
+
+
+<a name="576979254"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576979254" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576979254">(Mar 03 2026 at 13:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576936641">said</a>:</p>
+<blockquote>
+<p>One idea I have in mind is to have it protected by hazard pointers, so there's no need of RCU at all.</p>
+</blockquote>
+<p>Thanks for the idea. I'd like to try the hazard-pointer approach. Could you outline how you'd use it here?</p>
+
+
+
+<a name="576979361"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576979361" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576979361">(Mar 03 2026 at 13:45)</a>:</h4>
+<p>Note that hazard pointer isn't merged yet: <a href="https://lore.kernel.org/all/20260223204418.1429025-1-mathieu.desnoyers@efficios.com/">https://lore.kernel.org/all/20260223204418.1429025-1-mathieu.desnoyers@efficios.com/</a></p>
+
+
+
+<a name="576981643"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576981643" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576981643">(Mar 03 2026 at 13:55)</a>:</h4>
+<p>To use hazard pointer for revocable:</p>
+<p>On the accessor side:</p>
+<ol>
+<li>put pointer into a hazard pointer slot</li>
+<li>check that the data is not revoked</li>
+</ol>
+<p>On the revoker side:</p>
+<ol>
+<li>update revocation flag</li>
+<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>
+<li>free the revoked data</li>
+</ol>
+
+
+
+<a name="576983125"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/576983125" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#576983125">(Mar 03 2026 at 14:00)</a>:</h4>
+<p>Thanks for the pointers; I’ll give it a try following this approach.</p>
+
+
+
+<a name="577020080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577020080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577020080">(Mar 03 2026 at 16:21)</a>:</h4>
+<p>Notice you can do a <code>call_hazptr()</code> that combine (2 &amp; 3) but asynchronously once we support that.</p>
+
+
+
+<a name="577699064"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577699064" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577699064">(Mar 06 2026 at 09:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576981643">said</a>:</p>
+<blockquote>
+<p>To use hazard pointer for revocable:</p>
+<p>On the accessor side:</p>
+<ol>
+<li>put pointer into a hazard pointer slot</li>
+<li>check that the data is not revoked</li>
+</ol>
+<p>On the revoker side:</p>
+<ol>
+<li>update revocation flag</li>
+<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>
+<li>free the revoked data</li>
+</ol>
+</blockquote>
+<p>Based on your patch, I added a Rust wrapper for the Hazard Pointer and modified <code>LazyRevocable</code> to use it internally. I'm not sure whether my approach is correct:<br>
+<a href="https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c">https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c</a></p>
+
+
+
+<a name="577772947"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577772947" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577772947">(Mar 06 2026 at 15:14)</a>:</h4>
+<p>The order in <code>try_access</code> is prone to race. You need to protect pointer first before check revocation.</p>
+
+
+
+<a name="577773223"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577773223" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577773223">(Mar 06 2026 at 15:15)</a>:</h4>
+<p>Also <code>data_ptr</code> shouldn't be needed, you should be able to just protect the <code>data.as_ptr()</code> directly</p>
+
+
+
+<a name="577783163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577783163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577783163">(Mar 06 2026 at 16:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1018855">Alvin Sun</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/577699064">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576981643">said</a>:</p>
+<blockquote>
+<p>To use hazard pointer for revocable:</p>
+<p>On the accessor side:</p>
+<ol>
+<li>put pointer into a hazard pointer slot</li>
+<li>check that the data is not revoked</li>
+</ol>
+<p>On the revoker side:</p>
+<ol>
+<li>update revocation flag</li>
+<li>perform hazptr_synchronize to wait all users of the pointer to go away</li>
+<li>free the revoked data</li>
+</ol>
+</blockquote>
+<p>Based on your patch, I added a Rust wrapper for the Hazard Pointer and modified <code>LazyRevocable</code> to use it internally. I'm not sure whether my approach is correct:<br>
+<a href="https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c">https://github.com/alvinsun039/linux-torvalds/commit/9f1ed28d5f63e28ff5387b982f5bd72d50aadd3c</a></p>
+</blockquote>
+<p>synchronize needs to be unsafe I think? How is addr guaranteed to be valid?</p>
+
+
+
+<a name="577785561"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577785561" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577785561">(Mar 06 2026 at 16:11)</a>:</h4>
+<p>It doesn't need to be valid</p>
+
+
+
+<a name="577794447"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/577794447" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#577794447">(Mar 06 2026 at 16:53)</a>:</h4>
+<p>The comment needs an update then</p>
+
+
+
+<a name="579731625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/579731625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#579731625">(Mar 16 2026 at 15:10)</a>:</h4>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span>  I've revised the code per your suggestions:<br>
+<a href="https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7">https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7</a></p>
+<p>On a separate note, do you have plans to push the LazyRevocable patches upstream soon?</p>
+
+
+
+<a name="579732423"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/579732423" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#579732423">(Mar 16 2026 at 15:13)</a>:</h4>
+<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>
+
+
+
+<a name="579855460"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/579855460" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#579855460">(Mar 17 2026 at 05:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1018855">Alvin Sun</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579731625">said</a>:</p>
+<blockquote>
+<p><a href="https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7">https://github.com/alvinsun039/linux-torvalds/commit/9c6ed307b55a35d0f3036e0e4c3cc32db05a75b7</a></p>
+</blockquote>
+<p>Tyr debugfs could be the first user of your LazyRevocable implementation. After adapting it to use hazard pointers, it's now working properly on the development board with no kernel warnings.</p>
+
+
+
+<a name="580287491"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/580287491" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#580287491">(Mar 18 2026 at 20:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/577020080">said</a>:</p>
+<blockquote>
+<p>Notice you can do a <code>call_hazptr()</code> that combine (2 &amp; 3) but asynchronously once we support that.</p>
+</blockquote>
+<p>We also need to avoid busy waiting in <code>synchronize_hazptr()</code> by using something similar to: <a href="https://lore.kernel.org/lkml/20250414060055.341516-5-boqun.feng@gmail.com/">https://lore.kernel.org/lkml/20250414060055.341516-5-boqun.feng@gmail.com/</a> on top of Mathieu's patch.</p>
+
+
+
+<a name="580347447"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/580347447" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#580347447">(Mar 19 2026 at 06:41)</a>:</h4>
+<p>Let me learn how to do this and I'm very happy to participate in the discussion.</p>
+
+
+
+<a name="580585596"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/580585596" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#580585596">(Mar 20 2026 at 06:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579732423">said</a>:</p>
+<blockquote>
+<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>
+</blockquote>
+<p><span class="user-mention" data-user-id="413824">@Gary Guo</span> <br>
+Daniel suggested I push the Tyr Debugfs patch series to the list for review. It currently depends on your LazyRevocable, how should I handle this?</p>
+
+
+
+<a name="580626023"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/580626023" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#580626023">(Mar 20 2026 at 10:49)</a>:</h4>
+<p>Feel free to carry my patch with your series</p>
+
+
+
+<a name="585245591"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/585245591" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#585245591">(Apr 13 2026 at 17:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/576936532">said</a>:</p>
+<blockquote>
+<p>I haven't been working on it currently due to other priorities. If you want to work on it, perhaps a good first step is to create abstractions for SRCU?</p>
+</blockquote>
+<p>fwiw I will be working on the SRCU support this week for tyr reset implementation (ref. discussion: <a href="https://lore.kernel.org/all/20260411055215.120719-1-work@onurozkan.dev">https://lore.kernel.org/all/20260411055215.120719-1-work@onurozkan.dev</a>)</p>
+
+
+
+<a name="585245867"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/585245867" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#585245867">(Apr 13 2026 at 17:27)</a>:</h4>
+<p>In the meeting we (me, Alice, Daniel and Boris) agreed on using SRCU</p>
+
+
+
+<a name="588602486"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/588602486" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#588602486">(Apr 21 2026 at 11:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1018855">Alvin Sun</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/580585596">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/579732423">said</a>:</p>
+<blockquote>
+<p>I haven't because there's no users yet (Nova can't use the current lazy revocable abstraction due to need for sleeping)</p>
+</blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <br>
+Daniel suggested I push the Tyr Debugfs patch series to the list for review. It currently depends on your LazyRevocable, how should I handle this?</p>
+</blockquote>
+<p>Can you share the status quo of tyr debugfs support? I need it for my series</p>
+
+
+
+<a name="590152668"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Module/driver-scoped%20data/near/590152668" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Module.2Fdriver-scoped.20data.html#590152668">(Apr 22 2026 at 09:22)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/288089-General/topic/Module.2Fdriver-scoped.20data/near/588602486">said</a>:</p>
+<blockquote>
+<p>Can you share the status quo of tyr debugfs support? I need it for my series</p>
+</blockquote>
+<p>I've sent a version of the Tyr-Debugfs patches to the list [1],<br>
+but they may be out of date and can't be directly applied to<br>
+tyr-for-upstream. I've resolved the conflicts and pushed an updated<br>
+version to the downstream repository [2].</p>
+<p>This patch series currently depends on Mathieu's hazptr work [3], which<br>
+seems to still be under review.</p>
+<p>[1] <a href="https://lore.kernel.org/all/20260326-b4-tyr-debugfs-v1-0-074badd18716@linux.dev/">https://lore.kernel.org/all/20260326-b4-tyr-debugfs-v1-0-074badd18716@linux.dev/</a><br>
+[2] <a href="https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/59">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/59</a><br>
+[3] <a href="https://lore.kernel.org/all/20260223204418.1429025-2-mathieu.desnoyers@efficios.com/">https://lore.kernel.org/all/20260223204418.1429025-2-mathieu.desnoyers@efficios.com/</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>Additional question: should <a href=\"https://lore.kernel.org/lkml/20230224-rust-xarray-v1-1-80f0904ce5d3@asahilina.net/\"><code>XArray</code></a>'s APIs take <code>Pin&lt;&amp;Self&gt;</code>?</p>",
+        "id": 339445400,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677878279
+    },
+    {
+        "content": "<p>It does have a spinlock in it.</p>",
+        "id": 339445522,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677878328
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339445400\">said</a>:</p>\n<blockquote>\n<p>Additional question: should <a href=\"https://lore.kernel.org/lkml/20230224-rust-xarray-v1-1-80f0904ce5d3@asahilina.net/\"><code>XArray</code></a>'s APIs take <code>Pin&lt;&amp;Self&gt;</code>?</p>\n</blockquote>\n<p>Oh, I had missed the fact that it has a spinlock in it. This needs to be pinned.</p>",
+        "id": 339446548,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1677878756
+    },
+    {
+        "content": "<p>But actually \"unlocked spinlock is safe to move\", or a boarder question, can <code>Unpin</code> be built from some <code>!Unpin</code>s?</p>",
+        "id": 339446837,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677878881
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339446837\">said</a>:</p>\n<blockquote>\n<p>But actually \"unlocked spinlock is safe to move\", or a boarder question, can <code>Unpin</code> be built from some <code>!Unpin</code>s?</p>\n</blockquote>\n<p>Oh, I guess we can still make XArray take <code>Pin&lt;&amp;Self&gt;</code> but <code>impl Unpin for XArray {}</code>?</p>",
+        "id": 339447741,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677879178
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339446837\">said</a>:</p>\n<blockquote>\n<p>But actually \"unlocked spinlock is safe to move\", or a boarder question, can <code>Unpin</code> be built from some <code>!Unpin</code>s?</p>\n</blockquote>\n<p>In the RT case, a spinlock is a mutex. A mutex has a <code>list_head</code> in it, so moving is unsound even when unlocked, no?</p>\n<p>(I suppose it's ok for non-RT in the archs we know spinlocks don't have self-references when unlocked, but I unless I'm missing something, it's not universally safe.)</p>",
+        "id": 339483069,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1677900215
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339483069\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339446837\">said</a>:</p>\n<blockquote>\n<p>But actually \"unlocked spinlock is safe to move\", or a boarder question, can <code>Unpin</code> be built from some <code>!Unpin</code>s?</p>\n</blockquote>\n<p>In the RT case, a spinlock is a mutex. A mutex has a <code>list_head</code> in it, so moving is unsound even when unlocked, no?</p>\n<p>(I suppose it's ok for non-RT in the archs we know spinlocks don't have self-references when unlocked, but I unless I'm missing something, it's not universally safe.)</p>\n</blockquote>\n<p>Good point on the RT case</p>",
+        "id": 339483476,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677900556
+    },
+    {
+        "content": "<p>However, <code>rt_mutex</code> now uses a rbtree instead of a list to record waiters, so.. still movable I think.</p>",
+        "id": 339483800,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677900863
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature/near/339483800\">said</a>:</p>\n<blockquote>\n<p>However, <code>rt_mutex</code> now uses a rbtree instead of a list to record waiters, so.. still movable I think.</p>\n</blockquote>\n<p>Implementation detail that I'm not sure we should depend on.  Raw spinlocks are also arch-dependent, x86 would be fine to move when unlocked, but we haven't checked all archs to confirm this, and even if did, I don't think at this stage that we can mandate that they don't introduce self-references, so it would be possible for some arch to introduce them in the future.</p>",
+        "id": 339486280,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1677902587
+    },
+    {
+        "content": "<p>I don't disagree ;-)</p>",
+        "id": 339486649,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677902964
+    },
+    {
+        "content": "<p>Except that <code>raw_spinlock</code> has to be 32bit, so it's very hard for it to self-reference, but it's possible.</p>",
+        "id": 339486758,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677903033
+    },
+    {
+        "content": "<p>Where does the 32bit size requirement come from?</p>",
+        "id": 339487505,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1677903765
+    },
+    {
+        "content": "<p><a href=\"https://lwn.net/Articles/590243/\">https://lwn.net/Articles/590243/</a></p>",
+        "id": 339487650,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677903998
+    },
+    {
+        "content": "<blockquote>\n<p>In the tip tree, MCS locks are used in the implementation of mutexes, but they do not replace the existing ticket spinlock implementation. One reason for this is size: ticket spinlocks fit into a single 32-bit word, while MCS locks do not. That turns out to be important: spinlocks are embedded into many kernel structures, some of which (notably struct page) cannot tolerate an increase in size. If the MCS lock technique is to be used throughout the kernel, some other approach will be needed.</p>\n</blockquote>",
+        "id": 339487660,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677904019
+    },
+    {
+        "content": "<p>9 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"288089\" href=\"/#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature\">#General &gt; Pin&lt;_&gt; in method signature</a> by <span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span>.</p>",
+        "id": 339492459,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1677908485
+    },
+    {
+        "content": "<p>A message was moved here from <a class=\"stream-topic\" data-stream-id=\"288089\" href=\"/#narrow/stream/288089-General/topic/Pin.3C_.3E.20in.20method.20signature\">#General &gt; Pin&lt;_&gt; in method signature</a> by <span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span>.</p>",
+        "id": 339492492,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1677908522
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/xarray.20is.20!Unpin.20.3F/near/339446837\">said</a>:</p>\n<blockquote>\n<p>But actually \"unlocked spinlock is safe to move\", or a boarder question, can <code>Unpin</code> be built from some <code>!Unpin</code>s?</p>\n</blockquote>\n<p>You can theoretically do something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">spinlock</span>: <span class=\"nc\">Spinlock</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">mtx</span>: <span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// Unpin is a safe trait</span>\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">Unpin</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"cm\">/*somehow initialize the two fields without pinning them*/</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">s</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">.</span><span class=\"n\">spinlock</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"c1\">// we now have a `&amp;mut Spinlock&lt;()&gt;`, but we can never lock it, since that requires pinning and we are not allowed to do that, since `Foo: Unpin`</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 339505502,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1677917664
+    },
+    {
+        "content": "<p>But it is not really useful.</p>",
+        "id": 339505524,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1677917674
+    },
+    {
+        "content": "<p>At the moment <code>XArray</code> is not pinned and even has the safety comment \"This data structure does not requiring pinning\".</p>",
+        "id": 339505629,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1677917745
+    }
+]

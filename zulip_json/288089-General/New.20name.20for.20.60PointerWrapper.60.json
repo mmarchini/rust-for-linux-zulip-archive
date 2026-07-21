@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>Hey folks, now that we're slowly upstreaming our changes, I'd like to hear opinions on renaming <code>PointerWrapper</code>.</p>\n<p>When I first <a href=\"https://github.com/Rust-for-Linux/linux/pull/55\">introduced</a> it over two years ago, it was basically just wrapping a pointer that was returned by <code>open</code>, used in a bunch of file callbacks, then given back to <code>release</code>.</p>\n<p>Now we rightly use it to transfer ownership to C of objects that have a pointer-sized representation. While C owns it, it can be borrowed (and different original objects have different borrowed representations, GATs held us here!), mutably borrowed, and eventually can be given back to Rust.</p>\n<p>So I was thinking of something like <code>COwnable</code> -- prefixing something with <code>C</code> isn't unprecedented (see <code>CStr</code>). But I'm not completely sold on the name. Any suggestions? Comments?</p>",
+        "id": 319127811,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672721800
+    },
+    {
+        "content": "<p><code>RawPtrOwnable</code> or <code>PtrOwnable</code>? I'd avoid having <code>c</code> in the name, since in theory <code>PointerWrapper</code> can also be used to transfer ownership to (mostly <code>unsafe</code>) Rust code, although you don't have to.</p>",
+        "id": 319129571,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1672723447
+    },
+    {
+        "content": "<p>Thanks Boqun!</p>\n<p>I'd like to avoid <code>Ptr</code> or <code>Pointer</code> in the name because this is not restricted to pointers. Anything that fits in up to a pointer size can implement this</p>",
+        "id": 319156481,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672739011
+    },
+    {
+        "content": "<p>UsizeOwnable then?</p>",
+        "id": 319210861,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1672757438
+    },
+    {
+        "content": "<p>KBox looks like also a good fit for it?</p>",
+        "id": 319233008,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1672763639
+    },
+    {
+        "content": "<p>What about <code>SmallOwnable</code>?</p>",
+        "id": 319281277,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1672780432
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"545090\">Vincenzo Palazzo (vincenzopalazzo)</span> <a href=\"#narrow/stream/288089-General/topic/New.20name.20for.20.60PointerWrapper.60/near/319233008\">said</a>:</p>\n<blockquote>\n<p>KBox looks like also a good fit for it?</p>\n</blockquote>\n<p>I think <code>KBox</code> would be a bit misleading because it might give people the impression that it's a kernel <code>Box</code>.</p>\n<p><code>UsizeOwnable</code> and <code>SmallOwnable</code> sound promising. <span class=\"user-mention\" data-user-id=\"546447\">@y86</span> are there precedents for referring to things that fit in a <code>usize</code> <code>Small</code>?</p>",
+        "id": 319410249,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672845345
+    },
+    {
+        "content": "<p>There is the <a href=\"https://crates.io/crates/smallvec\"><code>smallvec</code></a> crate, but it can store arbitrary amounts of data inline, similarly also <a href=\"https://crates.io/crates/smallstr\"><code>smallstr</code></a>. I think <code>UsizeOwnable</code> sounds a bit weird.</p>",
+        "id": 319415007,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1672846772
+    },
+    {
+        "content": "<p><code>small</code> in these two cases refers to the number of elements being small enough to fit on the stack, no?</p>\n<p>I think the weirdness of <code>UsizeOwnable</code> has to do with mixing size and ownership.</p>\n<p>How about <code>FFIOwnable</code>?</p>",
+        "id": 319590444,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672927059
+    },
+    {
+        "content": "<p>Are you also considering changing the method name of <code>*Ownable</code>/<code>PointerWrapper</code>, right now it seems to bind with pointers because <code>from_pointer</code> and <code>into_pointer</code>.</p>",
+        "id": 319629253,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1672938234
+    },
+    {
+        "content": "<p>One step back, maybe <code>Ownable</code> is the source of  weirdness? In fact, the<code>usize</code> or <code>ptr</code> doesn't <strong>own</strong> the object (I'd say the heap owns the object because if we drop the <code>usize</code> or <code>ptr</code>, the object still exists in the heap).</p>\n<p>Instead, <code>usize</code> or <code>ptr</code> represents or indexes the object, so how about <code>UsizeRepresentable</code> or <code>UsizeIndexable</code>?</p>",
+        "id": 319632486,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1672939147
+    },
+    {
+        "content": "<p>The trait has to do with ownership because Rust gives up ownership to some C code, which is responsible for eventually giving ownership back -- if this doesn't happen, we have a leak. The C code also owns in the sense that Rust doesn't have any more references to it, so the C code may, for example, get mutable references to the object as long as it knows there are no other references on the C side alone (as the Rust side doesn't).</p>\n<p>So saying that the object is representable with a <code>usize</code> is correct, but I feel is not a sufficient description of the trait.</p>\n<p>The reason I liked <code>FFIOwnable</code> was that the it conveys the idea of ownership plus that the object needs to representable by something that is understood/compatible with FFI (implicitly a <code>usize</code> at the moment, things may change if/when we adopt CHERI)</p>",
+        "id": 319634413,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672939681
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/288089-General/topic/New.20name.20for.20.60PointerWrapper.60/near/319634413\">said</a>:</p>\n<blockquote>\n<p>The trait has to do with ownership because Rust gives up ownership to some C code, which is responsible for eventually giving ownership back -- if this doesn't happen, we have a leak. The C code also owns in the sense that Rust doesn't have any more references to it, so the C code may, for example, get mutable references to the object as long as it knows there are no other references on the C side alone (as the Rust side doesn't).</p>\n</blockquote>\n<p>To me, the usage of <code>PointerWrapper</code> is to pass a Rust object through some C code and get back to Rust side, where C <strong>will NOT</strong> access the object (simply treat it as some sort of data). In this case, it's unclear to me that whether C owns the object ;-)</p>\n<p>If we consider the cases where C can access the object (even free it), then it makes sense to say C owns the object. But I haven't seen a use case yet, so I hesitate to accept the trait should cover that. Maybe we can start with <code>*Indexable</code> and later on if we do have the use cases, we can always introduce a subtrait <code>*Ownable</code>. I'm always bad at prediction though, so I might be wrong ;-)</p>\n<p>BTW, <code>FFIOwnable</code> or <code>ForeignOwnable</code>?</p>",
+        "id": 319644686,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1672942831
+    },
+    {
+        "content": "<p>I see your argument but I'm not sure I agree that one needs to access or free the object to be considered the \"owner\". Though I'm open to being convinced otherwise :)</p>\n<p>Let's look at the concrete <code>struct file</code> example: the <code>open</code> method returns a <code>Result&lt;T&gt;</code> where <code>T: PointerWrapper</code>. While the file is referenced, other methods on the trait (e.g., read/write/seek) are called with a <code>&lt;T as PointerWrapper&gt;::Borrowed</code> type (because they can be called concurrently, so this is a shared reference); eventually when the C side drops the file refcount to zero, it calls the <code>release</code> method, which takes a <code>T</code> as argument. The C side of course just stores an opaque value in <code>file::private_data</code>, but it manages the lifetime of that instance of <code>T</code> (handing ownership back to Rust when <code>file</code> is about to be freed). Doesn't it make sense to say that C owns the object despite not accessing it directly?</p>",
+        "id": 319661333,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672948329
+    },
+    {
+        "content": "<p>BTW, I do like <code>ForeignOwnable</code>, <code>FFIOwnable</code> has the unpleasant three uppercase letter at the beginning</p>",
+        "id": 319661671,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1672948461
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/288089-General/topic/New.20name.20for.20.60PointerWrapper.60/near/319661333\">said</a>:</p>\n<blockquote>\n<p>I see your argument but I'm not sure I agree that one needs to access or free the object to be considered the \"owner\". Though I'm open to being convinced otherwise :)</p>\n<p>Let's look at the concrete <code>struct file</code> example: the <code>open</code> method returns a <code>Result&lt;T&gt;</code> where <code>T: PointerWrapper</code>. While the file is referenced, other methods on the trait (e.g., read/write/seek) are called with a <code>&lt;T as PointerWrapper&gt;::Borrowed</code> type (because they can be called concurrently, so this is a shared reference); eventually when the C side drops the file refcount to zero, it calls the <code>release</code> method, which takes a <code>T</code> as argument. The C side of course just stores an opaque value in <code>file::private_data</code>, but it manages the lifetime of that instance of <code>T</code> (handing ownership back to Rust when <code>file</code> is about to be freed). Doesn't it make sense to say that C owns the object despite not accessing it directly?</p>\n</blockquote>\n<p>Good point and good example.</p>",
+        "id": 319822135,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1673024812
+    },
+    {
+        "content": "<p>So if C code has a call path to drop the object, it's fair to say the object is \"ownable\" by C</p>",
+        "id": 319823168,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1673025174
+    },
+    {
+        "content": "<p>Thanks Boqun!</p>\n<p>Anyone strongly opposes <code>ForeignOwnable</code>?</p>\n<p>(I'll wait a couple of days and go with it if I don't hear anything)</p>",
+        "id": 320031821,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1673149153
+    },
+    {
+        "content": "<p>I like <code>ForeignOwnable</code> too</p>",
+        "id": 320603809,
+        "sender_full_name": "alicef(gentoo)",
+        "timestamp": 1673415757
+    }
+]

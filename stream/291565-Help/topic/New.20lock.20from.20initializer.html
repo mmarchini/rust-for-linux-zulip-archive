@@ -1,0 +1,364 @@
+<html>
+<head><meta charset="utf-8"><title>New lock from initializer · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html">New lock from initializer</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="423596805"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423596805" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423596805">(Feb 27 2024 at 12:37)</a>:</h4>
+<p>I need to put something inside a lock that needs to be initialized pinned. The current lock initializer constructors take the protected type by value. I want to pass <code>impl PinInit&lt;_&gt;</code> instead. <a href="https://github.com/metaspace/linux/commit/9beeaad1da228f3e8ffdadb79a95dfa185da7863">This patch</a> works for my use case. Is this the right direction? <span class="user-mention" data-user-id="546447">@Benno Lossin</span></p>
+
+
+
+<a name="423597379"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423597379" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423597379">(Feb 27 2024 at 12:40)</a>:</h4>
+<p>Spinlock implements DerefMut, so you can get a <code>&amp;mut T</code> to the contents. That's not allowed for pinned values.</p>
+
+
+
+<a name="423597398"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423597398" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423597398">(Feb 27 2024 at 12:40)</a>:</h4>
+<p>Most likely, you'll need a separate lock type.</p>
+
+
+
+<a name="423598226"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423598226" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423598226">(Feb 27 2024 at 12:45)</a>:</h4>
+<p>Aside from what Alice mentioned, two other things:</p>
+<ul>
+<li>no need to have two functions, since <code>impl PinInit&lt;T&gt; = impl PinInit&lt;T, Infallible&gt;</code> and our error should be convertible from <code>Infallible</code> (<code>crate::error::Error: From&lt;Infallible&gt;</code>), so just the <code>try_...</code> version should be enough</li>
+</ul>
+<blockquote>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kernel</span>::<span class="n">init</span>::<span class="n">pin_init_from_closure</span><span class="p">(</span><span class="o">|</span><span class="n">place</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">t</span><span class="p">.</span><span class="n">__pinned_init</span><span class="p">(</span><span class="n">place</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">_</span><span class="p">)</span>
+<span class="p">})}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>It would probably be better to put this in its own function under <code>kernel::init</code> and then use that function here instead.</p>
+
+
+
+<a name="423598637"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423598637" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423598637">(Feb 27 2024 at 12:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423597379">said</a>:</p>
+<blockquote>
+<p>Spinlock implements DerefMut, so you can get a <code>&amp;mut T</code> to the contents. That's not allowed for pinned values.</p>
+</blockquote>
+<p>we could also change the lock to return a pinned guard</p>
+
+
+
+<a name="423598817"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423598817" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423598817">(Feb 27 2024 at 12:48)</a>:</h4>
+<p>I guess we could add <code>where T: Unpin</code> to the <code>DerefMut</code> impl.</p>
+
+
+
+<a name="423598860"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423598860" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423598860">(Feb 27 2024 at 12:49)</a>:</h4>
+<p>And add a method for returning <code>Pin&lt;&amp;mut T&gt;</code>.</p>
+
+
+
+<a name="423599307"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423599307" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423599307">(Feb 27 2024 at 12:51)</a>:</h4>
+<p>what is the problem with returning <code>Pin&lt;Guard&lt;'_, T, B&gt;&gt;</code></p>
+
+
+
+<a name="423599989"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423599989" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423599989">(Feb 27 2024 at 12:55)</a>:</h4>
+<p>Hmm, interesting. It might work.</p>
+
+
+
+<a name="423600324"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423600324" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423600324">(Feb 27 2024 at 12:56)</a>:</h4>
+<p>I guess I could put a <code>Pin&lt;Box&lt;_&gt;</code> in my lock, but I would like to not incur the extra pointer deref</p>
+
+
+
+<a name="423600670"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423600670" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423600670">(Feb 27 2024 at 12:58)</a>:</h4>
+<p>I don't see an issue with assuming that the data inside of a lock will have to be pinned, we already require that for the lock and there are workarounds for when you really have something <code>!Unpin</code> that you still need to move</p>
+
+
+
+<a name="423600783"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423600783" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423600783">(Feb 27 2024 at 12:58)</a>:</h4>
+<p>So just modifying <code>lock()</code> to return <code>Pin&lt;Guard&lt;...&gt;&gt;</code> should be enough</p>
+
+
+
+<a name="423610080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423610080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423610080">(Feb 27 2024 at 13:51)</a>:</h4>
+<p>does this mean the get_mut() function will need to return Pin&lt;&amp;mut T&gt; now, since we are moving to structurally pinning data in Lock</p>
+
+
+
+<a name="423610153"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423610153" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423610153">(Feb 27 2024 at 13:52)</a>:</h4>
+<p>yes</p>
+
+
+
+<a name="423615679"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423615679" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423615679">(Feb 27 2024 at 14:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423610080">said</a>:</p>
+<blockquote>
+<p>does this mean the get_mut() function will need to return Pin&lt;&amp;mut T&gt; now, since we are moving to structurally pinning data in Lock</p>
+</blockquote>
+<p>you mean deref_mut() ?</p>
+
+
+
+<a name="423615856"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423615856" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423615856">(Feb 27 2024 at 14:20)</a>:</h4>
+<p>no, Boqun is probably talking about <a href="https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>
+
+
+
+<a name="423616280"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423616280" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423616280">(Feb 27 2024 at 14:22)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423615856">said</a>:</p>
+<blockquote>
+<p>no, Boqun is probably talking about <a href="https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>
+</blockquote>
+<p>Oh, I have trouble keeping up at the moment</p>
+
+
+
+<a name="423621745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423621745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423621745">(Feb 27 2024 at 14:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423600783">said</a>:</p>
+<blockquote>
+<p>So just modifying <code>lock()</code> to return <code>Pin&lt;Guard&lt;...&gt;&gt;</code> should be enough</p>
+</blockquote>
+<p>There are some things to sort out with <code>condvar</code>. I gave it a quick shot, but I think maybe I am <a href="https://github.com/metaspace/linux/commits/spinlock-init/">not going in the right direction</a> (last commit)</p>
+
+
+
+<a name="423623614"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423623614" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423623614">(Feb 27 2024 at 14:50)</a>:</h4>
+<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>
+
+
+
+<a name="423624028"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423624028" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423624028">(Feb 27 2024 at 14:52)</a>:</h4>
+<p>at the top of <code>do_unlocked</code> just obtain a <code>&amp;mut Guard</code> via <code>get_mut_unchecked</code>.</p>
+
+
+
+<a name="423657014"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423657014" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423657014">(Feb 27 2024 at 17:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423615856">said</a>:</p>
+<blockquote>
+<p>no, Boqun is probably talking about <a href="https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/">https://lore.kernel.org/rust-for-linux/20240226-rust-locks-get-mut-v4-1-24abf57707a8@gmail.com/</a></p>
+</blockquote>
+<p>Yep, it's more of a design choice: do we want to structurally pin <code>data</code> in a <code>Lock</code>, if so, then all the APIs that return the mutable reference to the <code>data</code> have to be returning <code>Pin&lt;&amp;mut T&gt;</code>. It's a all-or-nothing case.</p>
+
+
+
+<a name="423657253"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423657253" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423657253">(Feb 27 2024 at 17:08)</a>:</h4>
+<p>but you need to keep in mind that data that is <code>Unpin</code> can still easily be accessed, since <code>Pin&lt;P&gt;</code> with <code>P: DerefMut&lt;Target = T&gt;</code>implements <code>DerefMut&lt;Target = T&gt;</code>.</p>
+
+
+
+<a name="423657318"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423657318" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423657318">(Feb 27 2024 at 17:08)</a>:</h4>
+<p>so it is not a problem for people that use eg <code>Mutex&lt;u64&gt;</code> etc</p>
+
+
+
+<a name="423658080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423658080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423658080">(Feb 27 2024 at 17:12)</a>:</h4>
+<p>Right, agreed.</p>
+
+
+
+<a name="423658378"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423658378" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423658378">(Feb 27 2024 at 17:14)</a>:</h4>
+<p>It's just that if one safe API returns <code>&amp;mut T</code> and the other safe API returns <code>Pin&lt;&amp;mut T&gt;</code>, it's unsound.</p>
+
+
+
+<a name="423658453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423658453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423658453">(Feb 27 2024 at 17:14)</a>:</h4>
+<p>so have to make a choice ;-)</p>
+
+
+
+<a name="423658465"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423658465" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423658465">(Feb 27 2024 at 17:14)</a>:</h4>
+<p>yes</p>
+
+
+
+<a name="423658641"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423658641" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423658641">(Feb 27 2024 at 17:15)</a>:</h4>
+<p>As I understand it’s either that or two different lock types?</p>
+
+
+
+<a name="423672640"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423672640" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423672640">(Feb 27 2024 at 18:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423623614">said</a>:</p>
+<blockquote>
+<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>
+</blockquote>
+<p>For <code>Guard&lt;'_, T, _&gt;</code> <code>guard.as_mut()</code> gives me a <code>Pin&lt;&amp;mut T&gt;</code>. I need a <code>Pin&lt;&amp;mut Guard&gt;</code> I think. Hence the transmute. I don't see any other way to go from <code>&amp;mut Pin&lt;P&gt;</code> to <code>Pin&lt;&amp;mut P&gt;</code>. Did I miss something?</p>
+
+
+
+<a name="423672797"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423672797" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423672797">(Feb 27 2024 at 18:37)</a>:</h4>
+<p>The <code>Pin::into_.*</code> methods consume the <code>Pin</code>, and I only have a reference available</p>
+
+
+
+<a name="423697835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423697835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423697835">(Feb 27 2024 at 21:15)</a>:</h4>
+<p>The <code>Pin</code> type has a method called <code>as_mut</code> that should work on <code>Pin&lt;Guard&lt;...&gt;&gt;</code>.</p>
+
+
+
+<a name="423697862"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423697862" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423697862">(Feb 27 2024 at 21:15)</a>:</h4>
+<p>Assuming the guard implements <code>DerefMut</code></p>
+
+
+
+<a name="423711167"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423711167" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423711167">(Feb 27 2024 at 22:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423672640">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423623614">said</a>:</p>
+<blockquote>
+<p>probably a good idea to change <code>do_unlocked</code> to use <code>self: Pin&lt;&amp;mut Self&gt;</code> since then you do not need the transmute, instead just do <code>guard.as_mut().do_unlocked(...)</code></p>
+</blockquote>
+<p>For <code>Guard&lt;'_, T, _&gt;</code> <code>guard.as_mut()</code> gives me a <code>Pin&lt;&amp;mut T&gt;</code>. I need a <code>Pin&lt;&amp;mut Guard&gt;</code> I think. Hence the transmute. I don't see any other way to go from <code>&amp;mut Pin&lt;P&gt;</code> to <code>Pin&lt;&amp;mut P&gt;</code>. Did I miss something?</p>
+</blockquote>
+<p>ah I see, I guess that you need the transmute...</p>
+
+
+
+<a name="423711252"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423711252" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423711252">(Feb 27 2024 at 22:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423697835">said</a>:</p>
+<blockquote>
+<p>The <code>Pin</code> type has a method called <code>as_mut</code> that should work on <code>Pin&lt;Guard&lt;...&gt;&gt;</code>.</p>
+</blockquote>
+<p>no its signature is (<a href="https://doc.rust-lang.org/std/pin/struct.Pin.html#method.as_mut">https://doc.rust-lang.org/std/pin/struct.Pin.html#method.as_mut</a>):</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">as_mut</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="o">&lt;</span><span class="n">P</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Deref</span><span class="o">&gt;</span>::<span class="n">Target</span><span class="o">&gt;</span>
+</code></pre></div>
+<p>So it will turn it into a <code>Pin&lt;&amp;mut T&gt;</code>.</p>
+
+
+
+<a name="423755844"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423755844" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423755844">(Feb 28 2024 at 06:44)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423697862">said</a>:</p>
+<blockquote>
+<p>Assuming the guard implements <code>DerefMut</code></p>
+</blockquote>
+<p>What Benno said. That method returns a <code>Pin&lt;&amp;mut &lt;Guard as DerefMut&gt;::Target&gt;</code>.</p>
+
+
+
+<a name="423761246"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423761246" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423761246">(Feb 28 2024 at 07:34)</a>:</h4>
+<p>I think we can change <code>Guard::do_unlocked</code> like so:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">fn</span> <span class="nf">do_unlocked</span><span class="p">(</span><span class="n">this</span>: <span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">cb</span>: <span class="nc">impl</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// SAFETY: `Pin` is #[repr(transparent)] and we are not moving out of</span>
+<span class="w">        </span><span class="c1">// the `&amp;mut T` pointee that we manage</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="o">=</span><span class="w">  </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">core</span>::<span class="n">mem</span>::<span class="n">transmute</span>::<span class="o">&lt;&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">Guard</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">Guard</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="n">this</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: The caller owns the lock, so it is safe to unlock it.</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">B</span>::<span class="n">unlock</span><span class="p">(</span><span class="n">this</span><span class="p">.</span><span class="n">lock</span><span class="p">.</span><span class="n">state</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="n">this</span><span class="p">.</span><span class="n">state</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: The lock was just unlocked above and is being relocked now.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_relock</span><span class="w"> </span><span class="o">=</span>
+<span class="w">            </span><span class="n">ScopeGuard</span>::<span class="n">new</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">B</span>::<span class="n">relock</span><span class="p">(</span><span class="n">this</span><span class="p">.</span><span class="n">lock</span><span class="p">.</span><span class="n">state</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">this</span><span class="p">.</span><span class="n">state</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">        </span><span class="n">cb</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="423766316"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423766316" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423766316">(Feb 28 2024 at 08:15)</a>:</h4>
+<p>Updated the patch: <a href="https://github.com/metaspace/linux/commit/0557fa0acad0d43badbca7083c59c7fbb6bc3e30">https://github.com/metaspace/linux/commit/0557fa0acad0d43badbca7083c59c7fbb6bc3e30</a></p>
+
+
+
+<a name="423776851"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423776851" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423776851">(Feb 28 2024 at 09:23)</a>:</h4>
+<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>
+
+
+
+<a name="423778121"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423778121" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423778121">(Feb 28 2024 at 09:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423776851">said</a>:</p>
+<blockquote>
+<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>
+</blockquote>
+<p>You mean coerce the ref to a pointer, use <code>pointer::cast</code> and then back to reference with <code>&amp;*ptr</code>?</p>
+
+
+
+<a name="423778341"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423778341" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423778341">(Feb 28 2024 at 09:32)</a>:</h4>
+<p>What is the advantages of that route, in your opinion?</p>
+
+
+
+<a name="423778722"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423778722" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423778722">(Feb 28 2024 at 09:34)</a>:</h4>
+<p>It's this topic again: <a href="#narrow/stream/348125-Weekly-Meeting-Wed-1900-UTC/topic/.60transmute.60.20on.20DST.20reference">https://rust-for-linux.zulipchat.com/#narrow/stream/348125-Weekly-Meeting-Wed-1900-UTC/topic/.60transmute.60.20on.20DST.20reference</a></p>
+
+
+
+<a name="423792206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423792206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423792206">(Feb 28 2024 at 10:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/New.20lock.20from.20initializer/near/423776851">said</a>:</p>
+<blockquote>
+<p>I hate the transmute. It seems like <code>Pin</code> is missing some APIs for accessing data in the pointer other than the data it references, though. At least use a pointer cast.</p>
+</blockquote>
+<p>yeah I agree</p>
+
+
+
+<a name="423879294"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423879294" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423879294">(Feb 28 2024 at 18:36)</a>:</h4>
+<p>seems  like a <code>map_inner_unchecked_mut</code> is needed?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">P</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">P</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// # Safety</span>
+<span class="w">    </span><span class="sd">/// `f` must not move the underlying object or return a reference which allow others to move it.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span> <span class="nf">map_inner_unchecked_mut</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">F</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">f</span>: <span class="nc">F</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">T</span>
+<span class="w">    </span><span class="k">where</span><span class="w"> </span><span class="n">F</span>: <span class="nb">FnOnce</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">P</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">T</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">f</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">pointer</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="423879684"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/New%20lock%20from%20initializer/near/423879684" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/New.20lock.20from.20initializer.html#423879684">(Feb 28 2024 at 18:39)</a>:</h4>
+<p>or just name it <code>with_inner</code></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

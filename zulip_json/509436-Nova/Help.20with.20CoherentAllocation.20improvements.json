@@ -1,0 +1,26 @@
+[
+    {
+        "content": "<p>Hey! I'm giving a try to <a href=\"https://docs.kernel.org/gpu/nova/core/todo.html#coherentallocation-improvements-coha\">CoherentAllocation improvements [COHA]</a> (or what's left of it). The <code>as_slice</code> and <code>write</code> methods already exist in <code>CoherentAllocation</code>, but I was trying to solve some mentions of it left in the code, e.g. <a href=\"https://gitlab.freedesktop.org/drm/nova/-/blob/nova-next/drivers/gpu/nova-core/firmware/fwsec.rs?ref_type=heads#L153\">here</a>, but I've run into some problems.</p>\n<p>I've tried to replace the implementation of the function by <code>T::from_bytes(unsafe { fw.as_slice(offset, size_of::&lt;T&gt;())? }).ok_or(EINVAL)</code>, but I get problems with the lifetimes, because the compiler correctly infers that the lifetime of the resulting reference is the same as the lifetime of the <code>DmaObject</code>, which isn't the case now.<br>\nI see several options:</p>\n<ul>\n<li>Modify the <code>as_slice</code> method to return a ref with a different lifetime. It works, but that's outside Nova and even if the function is unsafe I feel like that makes it a bit more dangerous, even if that's okay for the use case here.</li>\n<li>Not use <code>as_slice</code> or do some tricks, so the compiler allows me to return the ref with a different lifetime. I've tried it and it works, but is uglier.</li>\n<li>Modify the code that uses <code>transmute</code>, so it drops the immutable refs before getting mutable ones. Doable, but also ugly, specially since we know the code is sound and the refs refer to different parts of the memory.</li>\n</ul>\n<p>I also have another problem, because I can't use <code>from_bytes_mut</code> if the type doesn't implement <code>AsBytes</code>. I checked the types we are using and it should be fine to implement it for all of them except for <code>FrtsCmd</code> which has padding (<code>AsBytes</code> doesn't allow padding). One solution would be to read its parts <code>read_vbios</code> and <code>frts_region</code> separately.</p>\n<p>Sorry for the message being this long <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>. I would greatly appreciate any tips on which path to take! I plan on submitting a patch for this soon.</p>",
+        "id": 544036701,
+        "sender_full_name": "Daniel del Castillo",
+        "timestamp": 1760039450
+    },
+    {
+        "content": "<p>Okay, I actually realized <code>FrtsCmd</code> doesn't have padding thanks to it being <code>repr(packed)</code> and then decided not to use <code>as_slice</code> for that use case. However, then rereading <a href=\"https://docs.kernel.org/gpu/nova/core/todo.html#coherentallocation-improvements-coha\">the task</a>, I noticed it actually says there should be safe <code>as_slice</code> and <code>write</code> methods in <code>CoherentAllocation</code>. I have no idea how we could enforce from code that the device is no reading or writing to the DMA memory (which are the safety requirements for those functions). Can somebody point me in the right direction or tell me if this is even possible?</p>\n<p>Cc: <span class=\"user-mention\" data-user-id=\"704742\">@Abdiel Janulgue</span></p>",
+        "id": 544251311,
+        "sender_full_name": "Daniel del Castillo",
+        "timestamp": 1760132214
+    },
+    {
+        "content": "<p>Re: the lifetime issue, I think you can get around it by moving the order in which the calling code does things (or doing a few minor copies). That should take care of the lifetimes being merged (tbh I'm not even sure having different lifetimes is correct to begin with)</p>",
+        "id": 544844501,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1760479580
+    },
+    {
+        "content": "<p>I don't think <code>CoherentAllocation</code>'s <code>as_slice</code> and <code>write</code> can ever be safe, for the reason you mentioned. We do know that the device is not accessing that memory though, because we are in the constructor of the object and can guarantee that we are the sole user of it at that time.</p>",
+        "id": 544845088,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1760479805
+    }
+]

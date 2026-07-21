@@ -1,0 +1,254 @@
+[
+    {
+        "content": "<p>I think I found a way to abstract device IDs without any macros. This is the user-side diff of the change (using rnvme as example):</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/drivers/block/rnvme.rs b/drivers/block/rnvme.rs</span>\n<span class=\"gh\">index 427d1161388c..96bd96b7070d 100644</span>\n<span class=\"gd\">--- a/drivers/block/rnvme.rs</span>\n<span class=\"gi\">+++ b/drivers/block/rnvme.rs</span>\n<span class=\"gu\">@@ -566,10 +566,13 @@ fn dbbuf_set(</span>\n<span class=\"w\"> </span>impl pci::Driver for NvmeDevice {\n<span class=\"w\"> </span>    type Data = Arc&lt;NvmeData&gt;;\n\n<span class=\"gd\">-    define_pci_id_table! {</span>\n<span class=\"gd\">-        (),</span>\n<span class=\"gd\">-        [ (pci::DeviceId::with_class(bindings::PCI_CLASS_STORAGE_EXPRESS, 0xffffff), None) ]</span>\n<span class=\"gd\">-    }</span>\n<span class=\"gi\">+    type IdInfo = ();</span>\n<span class=\"gi\">+</span>\n<span class=\"gi\">+    const ID_TABLE: &amp;'static dyn kernel::device_id::IdTable&lt;pci::DeviceId, ()&gt; =</span>\n<span class=\"gi\">+        &amp;kernel::device_id::IdArray::new([(</span>\n<span class=\"gi\">+            pci::DeviceId::with_class(bindings::PCI_CLASS_STORAGE_EXPRESS, 0xffffff),</span>\n<span class=\"gi\">+            (),</span>\n<span class=\"gi\">+        )]);</span>\n\n<span class=\"w\"> </span>    fn probe(pci_dev: &amp;mut pci::Device, _id: Option&lt;&amp;Self::IdInfo&gt;) -&gt; Result&lt;Arc&lt;NvmeData&gt;&gt; {\n<span class=\"w\"> </span>        pr_info!(\"probe called!\\n\");\n</code></pre></div>\n<p>Still hacking around, will share my branch as soon as I get a MVP</p>",
+        "id": 471984077,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1726961349
+    },
+    {
+        "content": "<p>Cool!</p>",
+        "id": 472017899,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1726986323
+    },
+    {
+        "content": "<p>(deleted)</p>",
+        "id": 472018441,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1726986741
+    },
+    {
+        "content": "<p>Did you change C to remove the sentinel?</p>",
+        "id": 472018495,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1726986799
+    },
+    {
+        "content": "<p>No, sentinel is still added by <code>IdTable::new</code></p>",
+        "id": 472035964,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727000828
+    },
+    {
+        "content": "<p><a href=\"https://github.com/nbdd0121/linux/tree/rnvme-device-id-without-macro\">https://github.com/nbdd0121/linux/tree/rnvme-device-id-without-macro</a></p>",
+        "id": 472047645,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727012330
+    },
+    {
+        "content": "<p>Two key tricks here:</p>\n<ol>\n<li>Use <code>MaybeUninit</code> and <code>transmute_copy</code> to essentially implement array unzip using const fn. This avoids macros for first/second element.</li>\n<li>Use <code>transmute_copy</code> + raw pointer ops to avoid <code>to_rawid</code> function, so it neither needs macro nor const trait impl</li>\n</ol>",
+        "id": 472048925,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727013493
+    },
+    {
+        "content": "<p>That's pretty nice. If you don't mind, I'll pick this up and add you as Co-author and add your signed-off-by.</p>",
+        "id": 474330398,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727883035
+    },
+    {
+        "content": "<p>Feel free</p>",
+        "id": 474330459,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727883056
+    },
+    {
+        "content": "<p>I'd probably add a type alias for <code>&amp;'static dyn kernel::device_id::IdTable&lt;T, Self::IdInfo&gt;</code> Otherwise this looks a bit too verbose I think.</p>",
+        "id": 474331460,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727883362
+    },
+    {
+        "content": "<p>Or you can keep the top-level macro, but expand it to const call directly</p>",
+        "id": 474331653,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727883422
+    },
+    {
+        "content": "<p>Yeah, I was considering that as well.</p>",
+        "id": 474331752,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727883454
+    },
+    {
+        "content": "<p>Not yet sure which one I like better.</p>",
+        "id": 474331904,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727883489
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">IdInfo</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">();</span>\n\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID_TABLE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">IdTable</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">IdInfo</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">IdArray</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">([(</span>\n<span class=\"w\">        </span><span class=\"n\">pci</span><span class=\"p\">::</span><span class=\"n\">DeviceId</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">PCI_VENDOR_ID_NVIDIA</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">PCI_ANY_ID</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"p\">(),</span>\n<span class=\"w\">    </span><span class=\"p\">)]);</span>\n</code></pre></div>\n<p>So, that's how it turns out with just a type alias. Pretty clean, I think.</p>",
+        "id": 474371197,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727894858
+    },
+    {
+        "content": "<p>just one question, the macro version permitted <code>None</code> as the value, do we want people to just set <code>IdInfo = Option&lt;...&gt;</code>, or why did the macro version have that?</p>",
+        "id": 474371514,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1727894945
+    },
+    {
+        "content": "<p>I think the macro version inherited <code>None</code> from the old const eval version</p>",
+        "id": 474371599,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727894972
+    },
+    {
+        "content": "<p>It's actually quite hard to make the const fn actually work because <code>IdInfo</code> doesn't need to be <code>Copy</code></p>",
+        "id": 474371776,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727895012
+    },
+    {
+        "content": "<p>But I managed to use <code>MaybeUninit</code> + transmute_copy a lot to work that around</p>",
+        "id": 474371828,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727895032
+    },
+    {
+        "content": "<p>If people actually want <code>IdInfo</code> only sometimes then I think asking them to set <code>IdInfo = Option&lt;...&gt;</code> is a reasonable ask</p>",
+        "id": 474372054,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727895120
+    },
+    {
+        "content": "<p>yeah I also think it's reasonable, was just wondering why the previous version had it automatic</p>",
+        "id": 474372217,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1727895148
+    },
+    {
+        "content": "<p>What do we do with</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// Stable in Rust 1.79</span>\n<span class=\"cp\">#![feature(inline_const)]</span>\n</code></pre></div>\n<p>Can we suppress warnings for later compilers?</p>",
+        "id": 474373087,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1727895312
+    },
+    {
+        "content": "<p>It's a lint. You can silence it with <code>-Awhatever-the-lint-is-called</code></p>",
+        "id": 474373288,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1727895354
+    },
+    {
+        "content": "<p><code>#![allow(stable_features)]</code></p>",
+        "id": 474374084,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1727895537
+    },
+    {
+        "content": "<p><code>-Astable_features</code> is passed since v6.11, so that one should not be a problem.</p>",
+        "id": 474412142,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1727907833
+    },
+    {
+        "content": "<p>I noticed that the changes mentioned here landed into: <code>staging/rust-device</code>. I took the opportunity to rebased my branches on top of it.</p>\n<p>I rewrote the modpost alias generation in consequence: <a href=\"https://github.com/Fabo/linux/commit/e457464ffa7e3c2ff94237bca4c263bc60ddd467\">https://github.com/Fabo/linux/commit/e457464ffa7e3c2ff94237bca4c263bc60ddd467</a><br>\nHopefully this wasn't done already by someone else.</p>\n<p>In device drivers, the usage ends up like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">of_device_table</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">MODULE_OF_TABLE</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">OF_TABLE</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">[(</span><span class=\"n\">of</span><span class=\"p\">::</span><span class=\"n\">DeviceId</span><span class=\"p\">::</span><span class=\"n\">with_compatible</span><span class=\"p\">(</span><span class=\"n\">c_str</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"onnn,ncv6336\"</span><span class=\"p\">)),</span><span class=\"w\"> </span><span class=\"p\">()),]</span>\n<span class=\"p\">);</span>\n\n<span class=\"o\">..</span><span class=\"p\">.</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">i2c</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Ncv6336</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">I2C_DEVICE_ID_TABLE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">i2c</span><span class=\"p\">::</span><span class=\"n\">IdTable</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">I2C_TABLE</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">OF_DEVICE_ID_TABLE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">of</span><span class=\"p\">::</span><span class=\"n\">IdTable</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">OF_TABLE</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>The usage of the macros are not necessary if you don't care about the modpost aliases, but I think in most case people would want to use them for i2c and DT.</p>\n<p>Example: <a href=\"https://github.com/Fabo/linux/commit/32db17bfac1270e45e0d45adba19b6b4e96d3cd9#diff-81e1707f4f5073abc61ff6e43d66360a23b3f6ffb078a6c0678e481c97205782R107\">https://github.com/Fabo/linux/commit/32db17bfac1270e45e0d45adba19b6b4e96d3cd9#diff-81e1707f4f5073abc61ff6e43d66360a23b3f6ffb078a6c0678e481c97205782R107</a></p>",
+        "id": 477865712,
+        "sender_full_name": "Fabien Parent",
+        "timestamp": 1729399454
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"585586\">@Fabien Parent</span> What I came up with is very close to this. What I'm struggling with (and dislike) is that we need to define the actual ID table outside of the driver scope.</p>",
+        "id": 477907325,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729440599
+    },
+    {
+        "content": "<p>I didn't really see any other options.</p>",
+        "id": 477907452,
+        "sender_full_name": "Fabien Parent",
+        "timestamp": 1729440701
+    },
+    {
+        "content": "<p>Neither do I, unfortunately.</p>",
+        "id": 477907468,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729440715
+    },
+    {
+        "content": "<p>It'd also not resolve with an <code>#[alias]</code> annotation unfortunately, since it wouldn't work with <code>const</code> I guess and static associates are not supported either.</p>",
+        "id": 477907587,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729440820
+    },
+    {
+        "content": "<p>My approach was to make <code>IdTable</code> a struct again and use it to also store the whole size of the array for modpost. And then integrate the modpost macro in <code>module_*_driver!</code>.</p>\n<p>This way, we could keep the definition of the ID table within the <code>impl</code> block.</p>",
+        "id": 477926041,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729457684
+    },
+    {
+        "content": "<p>It would make <code>IdTable::new</code> unsafe though.</p>",
+        "id": 477926083,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729457753
+    },
+    {
+        "content": "<p>So, I think your solution sucks less. Mind if I pick it up with some slight modifications and add your CDB and SOB?</p>",
+        "id": 477926161,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729457799
+    },
+    {
+        "content": "<p>Sure</p>",
+        "id": 477926203,
+        "sender_full_name": "Fabien Parent",
+        "timestamp": 1729457867
+    },
+    {
+        "content": "<p>I do hit a compiler issue with your code. It happens when the raw device ID (e.g. <code>struct pci_device_id</code>) in </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"cp\">$module_table_name</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"cp\">$table_name</span><span class=\"p\">.</span><span class=\"n\">raw_ids</span><span class=\"p\">().</span><span class=\"n\">size</span><span class=\"p\">()]</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">transmute_copy</span><span class=\"p\">(</span><span class=\"cp\">$table_name</span><span class=\"p\">.</span><span class=\"n\">raw_ids</span><span class=\"p\">())</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>has padding. The compiler complains about the padding value being uninitialized.</p>\n<p>I can reproduce this in a simple example as well: <a href=\"https://godbolt.org/z/M8dzrdjzs\">https://godbolt.org/z/M8dzrdjzs</a></p>\n<p>The complaint maybe somehow makes sense I guess, but It only happens in <code>const</code> context. It also goes away when wrapping <code>Foo</code> (from the example) in <code>MaybeUninit</code>, which is a bit weird, because <code>MaybeUninit</code> claims to be transparent.</p>",
+        "id": 477934114,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729464467
+    },
+    {
+        "content": "<p>I had the same issue with I2C. I used <code>core::mem::MaybeUninit::zeroed()</code> to make sure every single byte is initialized.</p>",
+        "id": 477935066,
+        "sender_full_name": "Fabien Parent",
+        "timestamp": 1729465336
+    },
+    {
+        "content": "<p>Transparent only means the layout is identical. u8 cannot hold an uninitialized byte.</p>",
+        "id": 477935231,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1729465521
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/.60DeviceId.60.20without.20macros/near/477935231\">said</a>:</p>\n<blockquote>\n<p>Transparent only means the layout is identical. u8 cannot hold an uninitialized byte.</p>\n</blockquote>\n<p>Sure, but I mean MaybeUninit should be transparent, so MaybeUninit&lt;Foo&gt; should have the same layout as Foo. Why is it fine to convert MaybeUninit&lt;Foo&gt; to [u8] in this case?</p>",
+        "id": 477938067,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729468319
+    },
+    {
+        "content": "<p>It's still UB if <code>MaybeUninit&lt;Foo&gt;</code> contains an uninitialized byte</p>",
+        "id": 477966683,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1729490546
+    },
+    {
+        "content": "<p>You'll need to transmute it to <code>[MaybeUninit&lt;u8&gt;; ...]</code> it there's an uninitialized byte</p>",
+        "id": 477966987,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1729490689
+    },
+    {
+        "content": "<blockquote>\n<p>It's still UB if <code>MaybeUninit&lt;Foo&gt;</code> contains an uninitialized byte</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span>  That's what I would expect, but the compiler error goes away for some reason.</p>",
+        "id": 477992216,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1729499474
+    },
+    {
+        "content": "<p>UB with uninitialized bytes are not always caught. I don't think it's ever caught outside of const context.</p>",
+        "id": 477993279,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1729499768
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/.60DeviceId.60.20without.20macros/near/477992216\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>It's still UB if <code>MaybeUninit&lt;Foo&gt;</code> contains an uninitialized byte</p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span>  That's what I would expect, but the compiler error goes away for some reason.</p>\n</blockquote>\n<p>Do you have an example? The minimal example you give doesn't show that when I add <code>MaybeUninit</code> to <code>Foo</code>.</p>",
+        "id": 478059625,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1729516987
+    }
+]

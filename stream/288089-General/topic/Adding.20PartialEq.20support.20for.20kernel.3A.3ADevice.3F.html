@@ -1,0 +1,46 @@
+<html>
+<head><meta charset="utf-8"><title>Adding PartialEq support for kernel::Device? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Adding.20PartialEq.20support.20for.20kernel.3A.3ADevice.3F.html">Adding PartialEq support for kernel::Device?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="606577131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Adding%20PartialEq%20support%20for%20kernel%3A%3ADevice%3F/near/606577131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Adding.20PartialEq.20support.20for.20kernel.3A.3ADevice.3F.html#606577131">(Jun 25 2026 at 19:49)</a>:</h4>
+<p>Hey! So this isn't super high priority and I likely won't get to it until after rebasing the KMS stuff finally, but after applying Danilo's <code>DeviceContext</code> follow-up work (specifically, the patch which adds <code>T::ParentDevice</code> to <code>drm::Driver</code>) to a local copy of drm-rust-next for another patch series of mine, I ended up with a rather silly pattern that seems to tell me we probably should streamline this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="n">dev</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">dev</span><span class="p">().</span><span class="n">as_ref</span><span class="p">().</span><span class="n">as_ref</span><span class="p">().</span><span class="n">as_raw</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">EINVAL</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+</code></pre></div>
+<p>It seems like it's probably not a bad idea for us to start adding PartialEq to so we don't need as_ref() or as_raw() for doing equality checks</p>
+
+
+
+<a name="606932880"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Adding%20PartialEq%20support%20for%20kernel%3A%3ADevice%3F/near/606932880" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Adding.20PartialEq.20support.20for.20kernel.3A.3ADevice.3F.html#606932880">(Jun 27 2026 at 20:30)</a>:</h4>
+<p>You could slightly improve it by writing it as</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">parent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">dev</span><span class="p">().</span><span class="n">as_ref</span><span class="p">();</span>
+<span class="k">if</span><span class="w"> </span><span class="n">dev</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">parent</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">as_raw</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">EINVAL</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>But implementing <code>PartialEq</code> is a good idea regardless , I remember I saw a patch on the list for this a while ago [1].</p>
+<p>Maybe you can check with <span class="user-mention" data-user-id="554954">@Matthew Maurer</span> to pick it up; we could theoretically change his patch to a generic impl for <code>T: AsRef&lt;Device&lt;Ctx&gt;&gt;</code> since Device has an <code>AsRef</code> to itself:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">Ctx</span><span class="p">:</span><span class="w"> </span><span class="nc">DeviceContext</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">AsRef</span><span class="o">&lt;</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Ctx</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Device</span><span class="o">&lt;</span><span class="n">Ctx</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[inline]</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">as_ref</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">Ctx</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>However, this is dangerous since there's no semantic guarantee about <code>AsRef</code>, so it should rather be a separate trait or limited to just <code>device::Device</code>. </p>
+<p>[1] <a href="https://lore.kernel.org/all/20260203-qcom-socinfo-v2-3-d6719db85637@google.com/">https://lore.kernel.org/all/20260203-qcom-socinfo-v2-3-d6719db85637@google.com/</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

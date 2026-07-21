@@ -1,0 +1,76 @@
+<html>
+<head><meta charset="utf-8"><title>Potential overuse of repr(C) in Rust DRM bindings? · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html">Potential overuse of repr(C) in Rust DRM bindings?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="534778808"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534778808" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rahul Rameshbabu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534778808">(Aug 16 2025 at 18:46)</a>:</h4>
+<p>I was reading through the Rust DRM bindings since I am working on some new functionality there. I was a bit surprised by the following pattern.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// A typed DRM device with a specific `drm::Driver` implementation.</span>
+<span class="sd">///</span>
+<span class="sd">/// The device is always reference-counted.</span>
+<span class="sd">///</span>
+<span class="sd">/// # Invariants</span>
+<span class="sd">///</span>
+<span class="sd">/// `self.dev` is a valid instance of a `struct device`.</span>
+<span class="cp">#[repr(C)]</span>
+<span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">drm</span><span class="p">::</span><span class="n">Driver</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">drm_device</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">T</span><span class="p">::</span><span class="n">Data</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>bindings::drm_device</code> is already <code>#repr(C)</code>, and I do not understand the value of making <code>drm::Device</code> <code>#repr(C)</code>. If I understand correctly, it is not being based through the FFI boundaries?</p>
+
+
+
+<a name="534808953"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534808953" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534808953">(Aug 17 2025 at 07:58)</a>:</h4>
+<p>It has the effect of ensuring that <code>dev</code> is placed before <code>data</code>.</p>
+
+
+
+<a name="534817402"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534817402" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534817402">(Aug 17 2025 at 11:24)</a>:</h4>
+<p>In particular, IIRC, we need to enforce the C layout if we want container_of &amp; friends to work</p>
+
+
+
+<a name="534822105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534822105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534822105">(Aug 17 2025 at 12:56)</a>:</h4>
+<p><code>container_of!</code> also works with <code>repr(Rust)</code> structs</p>
+
+
+
+<a name="534849678"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534849678" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Rahul Rameshbabu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534849678">(Aug 17 2025 at 22:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F/near/534808953">said</a>:</p>
+<blockquote>
+<p>It has the effect of ensuring that <code>dev</code> is placed before <code>data</code>.</p>
+</blockquote>
+<p>Hmm, that was my initial thought. However as pointed out by this thread, I would expect <code>offset_of!</code>, <code>container_of! </code>, etc. to all work fine with Rust representation without needing to ensure the memory layout in a way where the declared field order decides the memory layout. At least, this is the conclusion I have come to from my skim of <code>rust/kernel/drm/device.rs</code>. However, maybe I am missing some logic that requires this ordering.</p>
+
+
+
+<a name="534948380"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/534948380" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#534948380">(Aug 18 2025 at 13:07)</a>:</h4>
+<p>it's not fully insulated from the FFI border as its memory allocated/freed on C side through <code>__drm_dev_alloc</code>. That should work with <code>repr(Rust)</code> the offset  of <code>bindings::drm_device</code> is passed as argument  and the struct itself isn't directly used on C side.<br>
+<code>repr(C)</code> could have limited use when looking at register dumps of kernel warnings/oopses</p>
+
+
+
+<a name="535139696"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Potential%20overuse%20of%20repr%28C%29%20in%20Rust%20DRM%20bindings%3F/near/535139696" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Potential.20overuse.20of.20repr.28C.29.20in.20Rust.20DRM.20bindings.3F.html#535139696">(Aug 19 2025 at 14:15)</a>:</h4>
+<p>For any subtle requirement on <code>repr</code>s (or any other similar thing, really), let's please add a comment nearby if it is not mentioned elsewhere.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

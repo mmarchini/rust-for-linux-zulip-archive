@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>We've recently been trying to solve an issue causing a deadlock on ::unbind() in Tyr, and after further investigation, the root cause seems to be nested Devres (an object wrapped into a Devres that also have Devres fields).</p>\n<p>My understanding of the situation is that <a href=\"https://elixir.bootlin.com/linux/v6.19-rc5/source/drivers/base/devres.c#L531\">devres_release_all() moves all resources to a temporary list that's iterated to release each resource in reverse creation order</a>. If a root devres has its T::drop() function called, the nested devres will be dropped too, and we're going to hit <a href=\"https://elixir.bootlin.com/linux/v6.19-rc5/source/rust/kernel/devres.rs#L299\">that path</a> because the resource list has been emptied earlier in <code>devres_release_all()</code>. So we're going to wait on the devm completion, which will never happen because this item is still in the temporary and will only be destroyed later on when <a href=\"https://elixir.bootlin.com/linux/v6.19-rc5/C/ident/release_nodes\">release_nodes</a> reaches this item.</p>\n<p>Dunno if it's a bug, or if nested Devres are prohibited, but if it's the latter, then we should probably document it and find a way to avoid people shooting themselves in the foot.</p>",
+        "id": 571032551,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769780789
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> ^</p>",
+        "id": 571033396,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769780991
+    },
+    {
+        "content": "<p>Can you please share the code where the problem occurs?</p>",
+        "id": 571036382,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769781678
+    },
+    {
+        "content": "<p>This is the workaround we have at the moment =&gt; <a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56/diffs#dbdd2c5024317f2c80128c91a823e224b3a41550_96_114\">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56/diffs#dbdd2c5024317f2c80128c91a823e224b3a41550_96_114</a></p>",
+        "id": 571037219,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769781857
+    },
+    {
+        "content": "<p>root Devres comes from <a href=\"https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/driver.rs#L169\">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/driver.rs#L169</a> (Registration object is bound to the device as a devres)</p>",
+        "id": 571037982,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782027
+    },
+    {
+        "content": "<p>that's one of the nested Devres =&gt; <a href=\"https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L74\">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L74</a></p>",
+        "id": 571038224,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782082
+    },
+    {
+        "content": "<p>there's another one here =&gt; <a href=\"https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L94\">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot/drivers/gpu/drm/tyr/mmu/address_space.rs#L94</a></p>",
+        "id": 571039147,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782287
+    },
+    {
+        "content": "<p>Thanks, do you have the commit sha of the workaround? (I'd assume that SHA^ would then be a commit where things are broken).</p>",
+        "id": 571039380,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769782346
+    },
+    {
+        "content": "<p>I'll take a look then after lunch.</p>",
+        "id": 571039511,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769782373
+    },
+    {
+        "content": "<p>Note that this lives in a downstream branch, so the sha is not super relevant, but here is the commit introducing the workaround <code>aac949032a0a (\"driver.rs fw\")</code></p>",
+        "id": 571040162,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782528
+    },
+    {
+        "content": "<p>the branch is here <a href=\"https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot\">https://gitlab.freedesktop.org/dbrouwer/linux/-/blob/dbrouwer/fw-boot</a></p>",
+        "id": 571040269,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782552
+    },
+    {
+        "content": "<p>/cc <span class=\"user-mention\" data-user-id=\"981233\">@Deborah Brouwer</span></p>",
+        "id": 571040314,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782563
+    },
+    {
+        "content": "<p>It's interesting because it also tells me the base you branched off of.</p>",
+        "id": 571040841,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769782689
+    },
+    {
+        "content": "<p>It's likely that there's nothing working before/after that commit, because this patchset has not been cleaned up for submission yet, so my point about commit being not super relevant was more a \"don't try to bisect\" disclaimer</p>",
+        "id": 571041768,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769782928
+    },
+    {
+        "content": "<p>I'm sure we can have a simple reproducer based on samples/rust/rust_driver_platform.rs, if that helps</p>",
+        "id": 571042436,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769783103
+    },
+    {
+        "content": "<p>Oh yeah, I don't have hardware anyways, so I can't bisect this either way.</p>",
+        "id": 571043188,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769783273
+    },
+    {
+        "content": "<p>But I already have a suspicion what's going on, so I just want to make sure I don't base conclusions on assumptions. :)</p>",
+        "id": 571043323,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769783305
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> Your understanding is correct, there is indeed nesting going on, but indirectly. When the <code>drm::Registration</code> is revoked you likely also drop the last reference of the <code>drm::Device</code>, which calls the destructor of its private data which holds the <code>Devres&lt;IoMem&gt;</code>. Which is a perfectly valid thing to do.</p>",
+        "id": 571055547,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769786128
+    },
+    {
+        "content": "<p>Technically, this specific issue will go away with some changes I currently work on.</p>",
+        "id": 571055786,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769786180
+    },
+    {
+        "content": "<p>But I think it would be good to have a separate fix for this -- will dig in.</p>",
+        "id": 571055887,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769786204
+    },
+    {
+        "content": "<p>Thanks for the report!</p>",
+        "id": 571056391,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769786322
+    },
+    {
+        "content": "<blockquote>\n<p>But I think it would be good to have a separate fix for this -- will dig in.</p>\n</blockquote>\n<p>OOC, what's your plan to fix the issue?</p>",
+        "id": 571062931,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1769787923
+    },
+    {
+        "content": "<p>The answer is a bit longer.</p>\n<p>The big hammer is an inner reference count, which I had in the past before getting rid of it for optimization purposes. (There is nothing wrong with the reference count, probe() and remove() are not hot paths at all and a separate allocation for a device resource does not hurt.)</p>\n<p>However, with the rework I'm working on the specific issue with registrations having a reference count of something else that owns a <code>Devres</code> goes away. The only issue being left would be if you do <code>Devres&lt;Devres&lt;T&gt;&gt;</code>etc. which makes no sense. In fact, <code>Devres</code> is not a mechanism for drivers to model lifetimes. The only valid pattern is <code>Devres&lt;DEVICE_RESOURCE&gt;</code>, which effectively makes direct nesting invalid.</p>\n<p>Therefore, once the rework is done, we would not need an inner reference count, but pay the price that <code>Devres::new</code> becomes unsafe, which I think is OK, since it should - with maybe a few minor exceptions - only be constructed by core code anyways.</p>",
+        "id": 571071329,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769790054
+    },
+    {
+        "content": "<p>This topic was moved here from <a class=\"stream-topic\" data-stream-id=\"415254\" href=\"/#narrow/channel/415254-DRM/topic/Deadlock.20caused.20by.20nested.20Devres\">#DRM &gt; Deadlock caused by nested Devres</a> by <span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span>.</p>",
+        "id": 571242441,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1769905012
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> has marked this topic as resolved.</p>",
+        "id": 571242651,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1769905265
+    }
+]

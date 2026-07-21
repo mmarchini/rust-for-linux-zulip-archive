@@ -1,0 +1,224 @@
+[
+    {
+        "content": "<p>I just realized thanks to <span class=\"user-mention\" data-user-id=\"782725\">@John Hubbard</span> that since <code>CONFIG_DRM_BUDDY</code> depends on <code>CONFIG_DRM</code>,  and since <code>nova-core</code> has a hard dependency on not depending on <code>CONFIG_DRM</code> (since it can be used for other usecases like vGPU) ;  we cannot use <code>DRM_BUDDY</code> as it is for the <code>nova-core</code> driver.</p>\n<p>This leaves us with a couple of options:</p>\n<ol>\n<li>\n<p>Refactor <code>DRM_BUDDY</code> so that the buddy algorithm it uses is extracted into external  code(say in /lib/ or something along those lines).<br>\n    or,</p>\n</li>\n<li>\n<p>Implement the buddy allocator in Rust (say in rust/mm/).</p>\n</li>\n</ol>\n<p>The drawback of <a href=\"https://github.com/Rust-for-Linux/linux/issues/2\">#2</a> is fragmentation and duplication.<br>\nThe drawback of <a href=\"https://github.com/Rust-for-Linux/linux/issues/1\">#1</a> is the logging dependencies of DRM_BUDDY on DRM devices will still live in <code>drm/</code> so DRM drivers still need to call into DRM_BUDDY though the actual buddy allocator will be in common C code.</p>\n<p>What do people think we should do? If Rust was supported by all architectures supporting DRM, then we could even make the common code as Rust code, but unfortunately we're not there yet.</p>\n<p>CC <span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> (input from everyone welcomed).</p>",
+        "id": 558067656,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763500397
+    },
+    {
+        "content": "<p>One option could be the maple tree? I know it's a different algorithm, but still ...</p>",
+        "id": 558067820,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763500461
+    },
+    {
+        "content": "<p>Refactoring sounds perfect to me.</p>",
+        "id": 558067957,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763500491
+    },
+    {
+        "content": "<p>For nova, I really wanted the buddy algorithm, switching from maple tree to buddy later might be additional work (and maybe risk breaking working things).</p>",
+        "id": 558068073,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763500536
+    },
+    {
+        "content": "<p>We are now observing “DRM buddy allocator is desirable in non-DRM situations “. That’s a classic scenario that calls for refactoring out the drm-specific bits.</p>",
+        "id": 558068310,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763500640
+    },
+    {
+        "content": "<p>I think the plan was to move drm_buddy up to GPU except for the one place it uses drm</p>",
+        "id": 558068781,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763500858
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> is someone working on that already?</p>",
+        "id": 558068879,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763500884
+    },
+    {
+        "content": "<p>it has no actual drm dependencies apart from printing debug msgs I don't think</p>",
+        "id": 558068906,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763500892
+    },
+    {
+        "content": "<p>no but it should be a pretty trivial bump, to move it and maybe just wrap the current drm_buddy interfaces in the moved one</p>",
+        "id": 558068977,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763500925
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> shall we call it <code>gpu_buddy</code> once moved one level up?</p>",
+        "id": 558069067,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763500960
+    },
+    {
+        "content": "<p>yeah drm_buddy_print is the only thing that is there. I'm not sure renaming it all is worth it, but it might be cleaner</p>",
+        "id": 558069132,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763500978
+    },
+    {
+        "content": "<p>Cleaner is good<span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 558069270,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763501032
+    },
+    {
+        "content": "<p>I think it would just live as a separate module, or maybe it's small enough to just make part of the core kernel</p>",
+        "id": 558069403,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763501086
+    },
+    {
+        "content": "<p>We could keep existing drm interface as wrappers which uses the common module (either in <code>drivers/gpu/</code> or core kernel say <code>lib/</code>). And write a rust module to use it from <code>lib/</code> for <code>nova-core</code> driver and other future Rust drivers to use.  Let me know if I missed something.</p>",
+        "id": 558069885,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763501256
+    },
+    {
+        "content": "<p>Personally I prefer <code>drivers/gpu/</code> in case the buddy algorithm gets any GPU-specific extensions (at the moment I can't think of any though).</p>",
+        "id": 558070196,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763501371
+    },
+    {
+        "content": "<p>Just to be clear, the new module should not have any drm naming in in whatsoever.</p>",
+        "id": 558070203,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763501373
+    },
+    {
+        "content": "<p>yes, that's the plan.</p>",
+        "id": 558070233,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763501384
+    },
+    {
+        "content": "<p>drivers/gpu makes sense— unless drivers/accel wants to use it!</p>",
+        "id": 558070427,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763501443
+    },
+    {
+        "content": "<p>I think gpu is fine, also fine for accel stuff to use stuff in gpu</p>",
+        "id": 558070464,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763501454
+    },
+    {
+        "content": "<p>accel already relies on drm</p>",
+        "id": 558070504,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763501468
+    },
+    {
+        "content": "<p>Sounds good</p>",
+        "id": 558070506,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763501469
+    },
+    {
+        "content": "<p>I will work on some patches this week to move this up to <code>drivers/gpu/</code> and try to post it for feedback. Meanwhile any feedback on my rust <code>clist</code> <a href=\"https://lore.kernel.org/all/CANiq72nuHUFGMsEYr-KhCB4oMjX72YskG0s7uCB8dcVtTGW-jQ@mail.gmail.com/\">patches</a> related to this, are more than welcomed.</p>",
+        "id": 558071346,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763501811
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> , all, When we move drm_buddy one level up to GPU (now called gpu_buddy), I am going to keep the old API as well so that existing drivers don't break (and also as we have custom drm printer functionality in the old API). For nova-core, we'd not use the printer functionality and just use the gpu buddy allocator directly. Hope that sounds Ok and let me know what you think.</p>",
+        "id": 558750844,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763759041
+    },
+    {
+        "content": "<p>Alternatively, I'll get rid of the printer and just let print outs goto pr_info. And then migrate each existing driver over to gpu_buddy. Advantage being no more drm_buddy and its cleaner. Thoughts?</p>",
+        "id": 558751977,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763759568
+    },
+    {
+        "content": "<p>(Unless there's an objection, I'll stick to the latter, better for the kernel overall).</p>",
+        "id": 558752631,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763759873
+    },
+    {
+        "content": "<p>also <code>include/drm/drm_buddy.h</code> now becomes <code>include/linux/gpu_buddy.h</code>.</p>",
+        "id": 558752802,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763759966
+    },
+    {
+        "content": "<p>sounds good to me, the printer is fine to keep in drm_buddy on it's own if you want</p>",
+        "id": 558752924,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763760017
+    },
+    {
+        "content": "<p>so either have drm buddy call gpu buddy and keep the API, or just have an extra helper function for printing in drm</p>",
+        "id": 558752978,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1763760046
+    },
+    {
+        "content": "<p>ok cool, let me see which way is better, either sounds good, thanks.</p>",
+        "id": 558753049,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763760084
+    },
+    {
+        "content": "<p>On printing: I don't know how much printing drm_buddy is doing today, but it is best to simply NOT print at all, from lower level libraries, in the first place.</p>\n<p>Use tracing and tracepoints and such, instead.</p>\n<p>Low level libraries and allocators are called by a wide variety of things, and they lack the context to intelligently filter the printing.</p>",
+        "id": 558755714,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763761464
+    },
+    {
+        "content": "<p>I don't want to change the behavior of existing drivers during migration though (like Xe). If needed, it could be a follow-up patch since that is orthogonal to this effort.</p>",
+        "id": 558755797,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763761516
+    },
+    {
+        "content": "<p>For nova-core, we wouldn't use the drm printer.</p>",
+        "id": 558755862,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763761540
+    },
+    {
+        "content": "<p>Are we able to avoid \"the drm printer\" entirely, somehow? OK...</p>",
+        "id": 558755927,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763761573
+    },
+    {
+        "content": "<p>If you don't want to do it \"during\" the migration, you could delete it first, then do the migration afterwards?</p>",
+        "id": 558755993,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1763761605
+    },
+    {
+        "content": "<p>yeah, just don't call <code>*_buddy_print</code> ;-)</p>",
+        "id": 558756013,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763761616
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> I meant for their usage of drm_buddy printer. That they expect the printing happen via <code>drm_printf</code></p>",
+        "id": 558756136,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1763761683
+    },
+    {
+        "content": "<p>OK. So yes, let's not call it. :)</p>\n<p>If there is support for fixing (deleting) the drm printing (Alice is an early indicator, haha), then we should not fail to follow through on that, imho</p>",
+        "id": 558756160,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1763761695
+    }
+]

@@ -1,0 +1,558 @@
+<html>
+<head><meta charset="utf-8"><title>brainstorming the design for the ww_mutex abstraction · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html">brainstorming the design for the ww_mutex abstraction</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="546719326"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546719326" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546719326">(Oct 23 2025 at 16:05)</a>:</h4>
+<p>I come up with some design options for ww_mutex and decided to share them here in a dedicated thread to ensure we are on the same page before I send the next patch as it will require a massive refactoring of the latest patch on the ML.</p>
+<p>Currently, we have the <a href="https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex.rs">ww_mutex.rs</a> module, which is a bare (maybe a little bit more than that) wrapper with some type-level safeties and a higher-level <a href="https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex/exec.rs">exec.rs</a> module. The <code>exec</code> module provides an automatic EDEADLK handling mechanism that cleans up the acquired locks and rolls back to try locking them again, all automatically.</p>
+<p>However, both modules are <code>pub</code>(this is the first problem) and users of <code>ww_mutex</code> will be responsible for most of the safety concerns. For example, dropping <code>WwAcquireCtx</code> without releasing all the locks acquired by that context is incorrect (see <a href="https://github.com/torvalds/linux/blob/552c50713f27/include/linux/ww_mutex.h#L195-L196">this</a>).</p>
+<p>Therefore, we should release all the locks before calling <code>ww_acquire_fini</code> in <code>PinnedDrop</code>, but we are not doing this explicitly yet. While the lifetime bounds help, I am not sure if this is good/future-proof enough for safety. Furthermore, users have to handle EDEADLK manually if they use the low-level <code>ww_mutex</code> module and I believe they shouldn't be responsible for this, at least for the Rust side, and I think there could be more (potential) issues we have not realized yet.</p>
+<p>The <code>exec</code> module on the other hand, provides a much safer API for the user. It might not be sufficient for all scenarios (yet), but it can definitely be improved to cover them.</p>
+<p>There are two paths we can follow and I wouldd appreciate any feedback on them.</p>
+<h2>Option 1: Consolidate Logic into <code>WwAcquireCtx</code></h2>
+<p>Dropping the <code>exec</code> module entirely and folding its logic into the <code>ww_mutex</code> types (e.g., by improving <code>WwAcquireCtx</code>). Doing this means we will need to add a mutable field to the pinned <code>WwAcquireCtx</code>, such as:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data(PinnedDrop)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">WwAcquireCtx</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">ww_acquire_ctx</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">class</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="nc">Class</span><span class="p">,</span>
+<span class="w">    </span><span class="n">taken</span><span class="p">:</span><span class="w"> </span><span class="nc">KVec</span><span class="o">&lt;</span><span class="n">MutexGuard</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This then means we would have to use unsafe <code>get_unchecked_mut</code> to modify <code>taken</code> in various functions (like in <code>drop</code> and <code>lock</code> functions), like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// SAFETY: `self` is not moved and `taken` is unpinned.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">get_unchecked_mut</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+<span class="n">this</span><span class="p">.</span><span class="n">taken</span><span class="p">.</span><span class="n">push</span><span class="o">/</span><span class="n">clear</span><span class="p">()</span><span class="o">..</span><span class="p">.</span>
+</code></pre></div>
+<p>Another thing is that we have a <code>from_raw</code> function (in the latest unpublished version) that takes a raw pointer and creates <code>WwAcquireCtx</code>. This makes me very uncomfortable because it <code>taken</code> field is becoming to not work in every case. If a user creates <code>WwAcquireCtx</code> from a C pointer, the <code>taken</code> field will obviously have no knowledge of the locks acquired from the C code. This makes me to believe that <code>WwAcquireCtx</code> is not the right type to contain the <code>taken</code> field and it makes the implementation less stable and convenient.</p>
+<hr>
+<h2>Option 2: Enforcing for higher-level API</h2>
+<p>Keeping <code>ww_mutex</code> as abstract and low-level as it is, but making it private (sealed) for internal use only (i.e., for the <code>exec</code> module). This would enforce users to use the safe, high-level API and allow us to improve that API for cases where it's currently insufficient for user needs. With this approach, no user can accidentally encounter invalid or unsafe cases (including ones we haven't yet recognized). Also from a maintenance perspective, I think this is much easier, it creates two levels of abstraction: one is a simple wrapper of the C side and the other wraps the Rust wrapper for actual use cases.</p>
+<p>I am happy to hear alternative options, but for now I feel that option 2 is far better than option 1.</p>
+
+
+
+<a name="546719424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546719424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546719424">(Oct 23 2025 at 16:06)</a>:</h4>
+<p>cc <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> <span class="user-mention" data-user-id="690399">@Lyude</span> (since you both have a use-case for this API)</p>
+
+
+
+<a name="546732911"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546732911" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546732911">(Oct 23 2025 at 17:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546719326">said</a>:</p>
+<blockquote>
+<p>Therefore, we should release all the locks before calling <code>ww_acquire_fini</code> in <code>PinnedDrop</code>, but we are not doing this explicitly yet. While the lifetime bounds help, I am not sure if this is good/future-proof enough for safety. Furthermore, users have to handle EDEADLK manually if they use the low-level <code>ww_mutex</code> module and I believe they shouldn't be responsible for this, at least for the Rust side, and I think there could be more (potential) issues we have not realized yet.</p>
+</blockquote>
+<p>Agreed btw, with KMS we find that it's not unusual someone makes the mistake of not handling <code>EDEADLK</code> when writing code grabbing ww_mutex.</p>
+
+
+
+<a name="546733933"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546733933" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546733933">(Oct 23 2025 at 17:23)</a>:</h4>
+<p>I wonder if we really need to hear some input from non-KMS usecases. I'm thinking about option 2 and it is sort of making me realize that at least for KMS's case, I think it's very likely that we're going to have to make wrappers around <code>drm_modeset_lock</code> (KMS's <code>ww_mutex</code> API, which has some book keeping on top of the <code>ww_mutex</code> API and works slightly differently) anyway. This being said though - I'd still have the concern of whether we have any portions of the various DMA APIs using ww_mutex that can pass their own acquisition context to callbacks, which we would have to use</p>
+
+
+
+<a name="546736287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546736287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546736287">(Oct 23 2025 at 17:35)</a>:</h4>
+<p>btw <span class="user-mention" data-user-id="928507">@Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>
+
+
+
+<a name="546746653"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546746653" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546746653">(Oct 23 2025 at 18:37)</a>:</h4>
+<p>so I was going to suggest making a raw version of the acquire context and a high-level version of it and just keeping them separate like you're doing, but I think there's an option 3 here.</p>
+<p>So - I don't think we need to actually track the guards at all on the rust side of things! If we drop the KVec, the duplicate class ref, and the lifetime:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data(PinnedDrop)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">WwAcquireCtx</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">ww_acquire_ctx</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Then all we need to do is have <code>MutexGuard&lt;'a, T&gt;</code> be created by <code>&amp;'a WwAcquireCtx</code>. We might need to make sure the lifetime encompasses both the lifetime of <code>WwAcquireCtx</code> and the lifetime of the mutex itself, but that should be easy ('a + 'b I think?).  If we do that though, lifetimes will actually ensure that the drop order is correct and that any guards will always be dropped before the context. This also would still remain true even in situations where we received the <code>WwAcquireCtx</code> from a reference derived from a C pointer, as long as the reference lifetime is bound to something that outlives the guard.</p>
+<p>Regarding handling <code>EDEADLK</code>, I think the easiest way of handling this might be to make it so that we only can create a lock context in two ways. The first being through a closure interface, that keeps trying the closure until it doesn't return a deadlock (or returns another error), the second being deriving the context from a C pointer. I think we do need both of these, because occasionally deadlock recovery is handled by a C function that's invoking a callback rather than something that happens within the callback itself - which means that we don't want special handling on EDEADLK In that case and want to return it like a normal error.</p>
+
+
+
+<a name="546749649"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546749649" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546749649">(Oct 23 2025 at 18:57)</a>:</h4>
+<p>we could also add other closure interfaces if there ends up being other behavior required for this sort of thing. But I think a lot of those cases will end up just getting handled by passing the context around and having functions that can take a <code>WwAcquireCtx</code></p>
+
+
+
+<a name="546750054"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546750054" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546750054">(Oct 23 2025 at 18:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546733933">said</a>:</p>
+<blockquote>
+<p>This being said though - I'd still have the concern of whether we have any portions of the various DMA APIs using ww_mutex that can pass their own acquisition context to callbacks, which we would have to use</p>
+</blockquote>
+<p>We can always pass already initialized context into the high-level API, that's doable and still safe I think.</p>
+
+
+
+<a name="546750200"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546750200" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546750200">(Oct 23 2025 at 19:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287">said</a>:</p>
+<blockquote>
+<p>btw <span class="user-mention silent" data-user-id="928507">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>
+</blockquote>
+<p>There is no such field on the Rust ww_mutex</p>
+
+
+
+<a name="546750544"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546750544" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546750544">(Oct 23 2025 at 19:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546750200">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287">said</a>:</p>
+<blockquote>
+<p>btw <span class="user-mention silent" data-user-id="928507">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>
+</blockquote>
+<p>There is no such field on the Rust ww_mutex</p>
+</blockquote>
+<p>I'm not sure there needs to be, it has a pointer to the context that it's acquired under but we wouldn't really need that for this to work since the ww mutex API is going to return <code>-EALREADY</code> if we have the lock already, and lifetime guarantees mean we're still going to have guards dropped in the right order</p>
+
+
+
+<a name="546750697"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546750697" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546750697">(Oct 23 2025 at 19:03)</a>:</h4>
+<p>How would you re-init the context on EDEADLK without knowing the class?</p>
+
+
+
+<a name="546750862"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546750862" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546750862">(Oct 23 2025 at 19:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="928507">@Onur Özkan</span> because <code>ww_acquire_ctx</code> does have a pointer to the class, <code>ww_class</code>. And if the re-initialization code is handled by whatever closure interface we provide, it's always going to have access to that</p>
+
+
+
+<a name="546751213"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546751213" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546751213">(Oct 23 2025 at 19:05)</a>:</h4>
+<p>Oh, yeah, from the higher-level side it could be easier</p>
+
+
+
+<a name="546751360"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546751360" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546751360">(Oct 23 2025 at 19:06)</a>:</h4>
+<p>We just assume (and this should be safe) for the case of getting a ctx from somewhere else, that "somewhere else" is the one handling the reinitialization.<br>
+TBH too, I'm pretty sure this is the way that we want to be doing things because generally you don't want to have a self-referential structure through lifetimes. The <code>'a</code> in the acquire context would just be an unbound lifetime if you didn't create it from something else, which means that it outlives everything and probably isn't what you want.</p>
+
+
+
+<a name="546751483"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546751483" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546751483">(Oct 23 2025 at 19:06)</a>:</h4>
+<p>Dropping the lifetime though and having the guards be created from <code>&amp;'a WwAcquireCtx</code> makes sure that <code>'a</code> is properly bound to the lifetime of the ctx though</p>
+
+
+
+<a name="546751979"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546751979" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546751979">(Oct 23 2025 at 19:10)</a>:</h4>
+<p>So, we both agree that option 1 isn't a good approach, right? If that's the case I can start refactoring the low-level part (except high-level part until we agree on the final design of it).</p>
+
+
+
+<a name="546753634"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546753634" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546753634">(Oct 23 2025 at 19:20)</a>:</h4>
+<p>honestly - option 1 might actually be the better idea, as long as we rely on lifetimes for doing the tracking and drop <code>taken</code> and <code>class</code> it should be really easy to add the high level functions on. Something like (using the <code>struct WwAcquireCtx</code> that I posted earlier):</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="n">WwAcquireCtx</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">cb</span><span class="p">:</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="o">&amp;</span><span class="n">WwAcquireCtx</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ww_ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="cm">/* … initialize context */</span><span class="p">;</span>
+<span class="w">    </span><span class="k">loop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">let</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ww_ctx</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">EDEADLK</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="cm">/* re-initialize ctx */</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">res</span><span class="p">;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="546754289"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546754289" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546754289">(Oct 23 2025 at 19:25)</a>:</h4>
+<p>I think too that we could expand this for the use things like slow locking if we provided a deadlock error type that could include something like the lock that we deadlocked on. And I -think- that would be fine for us to return a guard for the mutex from such a closure</p>
+
+
+
+<a name="546755715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546755715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546755715">(Oct 23 2025 at 19:33)</a>:</h4>
+<p>Maybe something like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">WwAcquireError</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">Deadlock</span><span class="p">(</span><span class="n">Guard</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">Other</span><span class="p">(</span><span class="n">E</span><span class="p">),</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="546755812"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546755812" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546755812">(Oct 23 2025 at 19:34)</a>:</h4>
+<p>I think if you add the appropriate <code>From&lt;…&gt;</code> implementation using plain <code>?</code> will work for converting to this type anyhow</p>
+
+
+
+<a name="546759962"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546759962" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546759962">(Oct 23 2025 at 19:59)</a>:</h4>
+<p>The one issue that just occurred to me: we will need to make sure that we have defined behavior for what happens if someone calls <code>mem::forget()</code> on a guard. I think that this actually would be fine though, I'm pretty sure we would get a kernel warning and then we'd just eventually deadlock - which isn't UB (and is what happens with normal mutex guards anyway).</p>
+
+
+
+<a name="546811601"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546811601" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546811601">(Oct 24 2025 at 05:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546753634">said</a>:</p>
+<blockquote>
+<p>honestly - option 1 might actually be the better idea, as long as we rely on lifetimes for doing the tracking and drop <code>taken</code> and <code>class</code> it should be really easy to add the high level functions on. Something like (using the <code>struct WwAcquireCtx</code> that I posted earlier):</p>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="n">WwAcquireCtx</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">cb</span><span class="p">:</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="nb">FnOnce</span><span class="p">(</span><span class="o">&amp;</span><span class="n">WwAcquireCtx</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ww_ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="cm">/* … initialize context */</span><span class="p">;</span>
+<span class="w">    </span><span class="k">loop</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">let</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ww_ctx</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">EDEADLK</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="cm">/* re-initialize ctx */</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">res</span><span class="p">;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Hmm, I couldn't get how this would work to handle tracking. On EDEADLK, how are we going to release all the currently taken locks?</p>
+
+
+
+<a name="546811705"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546811705" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546811705">(Oct 24 2025 at 05:16)</a>:</h4>
+<p>Because all of the guards only exist in the scope of <code>cb()</code>, so they'll get <code>Drop</code>ed automatically</p>
+
+
+
+<a name="546811767"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546811767" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546811767">(Oct 24 2025 at 05:17)</a>:</h4>
+<p>For example, <a href="https://github.com/onur-ozkan/linux/blob/62178ff0aac85382ffbc5855fdbc838734afd820/rust/kernel/sync/lock/ww_mutex/exec.rs#L86-L100">this</a> is how I solved it with 2 closures, 1 takes mutexes and tries to lock, and the second only gets executed when all the locks are taken successfully and user can access to the data</p>
+
+
+
+<a name="546811813"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546811813" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546811813">(Oct 24 2025 at 05:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546811705">said</a>:</p>
+<blockquote>
+<p>Because all of the guards only exist in the scope of <code>cb()</code>, so they'll get <code>Drop</code>ed automatically</p>
+</blockquote>
+<p>Can you share a simple code from the user side where it uses this approach?</p>
+
+
+
+<a name="546811877"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546811877" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546811877">(Oct 24 2025 at 05:19)</a>:</h4>
+<p>I can try! I'll take a stab at it when I start work in the morning</p>
+
+
+
+<a name="546953156"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546953156" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546953156">(Oct 24 2025 at 18:02)</a>:</h4>
+<p>working on coming up with a general rough-draft of what this would look like btw. it is a bit complicated to implement, but so far I <em>think</em> it's possible</p>
+
+
+
+<a name="546957037"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546957037" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546957037">(Oct 24 2025 at 18:28)</a>:</h4>
+<p>actually - maybe wait a little bit before we assume my idea actually works. I just realized that for the case of dropping locks when dropping the acquisition context this works fine, but I'm not so sure about handling the situation of handing back a contended lock yet</p>
+
+
+
+<a name="546958688"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546958688" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546958688">(Oct 24 2025 at 18:40)</a>:</h4>
+<p>The exec module I shared earlier does that in a quite simple way tbh</p>
+
+
+
+<a name="546961789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546961789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546961789">(Oct 24 2025 at 19:02)</a>:</h4>
+<p>Yeah - disappointly, I think that the main interface for all of this does need some additional state tracking. I think I got myself too caught up in thinking about how KMS uses ww_mutex, since it's a much more limited subset of what's going on here (we generally don't handle contention scenarios ourself, DRM's helpers do that for us).<br>
+Though - there -are- still some improvements I think we can do with the exec interface you suggested that I discovered from this. I think we can actually get away with tracking only the contended lock and simply relying on <code>Drop</code> for releasing the other locks, so that we don't actually need a separate callback for the initial lock acquisition. Since if I understand correctly from the ww_mutex documentation, the deadlock handling scenario is always:</p>
+<ul>
+<li>Try to acquire locks.</li>
+<li>Deadlock?</li>
+<li>Drop all locks we hold</li>
+<li>lock_slow() the contended lock</li>
+<li>Goto first step</li>
+</ul>
+<p>We <em>maybe</em> should still allow usage of ww mutexes outside of whatever we turn <code>exec</code> into, but I think I'd be perfectly fine with all of those unmanaged interfaces being <code>unsafe pub(crate)</code> since I would assume the main use case for them would be people building more specific ww abstractions for things that already exist on the C side of things (e.g. like some of the weirder dma_resv locking scenarios where we can get handed back a context from elsewhere). However, I could be convinced out of this pretty easily if there's no actual uses for this in the rest of the kernel atm (<span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> do you have any idea?)</p>
+
+
+
+<a name="546961991"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546961991" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546961991">(Oct 24 2025 at 19:03)</a>:</h4>
+<p><span class="user-mention" data-user-id="928507">@Onur Özkan</span> btw I've been completely absent in this conversation because I'm 100% taken on our downstream prototype that we're trying to get ready. I see that Lyude has picked this up at the moment.</p>
+
+
+
+<a name="546962359"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/546962359" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#546962359">(Oct 24 2025 at 19:06)</a>:</h4>
+<p><span class="user-mention" data-user-id="928507">@Onur Özkan</span>  nitpicks aside, I know at least on the KMS side we'd be perfectly fine with the second option you mentioned at the start of the thread now that I've thought about this more. Since I definitely think the interface I'm going to want to expose for this w/r/t KMS will likely be a separate set of bindings around <code>drm_modeset_lock</code> and <code>drm_modeset_acquire_ctx</code> instead of using <code>ww_mutex</code> directly.</p>
+
+
+
+<a name="547027895"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547027895" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547027895">(Oct 25 2025 at 04:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546962359">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span>  nitpicks aside, I know at least on the KMS side we'd be perfectly fine with the second option you mentioned at the start of the thread now that I've thought about this more. Since I definitely think the interface I'm going to want to expose for this w/r/t KMS will likely be a separate set of bindings around <code>drm_modeset_lock</code> and <code>drm_modeset_acquire_ctx</code> instead of using <code>ww_mutex</code> directly.</p>
+</blockquote>
+<p>Nice! I will consider applying some of the notes you suggested (early in the thread) though. The class part can indeed be improved. I will see what I can do during the week and I will use this thread to share the critical updates.</p>
+
+
+
+<a name="547027952"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547027952" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547027952">(Oct 25 2025 at 04:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546961991">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> btw I've been completely absent in this conversation because I'm 100% taken on our downstream prototype that we're trying to get ready. I see that Lyude has picked this up at the moment.</p>
+</blockquote>
+<p>No worries at all! The thread been useful enough already for me (thanks to Lyude)</p>
+
+
+
+<a name="547449795"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547449795" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547449795">(Oct 28 2025 at 09:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546736287">said</a>:</p>
+<blockquote>
+<p>btw <span class="user-mention silent" data-user-id="928507">Onur Özkan</span> I'm a bit confused, what's the purpose of the <code>class</code> reference in <code>WwAcquireCtx</code>? Don't we already have <code>struct ww_acquire_ctx.ww_class</code> that we can use for getting a reference to the ww class?</p>
+</blockquote>
+<p>While working on this, I just remembered another benefit of having class inside the context. By keeping a the reference, rustc will ensure that the class outlives the context which it's used in. This could also be achieved with a marker but storing the class reference also helps to avoid using unsafe functions to derive the class pointer from the context when we need to use it.</p>
+
+
+
+<a name="547521455"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547521455" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547521455">(Oct 28 2025 at 15:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/546750862">said</a>:</p>
+<blockquote>
+<p>ww_acquire_ctx</p>
+</blockquote>
+<p><a href="/user_uploads/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png">image.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png" title="image.png"><img data-original-content-type="image/png" data-original-dimensions="406x228" src="/user_uploads/thumbnail/35136/nXDpcc0wWuYcx3zDE0ts4KfR/image.png/840x560.webp"></a></div><p>I am not sure if the maintainers of ww_mutex would be open to the idea of moving ww_class out of the DEBUG_WW_MUTEXES scope. <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="547521758"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547521758" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547521758">(Oct 28 2025 at 15:18)</a>:</h4>
+<p>Yeah - I realized I missed that on the first look, so keeping track of class is fine</p>
+
+
+
+<a name="547763716"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547763716" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547763716">(Oct 29 2025 at 16:33)</a>:</h4>
+<p><a href="https://github.com/torvalds/linux/compare/master...onur-ozkan:linux:ww_mutex?expand=1">v7</a> is almost ready. I will do a self-review next, then prepare it (rebase the commits, write the changelog, etc.) for submission.</p>
+
+
+
+<a name="547765098"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547765098" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547765098">(Oct 29 2025 at 16:39)</a>:</h4>
+<p>Do I have to make every commit buildable or can I just split things up without worrying about whether it compiles?</p>
+
+
+
+<a name="547767989"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547767989" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547767989">(Oct 29 2025 at 16:54)</a>:</h4>
+<p>In general, every commit should build in order to help things like bisecting.</p>
+
+
+
+<a name="547768192"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547768192" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547768192">(Oct 29 2025 at 16:55)</a>:</h4>
+<p>Similarly, they should be <code>rustfmt</code> clean, Clippy clean, <code>rustdoc</code> clean, and KUnit tests should pass and so on.</p>
+
+
+
+<a name="547768617"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547768617" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547768617">(Oct 29 2025 at 16:57)</a>:</h4>
+<p>Thanks. It's gonna be tough one for v7 <span aria-label="smiling face with tear" class="emoji emoji-1f972" role="img" title="smiling face with tear">:smiling_face_with_tear:</span></p>
+
+
+
+<a name="547768663"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547768663" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547768663">(Oct 29 2025 at 16:57)</a>:</h4>
+<p>For further information I can also recommend the drm-rust submit checklist (summary), which also links to the official Linux kernel submit checklist and the Rust for Linux checklist.</p>
+<p><a href="https://drm.pages.freedesktop.org/maintainer-tools/committer/committer-drm-rust.html#submit-checklist">https://drm.pages.freedesktop.org/maintainer-tools/committer/committer-drm-rust.html#submit-checklist</a></p>
+
+
+
+<a name="547769071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547769071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547769071">(Oct 29 2025 at 16:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/547768617">said</a>:</p>
+<blockquote>
+<p>Thanks. It's gonna be tough one for v7 <span aria-label="smiling face with tear" class="emoji emoji-1f972" role="img" title="smiling face with tear">:smiling_face_with_tear:</span></p>
+</blockquote>
+<p>Fwiw: I usually use <code>git rebase --exec</code> for doing this, it usually doesn't take much time (minus the building)</p>
+
+
+
+<a name="547771352"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547771352" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547771352">(Oct 29 2025 at 17:11)</a>:</h4>
+<p>The Rust for Linux one: <a href="https://rust-for-linux.com/contributing#submit-checklist-addendum">https://rust-for-linux.com/contributing#submit-checklist-addendum</a></p>
+
+
+
+<a name="547854930"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/547854930" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#547854930">(Oct 30 2025 at 05:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/547763716">said</a>:</p>
+<blockquote>
+<p><a href="https://github.com/torvalds/linux/compare/master...onur-ozkan:linux:ww_mutex?expand=1">v7</a> is almost ready. I will do a self-review next, then prepare it (rebase the commits, write the changelog, etc.) for submission.</p>
+</blockquote>
+<p>I will be writing the changelog (since v6, basically the last commit) today and I will probably do the rebasing tomorrow or over the weekend. Feel free to take a pre-look at the github link and share any suggestions before I send it to the mailing list :)</p>
+
+
+
+<a name="557869096"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/557869096" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#557869096">(Nov 18 2025 at 08:44)</a>:</h4>
+<p>fyi <a href="https://lore.kernel.org/all/20251101161056.22408-1-work@onurozkan.dev/">https://lore.kernel.org/all/20251101161056.22408-1-work@onurozkan.dev/</a> is awaiting reviews. Any feedback would be appreciated</p>
+
+
+
+<a name="558091717"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558091717" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558091717">(Nov 19 2025 at 00:17)</a>:</h4>
+<p>Will take a look tomorrow or the day after</p>
+
+
+
+<a name="558539633"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558539633" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558539633">(Nov 20 2025 at 22:13)</a>:</h4>
+<p>(I'm still planning on looking at this, got distracted by some other stuff but I'll look first thing tomorrow)</p>
+
+
+
+<a name="558747188"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747188" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747188">(Nov 21 2025 at 20:35)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> if you have a moment:<br>
+I'm going through th epatch series that Onur sent, and there's one patch hunk I just spotted that I think could use someone else's eyes on it as well:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Mutex</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">     </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">ww_mutex</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">     </span><span class="n">_p</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomData</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">Class</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">     </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafeCell</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="c1">// SAFETY: `Mutex` can be sent to another thread if the protected</span>
+<span class="c1">// data `T` can be.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Mutex</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// SAFETY: `Mutex` can be shared across threads if the protected</span>
+<span class="c1">// data `T` can be.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Mutex</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+<p>I -think- this makes sense but I just wanted to double check, the compiler would be smart enough to understand that the Mutex couldn't be passed to another thread which would allow it to outlive the lifetime of it's class, _p, right?<br>
+(also ignore the weird ordering - I'm going to poin tthat out in the review as well)</p>
+
+
+
+<a name="558747427"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747427" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747427">(Nov 21 2025 at 20:37)</a>:</h4>
+<p>The lifetime does enforce that the mutex cannot be used outside of <code>'a</code> regardless of threads, yes.</p>
+
+
+
+<a name="558747467"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747467" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747467">(Nov 21 2025 at 20:38)</a>:</h4>
+<p>ah cool</p>
+
+
+
+<a name="558747471"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747471" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747471">(Nov 21 2025 at 20:38)</a>:</h4>
+<p>thanks!</p>
+
+
+
+<a name="558747527"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747527" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747527">(Nov 21 2025 at 20:38)</a>:</h4>
+<p>Well there's one annoying detail since it's in <code>PhantomData</code>, which is that the compiler sometimes allows the <code>Mutex</code> to get dropped after the end of <code>'a</code></p>
+
+
+
+<a name="558747551"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747551" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747551">(Nov 21 2025 at 20:38)</a>:</h4>
+<p>Unless there is an explicit destructor for <code>Mutex</code>.</p>
+
+
+
+<a name="558747646"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747646" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747646">(Nov 21 2025 at 20:39)</a>:</h4>
+<p>oh, hm. is it possible to fix that with reordering where _p is?</p>
+
+
+
+<a name="558747726"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747726" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747726">(Nov 21 2025 at 20:40)</a>:</h4>
+<p>I'm not sure it's observable in this case.</p>
+
+
+
+<a name="558747758"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747758" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747758">(Nov 21 2025 at 20:40)</a>:</h4>
+<p>None of the fields have a destructor, after all.</p>
+
+
+
+<a name="558747777"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747777" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747777">(Nov 21 2025 at 20:40)</a>:</h4>
+<p>Field ordering is irrelevant.</p>
+
+
+
+<a name="558747895"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747895" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747895">(Nov 21 2025 at 20:41)</a>:</h4>
+<p>Gotcha, so if we did add an empty destructor though that would fix it?</p>
+
+
+
+<a name="558747910"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747910" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747910">(Nov 21 2025 at 20:41)</a>:</h4>
+<p>yes</p>
+
+
+
+<a name="558747919"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/558747919" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#558747919">(Nov 21 2025 at 20:41)</a>:</h4>
+<p>gotcha</p>
+
+
+
+<a name="560155119"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/560155119" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#560155119">(Nov 25 2025 at 13:32)</a>:</h4>
+<p><span class="user-mention" data-user-id="928507">@Onur Özkan</span> so the exec thing is no more? :/</p>
+<p>How do we automate rollbacks now?</p>
+
+
+
+<a name="560155642"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/560155642" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#560155642">(Nov 25 2025 at 13:34)</a>:</h4>
+<p>We still have it, I renamed it as LockSet in the latest version</p>
+
+
+
+<a name="560547517"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/brainstorming%20the%20design%20for%20the%20ww_mutex%20abstraction/near/560547517" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction.html#560547517">(Nov 27 2025 at 09:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/brainstorming.20the.20design.20for.20the.20ww_mutex.20abstraction/near/558747895">said</a>:</p>
+<blockquote>
+<p>Gotcha, so if we did add an empty destructor though that would fix it?</p>
+</blockquote>
+<p>shouldn't we handle releasing the <code>inner</code>field in drop?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

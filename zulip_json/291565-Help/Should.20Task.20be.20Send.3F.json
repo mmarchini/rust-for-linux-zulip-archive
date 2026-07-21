@@ -1,0 +1,422 @@
+[
+    {
+        "content": "<p>Currently Task has an <code>unsafe impl Sync</code> but it is not Send. Is that intentional? Is there some reason it can't also be Send?</p>",
+        "id": 358937586,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684316987
+    },
+    {
+        "content": "<p>Binder currently stores an <code>ARef&lt;Task&gt;</code>, which assumes that <code>Task</code> is <code>Send</code>.</p>",
+        "id": 358937782,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684317035
+    },
+    {
+        "content": "<p>a bit unrelated to your question, but are there any good resources for understanding when a structure can implement <code>Sync</code> and <code>Send</code>? (apart from <a href=\"https://doc.rust-lang.org/nomicon/send-and-sync.html\">send-and-sync</a>)</p>",
+        "id": 358943866,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684318662
+    },
+    {
+        "content": "<p>There are three relevant permissions:</p>\n<ol>\n<li>Access value mutably from threads other than the one it was created on, with synchronization. (Send gives this.)</li>\n<li>Access value immutably from threads other than the one it was created on, with synchronization. (Send and Sync both gives this - you only need one of them to have it.)</li>\n<li>Access value immutably from threads other than the one it was created on, without synchronization. (Sync gives this.)</li>\n</ol>",
+        "id": 358944523,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684318872
+    },
+    {
+        "content": "<p>when you say \"with synchronization\", do you mean the synchronization is provided to you when you access that structure?</p>",
+        "id": 358946547,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684319428
+    },
+    {
+        "content": "<p>No, I mean that the access must be synchronized externally. That is, the access must happen one thread at the time.</p>",
+        "id": 358947010,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684319583
+    },
+    {
+        "content": "<p>Anyway, I went ahead and submitted it upstream. You can give a review there if there's a problem with Task being Send.<br>\n<a href=\"https://lore.kernel.org/all/20230517095905.3548100-2-aliceryhl@google.com/\">https://lore.kernel.org/all/20230517095905.3548100-2-aliceryhl@google.com/</a></p>",
+        "id": 358947129,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684319624
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358944523\">said</a>:</p>\n<blockquote>\n<p>There are three relevant permissions:</p>\n<ol>\n<li>Access value mutably from threads other than the one it was created on, with synchronization. (Send gives this.)</li>\n<li>Access value immutably from threads other than the one it was created on, with synchronization. (Send and Sync both gives this - you only need one of them to have it.)</li>\n<li>Access value immutably from threads other than the one it was created on, without synchronization. (Sync gives this.)</li>\n</ol>\n</blockquote>\n<p>I always think of it as <code>send</code> -&gt; it is safe to send the owned value to another thread, <code>sync</code> -&gt; it is safe to send a reference to another thread. This implies that you don't always need synchronization for 1) and that 2) can give mutable access with interior mutability. Anyway <span class=\"user-mention\" data-user-id=\"607542\">@Ariel Miculas</span> <a href=\"https://doc.rust-lang.org/nomicon/send-and-sync.html\">this</a> is a good reference.</p>",
+        "id": 358949401,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684320259
+    },
+    {
+        "content": "<p>When I said \"with synchronization\", what I meant is just that you don't have several threads doing it at the same time in parallel. As for interior mutability, I use the words mutable and immutable to refer to whether the methods are <code>&amp;self</code> or <code>&amp;mut self</code>, so interior mutability should be interpreted as immutable.</p>\n<p>Under the above interpretations of my words, it should be precise.</p>",
+        "id": 358950138,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684320483
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358937586\">said</a>:</p>\n<blockquote>\n<p>Currently Task has an <code>unsafe impl Sync</code> but it is not Send. Is that intentional? Is there some reason it can't also be Send?</p>\n</blockquote>\n<p>Looking at the code, it seems that <code>sync</code> is in place to make <code>TaskRef</code> <code>send</code>. Rust code should not own a <code>Task</code> and thus it makes no difference if it is <code>send</code> or not.</p>",
+        "id": 358952089,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321057
+    },
+    {
+        "content": "<p>Except <code>TaskRef</code> is explicitly <code>!send</code> so then never mind <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 358952553,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321195
+    },
+    {
+        "content": "<p>Binder owns an <code>ARef&lt;Task&gt;</code> in some places.</p>",
+        "id": 358952841,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321267
+    },
+    {
+        "content": "<p>But still, <code>TaskRef</code> is the only way to obtain a <code>Task</code> handle, you would never hold an owned <code>Task</code>? So <code>send</code> does not matter.</p>",
+        "id": 358952847,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321269
+    },
+    {
+        "content": "<p>(That's also why I submitted it together with an ARef patch.)</p>",
+        "id": 358953154,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321352
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358952841\">said</a>:</p>\n<blockquote>\n<p>Binder owns an <code>ARef&lt;Task&gt;</code> in some places.</p>\n</blockquote>\n<p>But that is a reference to a <code>Task</code>, so <code>send</code> for <code>Task</code> does not matter in this case?</p>",
+        "id": 358953452,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321437
+    },
+    {
+        "content": "<p>Arc requires both Send and Sync because mutable access happens when the refcount hits zero.</p>",
+        "id": 358953885,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321544
+    },
+    {
+        "content": "<p>If <code>Task</code> is <code>sync</code> then <code>ARef&lt;Task&gt;</code> should be <code>send</code>. At least nothing in the relationship to the referenced value should stop it from being <code>send</code></p>",
+        "id": 358953891,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321548
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358953885\">said</a>:</p>\n<blockquote>\n<p>Arc requires both Send and Sync because mutable access happens when the refcount hits zero.</p>\n</blockquote>\n<p>But this is unrelated to <code>ARef</code> ?</p>",
+        "id": 358954294,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321677
+    },
+    {
+        "content": "<p>ARef is essentially an Arc, so I used the same safety requirements.</p>",
+        "id": 358954400,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321699
+    },
+    {
+        "content": "<p>You could also add a safety requirement to the AlwaysRefcountedTrait saying that if the type is Sync, then it must be ok for the refcount to hit zero on any thread, even if the value is not Send.</p>",
+        "id": 358954487,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321729
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358954487\">said</a>:</p>\n<blockquote>\n<p>You could also add a safety requirement to the AlwaysRefcountedTrait saying that if the type is Sync, then it must be ok for the refcount to hit zero on any thread, even if the value is not Send.</p>\n</blockquote>\n<p>I am not certain, but I believe that it is OK for the C <code>struct task_struct</code> to hit zero refcount on any thread. That is, the C side does not have the requirement you are describing.</p>",
+        "id": 358954844,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684321823
+    },
+    {
+        "content": "<p>Normally, the way you would encode that is by making the type Send.</p>",
+        "id": 358955063,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684321902
+    },
+    {
+        "content": "<p>I think what the C people do if they have a <code>refcount_t</code> that they send around but the value must be freed in a specific local context, the will queue the free on a queue to be picked up later and executed in that specific context.</p>",
+        "id": 358955450,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322015
+    },
+    {
+        "content": "<p>That makes sense.</p>",
+        "id": 358955673,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322092
+    },
+    {
+        "content": "<p>To me, the reason that I submitted the patch is that <code>ARef&lt;Task&gt;</code> should be Send/Sync. Since it is very similar to Arc, I reused how they justify that this is ok, which involves making the inner type Send. I am open to hearing other suggestions for achieving the same thing.</p>",
+        "id": 358956114,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322218
+    },
+    {
+        "content": "<p>It is difficult for me to reason about <code>send</code> in this particular case, because <code>struct task_struct</code> is never owned. If it was owned, it would be <code>Pin</code>. And a <code>Pin&lt;Task&gt;</code> would be <code>send</code>. It' just feels like an odd exercise, since one would never have that type.</p>",
+        "id": 358956179,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322236
+    },
+    {
+        "content": "<p>Fundamentally, Send is about where mutable access may happen, and not about ownership.</p>",
+        "id": 358956293,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322278
+    },
+    {
+        "content": "<p>Mutable access to <code>Task</code> with synchronization would be OK. I cannot find a reason it would not be.</p>",
+        "id": 358956709,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322384
+    },
+    {
+        "content": "<p>Synchronization meaning proper serialization</p>",
+        "id": 358956859,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322415
+    },
+    {
+        "content": "<p>Then it should be send.</p>",
+        "id": 358956861,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322415
+    },
+    {
+        "content": "<p>What patch are you referring to?</p>",
+        "id": 358956934,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322444
+    },
+    {
+        "content": "<p>I'm a little behind</p>",
+        "id": 358956963,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322457
+    },
+    {
+        "content": "<p>I linked it earlier:<br>\n<a href=\"https://lore.kernel.org/all/20230517095905.3548100-2-aliceryhl@google.com/\">https://lore.kernel.org/all/20230517095905.3548100-2-aliceryhl@google.com/</a></p>",
+        "id": 358956977,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322461
+    },
+    {
+        "content": "<p>Looks good to me</p>",
+        "id": 358957222,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322534
+    },
+    {
+        "content": "<p>Great, thanks for taking a look!</p>",
+        "id": 358957440,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322614
+    },
+    {
+        "content": "<p>Looks like I have to refine my mental model for <code>send</code> though <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 358957445,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1684322616
+    },
+    {
+        "content": "<p>yeah, it's very non-obvious, especially because of how people usually use ownership when talking about it</p>",
+        "id": 358957570,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684322649
+    },
+    {
+        "content": "<p>I'm trying to wrap my head around <code>Send</code> (<a href=\"https://doc.rust-lang.org/book/ch16-04-extensible-concurrency-sync-and-send.html#allowing-transference-of-ownership-between-threads-with-send\">from here</a>):</p>\n<blockquote>\n<p>Almost every Rust type is Send, but there are some exceptions, including Rc&lt;T&gt;: this cannot be Send because if you cloned an Rc&lt;T&gt; value<br>\nand tried to transfer ownership of the clone to another thread, both threads might update the reference count at the same time.</p>\n</blockquote>\n<p>And <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> said</p>\n<blockquote>\n<p>When I said \"with synchronization\", what I meant is just that you don't have several threads doing it at the same time in parallel.</p>\n</blockquote>\n<p>These statements seem contradictory, I think I'm missing something in my understanding.</p>",
+        "id": 358960229,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684323534
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"607542\">@Ariel Miculas</span>  If you have two different <code>Rc&lt;T&gt;</code> objects, then accessing them in parallel from two different threads would be a data race. This doesn't violate rule 1 because it's not the same object.</p>",
+        "id": 358960845,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684323726
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358960229\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> said</p>\n<blockquote>\n<p>When I said \"with synchronization\", what I meant is just that you don't have several threads doing it at the same time in parallel.</p>\n</blockquote>\n<p>These statements seem contradictory, I think I'm missing something in my understanding.</p>\n</blockquote>\n<p>It's true that synchronization might not be the best word to use here. Synchronization is one way to ensure that threads don't access the same thing in parallel, but its not the only way you can ensure that.</p>",
+        "id": 358961101,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684323807
+    },
+    {
+        "content": "<p>So the rules don't technically prevent <code>Rc&lt;T&gt;</code> from being <code>Send</code>, but if it was marked <code>Send</code> then it could lead to data races, so for this reason it's not marked <code>Send</code>. Did I get it right?</p>",
+        "id": 358962396,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684324220
+    },
+    {
+        "content": "<p>or does it break rule 1 because it doesn't use synchronization when updating its reference counter?</p>",
+        "id": 358962895,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684324371
+    },
+    {
+        "content": "<p>The rules prevent <code>Rc&lt;T&gt;</code> from being <code>Send</code> in the sense that _if_ it was <code>Send</code>, then you could cause a data race in safe code. Any API that can cause a data race in safe code is incorrect.</p>",
+        "id": 358962940,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684324386
+    },
+    {
+        "content": "<p>Any change to the API that would make that data race impossible in safe code would make the API correct again. Removing the <code>impl Send</code> is one such API change.</p>",
+        "id": 358963152,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684324456
+    },
+    {
+        "content": "<p>thanks, I'm starting to understand now <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 358963370,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684324526
+    },
+    {
+        "content": "<p>Having it use atomics for the refcount instead would also be such an API change. (That's how you get the Arc.)</p>",
+        "id": 358963410,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684324542
+    },
+    {
+        "content": "<p>yeah, that makes sense</p>",
+        "id": 358964073,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684324736
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358962895\">said</a>:</p>\n<blockquote>\n<p>or does it break rule 1 because it doesn't use synchronization when updating its reference counter?</p>\n</blockquote>\n<p>To expand on this,  I don't think its meaningful to say that the type itself can break these rules. From the perspective of external code, they are rules that the external code must follow (that is, it makes sense to talk about whether external code breaks or follows them.) However, from the perspective of the implementation of the type, the rules are not rules, but <em>permissions</em> that the implementation gives to unknown user code. You can talk about whether it is incorrect to give out that permission, but you can't really talk about <em>breaking</em> a permission per se when you are the one who gives out the permission.</p>",
+        "id": 358964855,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684324939
+    },
+    {
+        "content": "<p><code>Most uses of raw pointers should be encapsulated behind a sufficient abstraction that Send and Sync can be derived.</code><br>\nSo if I encapsulate a raw pointer in my structure, the only case when I cannot implement <code>Sync</code> and <code>Send</code> for it is if the users of my structure could cause UB in safe rust (e.g. through a data race)?</p>",
+        "id": 358966826,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684325549
+    },
+    {
+        "content": "<p>Yeah, basically, as long as the API you provide cannot be used to trigger UB, then it is ok.</p>",
+        "id": 358967043,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684325617
+    },
+    {
+        "content": "<p>And as you quoted, implementing Send/Sync is usually ok.</p>",
+        "id": 358967166,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684325649
+    },
+    {
+        "content": "<p>I have this in my API and I kept wondering if I can implement Send/Sync:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">get</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span>::<span class=\"n\">vfsmount</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">vfsmount</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>but I guess I'll just blame the users who will deal with the raw pointer in their unsafe code.</p>",
+        "id": 358967715,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1684325819
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358957570\">said</a>:</p>\n<blockquote>\n<p>yeah, it's very non-obvious, especially because of how people usually use ownership when talking about it</p>\n</blockquote>\n<p>Hmm.. but </p>\n<blockquote>\n<p>Access value mutably from threads other than the one it was created on, with synchronization.</p>\n</blockquote>\n<p>means the other threads can move the value which may end up freeing/dropping the value in another thread that is not the creator of the value. So \"ownership\" mental model still makes sense then?</p>",
+        "id": 358995524,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684332889
+    },
+    {
+        "content": "<p>Which thread owns a value while it's in an <code>Arc</code>?</p>",
+        "id": 358996709,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333153
+    },
+    {
+        "content": "<p>Which thread owns a value while it's in a global variable?</p>",
+        "id": 358997207,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333246
+    },
+    {
+        "content": "<p>These kinds of tricky questions is why the ownership model is tricky.</p>",
+        "id": 358997379,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333285
+    },
+    {
+        "content": "<p><code>Arc</code> describes a shared ownership, if the refcount is 1 and we have a <code>&amp;mut Arc&lt;..&gt;</code>, then we owns the value.</p>",
+        "id": 358997530,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333320
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997207\">said</a>:</p>\n<blockquote>\n<p>Which thread owns a value while it's in a global variable?</p>\n</blockquote>\n<p>Do you have an example that a global variable is <code>Send</code>?</p>",
+        "id": 358997734,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333359
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997734\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997207\">said</a>:</p>\n<blockquote>\n<p>Which thread owns a value while it's in a global variable?</p>\n</blockquote>\n<p>Do you have an example that a global variable is <code>Send</code>?</p>\n</blockquote>\n<p>Are you asking for something like this? </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">MY_GLOBAL</span>: <span class=\"kt\">u32</span> <span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">10</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 358997910,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333404
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997910\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997734\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997207\">said</a>:</p>\n<blockquote>\n<p>Which thread owns a value while it's in a global variable?</p>\n</blockquote>\n<p>Do you have an example that a global variable is <code>Send</code>?</p>\n</blockquote>\n<p>Are you asking for something like this? </p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">MY_GLOBAL</span>: <span class=\"kt\">u32</span> <span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">10</span><span class=\"p\">;</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Ah, that's fair, let me think more.</p>",
+        "id": 358998448,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333558
+    },
+    {
+        "content": "<p>I guess the question should be when you need a global variable to be <code>Send</code>.</p>",
+        "id": 358999106,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333717
+    },
+    {
+        "content": "<p>As for ownership, global variables are owned by the threads creating them.</p>",
+        "id": 358999265,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333760
+    },
+    {
+        "content": "<p>I mean, a <code>static</code> that isn't marked mut doesn't need to be Send. Mutable access to it will never happen, not even a destructor.</p>",
+        "id": 358999521,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333817
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358997379\">said</a>:</p>\n<blockquote>\n<p>These kinds of tricky questions is why the ownership model is tricky.</p>\n</blockquote>\n<p>I don't think there is a fundamental difference between the ownership model and your model. for me <code>&amp;mut Self</code> means ownership.</p>",
+        "id": 358999525,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684333817
+    },
+    {
+        "content": "<p>The reason I prefer my model is because it gives a better intuition. I'm sure you can make both models work formally.</p>",
+        "id": 358999772,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684333886
+    },
+    {
+        "content": "<p>Hmm.. look again, I'm not getting why the \"with synchronization\" part is needed:</p>\n<blockquote>\n<ol>\n<li>Access value mutably from threads other than the one it was created on, with synchronization. (Send gives this.)</li>\n</ol>\n</blockquote>\n<p>, since when you access the value mutably, you have a <code>&amp;mut</code> reference, and you can only get it safely with some synchronization, so mutably implies synchronization I guess.</p>",
+        "id": 359001217,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684334209
+    },
+    {
+        "content": "<p>Yes, there's no option that allows mutable access without synchronization.</p>",
+        "id": 359001463,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684334270
+    },
+    {
+        "content": "<p>Thanks! BTW, I agree that <code>Task</code> can be <code>Send</code>.</p>",
+        "id": 359002100,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684334413
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/Should.20Task.20be.20Send.3F/near/358999772\">said</a>:</p>\n<blockquote>\n<p>The reason I prefer my model is because it gives a better intuition. I'm sure you can make both models work formally.</p>\n</blockquote>\n<p>To me, the ownership model gives the intuition that a function requiring <code>Send</code> is usually a \"sending point\" of a type to give the ownership to another thread. And that thread may call the <code>drop</code> function of the type.</p>",
+        "id": 359005185,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1684335148
+    },
+    {
+        "content": "<p>Yeah, I think the reason I dislike the ownership model is because it implies some sort of \"event\" where ownership is transferred as an action. And then things like <code>Arc::get_mut_unchecked</code> would have to perform that action before giving you a reference, even though the sending action is really a no-op and doesn't appear in the code at all.</p>",
+        "id": 359006038,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1684335335
+    }
+]

@@ -1,0 +1,44 @@
+[
+    {
+        "content": "<p>Hey all, thinking about my next step of Rust-for-grub work and I wanted to confirm my understanding of what you all do on Linux.</p>\n<p>Like Linux, grub also has modules that use symbols exported from a core kernel.</p>\n<p>Looking at <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/exports.c\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/exports.c</a> , it seems like you generate exports for a bunch of things automatically. So if a module wants to call something on Vec&lt;&gt;, it ends up going via the core kernel, right?</p>\n<p>Does that mean you end up with a larger kernel because you can't prune out parts of the core library that aren't called (because you don't know what a module will end up using)? I ask because I'm pondering whether or not to build the core into the kernel or build the parts of the core used by each module into each module. </p>\n<p>I think the core crate is bigger than the current grub kernel so I'm a bit loathe to propose including the whole thing! On the other hand the idea of modules compiled _after_ the primary build process isn't really a thing in grub-land so it might be possible to trim it down more aggressively.</p>",
+        "id": 266493077,
+        "sender_full_name": "Daniel Axtens",
+        "timestamp": 1640943622
+    },
+    {
+        "content": "<p>So far all the APIs we support are places there are existing kernel APIs for, and we expose C-ABI functions from Rust, and function-pointer structs (e.g. <code>file_operations</code>).</p>\n<p>Which is to say the kernel C code never calls any <code>Vec&lt;T&gt;</code> methods, those are called exclusively from Rust code.</p>\n<p>I'm not sure if that answers your question?</p>",
+        "id": 266504912,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1640959166
+    },
+    {
+        "content": "<blockquote>\n<p>So if a module wants to call something on Vec&lt;&gt;, it ends up going via the core kernel, right?</p>\n</blockquote>\n<p>Yes, <code>core</code>, <code>alloc</code>, etc. go into the \"shared\" Rust support.</p>\n<blockquote>\n<p>Does that mean you end up with a larger kernel because you can't prune out parts of the core library that aren't called (because you don't know what a module will end up using)?</p>\n</blockquote>\n<p>Yeah, but you can also see it the other way around: it allows us to have a smaller kernel, since the idea is that eventually many modules will reuse the same code.</p>\n<p>In order to take care of the \"rest\" that we do not expect anybody using (or that we do not want anybody to use), we are also trimming <code>alloc</code> in our fork (no <code>collections</code>, no <code>sync</code>, no <code>rc</code>...), and we also requested upstream a few \"modularization\" options for <code>core</code> (some already in, e.g. <code>no_fp_fmt_parse</code>).</p>",
+        "id": 266506604,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1640961349
+    },
+    {
+        "content": "<p>A lot of the \"worst\" offenders for codesize are generics, which only get codegen'd if they're actually used, so that helps.</p>",
+        "id": 266506679,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1640961424
+    },
+    {
+        "content": "<p>Cool. </p>\n<p>Yeah, I was thinking of Rust modules calling Rust <code>core</code> functionality. </p>\n<p>I'll have a crack again at some point (work keeps wanting me to Create Shareholder Value, unfortunately) and let you know how I go. I suspect I might go down the path of forking and trimming core and alloc, but I'll see how I go.</p>\n<blockquote>\n<p>A lot of the \"worst\" offenders for codesize are generics, which only get codegen'd if they're actually used, so that helps.</p>\n</blockquote>\n<p>IIUC you're saying <code>Vec&lt;u8&gt;::whatever</code> is only generated if there's actually a <code>Vec&lt;u8&gt;</code>. Is that right? How would the compiler be able to reason about that if there could be an out-of-tree module that ends up trying to call <code>Vec&lt;u8&gt;::foo</code>?</p>",
+        "id": 266508935,
+        "sender_full_name": "Daniel Axtens",
+        "timestamp": 1640964058
+    },
+    {
+        "content": "<p>When compiling <code>core</code> (or any crate for that matter) rustc emits the IR for generics methods that can be read by rustc when compiling something downstream and the method will be code-gen'd then if it wasn't already codegen'd inside <code>core</code>.</p>",
+        "id": 266509120,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1640964239
+    },
+    {
+        "content": "<p>oh sweet, that is nifty</p>",
+        "id": 266509190,
+        "sender_full_name": "Daniel Axtens",
+        "timestamp": 1640964286
+    }
+]

@@ -1,0 +1,124 @@
+<html>
+<head><meta charset="utf-8"><title>Handling Function Pointers · Networking · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/index.html">Networking</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/topic/Handling.20Function.20Pointers.html">Handling Function Pointers</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="395876443"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/396592-Networking/topic/Handling%20Function%20Pointers/near/395876443" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Amélie Gonzalez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/topic/Handling.20Function.20Pointers.html#395876443">(Oct 10 2023 at 12:49)</a>:</h4>
+<p>So <span class="user-mention" data-user-id="652163">@AllenX</span>, if you still need it, here's a little explainer on how I handled pointers. It's not far from what I have seen others do, and there might be things that are considered to be common patterns/good practices that I sidestepped/skipped. I'm just learning. Thankfully, I had to explain this very thing many times to a handful of people, so it should be somewhat structured.</p>
+<p>I'll take the example of my <a href="https://git.vulpinecitrus.info/Lymkwi/linux/src/branch/rust-net-drivers/rust/kernel/net/gro.rs#L64">NAPI structure</a>, as a way of implementing one function pointer needed in a structure. From my experience of moving other function pointers around (like <code>struct net_device</code>'s <code>priv_destructor</code>, in groups/descriptors such as RTNL, and such), it doesn't really change too much.</p>
+<p>It's going to be a lot of things you might already know or find obvious because I prefer being thorough and verbose rather than accidentally missing something critical, and it might be useful for people coming at this with very little familiarity with the project.</p>
+<p>The general idea is going to be:</p>
+<ul>
+<li>Create a trait definition marked <code>#[vtable]</code> that contains the Rust function(s) you want to implement, with all types in the return value and arguments replaced with their Rust counterparts</li>
+<li>Implement that trait on a structure that will define your function for your use case</li>
+<li>Have a second type that acts like a factory, and is generic on any type that implements your trait</li>
+<li>The factory type is going to contain the static definition of the final pointer/series of pointers you will use, it decides which ones are defined thanks to booleans created at the implementation step of a <code>#[vtable]</code> trait</li>
+<li>The functions being pointed to will wrap around your actual implementation, receiving arguments with binding types, and converting them, hiding away all of the <code>unsafe {}</code> from the driver user, before calling your implementation with the abstracted arguments. It does the reverse operation for any return value your Rust implementation gives</li>
+<li>When you need the pointer in Rust code, you can call a method that returns a reference to the static stored for the specific version of your factory type for the trait of the implementer, and have an abstraction wrapper set it</li>
+</ul>
+<h4>Step 0: Prerequisites</h4>
+<p>You should identify the types of your function arguments and return type on the C side. Prepare abstractions for those if not already. For the case of <a href="https://elixir.bootlin.com/linux/v6.5.6/source/include/linux/netdevice.h#L348">napi polling</a>, you get a <code>struct napi_struct*</code> and an <code>int</code>, and return an <code>int</code>. Because I was already writing an abstraction for using <code>struct napi_struct</code>, I was all good, and could convert back and forth from <code>struct napi_struct*</code> and <code>&amp;Napi</code>/<code>&amp;mut Napi</code>. That return <code>int</code> is not meant to be signaling errors as far as I know, only the number of packets received, so the stack can know how many packets were received in that poll run.</p>
+<h4>Step 1: Making a Trait</h4>
+<p>The <a href="https://github.com/Rust-for-Linux/linux/blob/b2516f7af9d238ebc391bdbdae01ac9528f1109e/rust/macros/vtable.rs"><code>#[vtable]</code></a> macro was created for these kinds of scenarios where you need to have a sort of "table" of function definitions (on the Rust side, on the C side it's pointers), and know which ones have been defined by an implementation.</p>
+<p>Say I have:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// NAPI poller definition trait</span>
+<span class="cp">#[vtable]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">NapiPoller</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Implementation of the poll function</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">poll</span><span class="p">(</span><span class="n">_napi</span>: <span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">Napi</span><span class="p">,</span><span class="w"> </span><span class="n">_budget</span>: <span class="kt">i32</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">i32</span> <span class="p">{</span>
+<span class="w">        </span><span class="mi">0</span><span class="w"> </span><span class="c1">// Not implemented</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><a href="https://git.vulpinecitrus.info/Lymkwi/linux/src/branch/rust-net-drivers/rust/kernel/net/gro.rs#L20">(actual version here)</a></p>
+<h4>Step 2: Make a builder</h4>
+<p>The builder/factory is going to hold your pointer definition(s) and give you static methods to retrieve it. In my case I even defined the exact type of the poller function as a <code>type</code> because it was just a bit too annoying to type out in its entirety.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Building structure for poller functions</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">PollerBuilder</span><span class="o">&lt;</span><span class="n">T</span>: <span class="nc">NapiPoller</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">_p</span>: <span class="nc">PhantomData</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">type</span> <span class="nc">PollerFunction</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span><span class="p">(</span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">napi_struct</span><span class="p">,</span><span class="w"> </span><span class="kt">i32</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">i32</span><span class="p">;</span>
+</code></pre></div>
+<p>You've probably seen it already, but function pointers on the Rust side are <code>Option&lt;unsafe extern "C" fn(A....) -&gt; B&gt;</code>, and we keep them at <code>None</code> if nothing is provided.</p>
+<p>The builder implementation is valid for any <code>T: NapiPoller</code>, and it holds my static function definition:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span>: <span class="nc">NapiPoller</span><span class="o">&gt;</span><span class="w"> </span><span class="n">PollerBuilder</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">FUNC</span>: <span class="nb">Option</span><span class="o">&lt;</span><span class="n">PollerFunction</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>::<span class="n">HAS_POLLER</span><span class="p">.</span><span class="n">then_some</span><span class="p">(</span><span class="bp">Self</span>::<span class="n">poller_callback</span><span class="p">);</span>
+
+<span class="w">    </span><span class="sd">/// Access the function pointer</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">fn</span> <span class="nf">build_function</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nb">Option</span><span class="o">&lt;</span><span class="n">PollerFunction</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span>::<span class="n">FUNC</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span> <span class="nf">poller_callback</span><span class="p">(</span><span class="n">napi</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">napi_struct</span><span class="p">,</span><span class="w"> </span><span class="n">budget</span>: <span class="kt">i32</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kt">i32</span> <span class="p">{</span>
+<span class="w">        </span><span class="sd">/// SAFETY: &lt;cut for brevity&gt;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">napi</span>: <span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">Napi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="o">*</span><span class="n">napi</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// The rest is primitive, hence, trivial</span>
+<span class="w">        </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>::<span class="n">poll</span><span class="p">(</span><span class="n">napi</span><span class="p">,</span><span class="w"> </span><span class="n">budget</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>At the time <a href="https://git.vulpinecitrus.info/Lymkwi/linux/src/branch/rust-net-drivers/rust/kernel/net/gro.rs#L43">I did my version</a>, I forgot to check <code>&lt;T&gt;::HAS_POLL</code>, and <a href="https://doc.rust-lang.org/stable/std/primitive.bool.html#method.then_some"><code>bool::then_some</code></a> was only recently stable, and I did not use it.</p>
+<h4>Step 3: Implement in user and abstractions</h4>
+<p>Let's say I have my drive, and it needs to have a <a href="https://git.vulpinecitrus.info/Lymkwi/linux/src/branch/rust-net-drivers/drivers/net/rustypipe/device.rs#L458">definition of NAPI polling</a>. You put whatever you want in it. As a fun thought experiment, if you do not provide an implementation of <code>poll</code>, you can imagine that the factory structure will contain <code>None</code> in its const field, and that your assignment will be to a <code>null</code> function pointer. That fits the semantics of what we want if we do not define a field in a descriptor/set a function pointer to null from a lack of implementation.</p>
+<p>Oh and your implementation also has to be marked <code>#[vtable]</code> so it can process it and add the booleans indicating whether you overwrote functions or not. I really wish we had some way to do that in the core language, but I think we're in such a specific use case that it might never come to <code>core</code>.</p>
+<p>Now, for my poller, I needed an additional function that sets the <code>poll</code> field of <code>struct napi_struct</code> through my abstraction, so I wrote the <a href="https://git.vulpinecitrus.info/Lymkwi/linux/src/branch/rust-net-drivers/rust/kernel/net.rs#L398">wrapper for it</a> (in my <code>net::Device</code>, which I guess made sense at the time), and this neat little trick I found helps me pass the <em>trait implementer</em> type for my implementation of <code>poll</code> to the function:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">napi_add</span><span class="o">&lt;</span><span class="n">POLLER</span>: <span class="nc">gro</span>::<span class="n">NapiPoller</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">napi</span>: <span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">gro</span>::<span class="n">Napi</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ... conversion stuff</span>
+<span class="w">    </span><span class="c1">// Use our factory type on the type provided to retrieve its implementation as a const pointer</span>
+<span class="w">    </span><span class="c1">// that way we can pass it around on the C side and it will remain valid, and hide all of the</span>
+<span class="w">    </span><span class="c1">// wrapping from the Rust user</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">poll_func</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">gro</span>::<span class="n">PollerBuilder</span>::<span class="o">&lt;</span><span class="n">POLLER</span><span class="o">&gt;</span>::<span class="n">build_function</span><span class="p">();</span>
+
+<span class="w">    </span><span class="sd">/// SAFETY: ....</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">netif_napi_add</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span><span class="w"> </span><span class="n">napi_ptr</span><span class="p">,</span><span class="w"> </span><span class="n">poll_func</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>And in my driver:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">dev</span><span class="p">.</span><span class="n">napi_add</span>::<span class="o">&lt;</span><span class="n">MyNapiPoller</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">napi</span><span class="p">);</span>
+</code></pre></div>
+<h4>Limitations</h4>
+<p>This is only an example but it outlines the general steps I undertook for RTNL, NAPI, and various other function pointers. I got them from looking at code others made, and things like <code>#[vtable]</code>  make me think this general structure is intended to be used, at least for now.</p>
+<p>In terms of scaling? I haven't evaluated it, but I assumed that changing function pointers on the fly is going to be a bit of a bother. Hopefully you do not actually need to have twenty of fifty different implementations, and you only have to implement one trait in the user. On the abstraction side, however, it gets problematic. If you are talking about descriptors/structures of many pointers, doing housekeeping to keep the names up to date is necessary (I believe this has been discussed in the recent proposal in <code>netdev</code>). Furthermore, it's still a lot of boilerplate code for <em>one</em> function pointer, and if you do not have any backing structure, you may need to spend a lot of time making structures that are needed <em>just</em> to handle that function pointer.</p>
+<p>Ah and don't forget: my code hasn't been reviewed by people on here. Handle it with an amount of salt typically reserved for a profoundly bland dish.</p>
+<p>That's all I can think of for now, I might have gone a bit overboard with documenting this (I like writing documentation). None of this is proofread either, it's all just pure stream of thoughts, I hope it made sense at all. Hopefully it was useful in some way, and I will try and hang around to answer questions/fix issues people could raise if I said something wrong.</p>
+
+
+
+<a name="395879447"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/396592-Networking/topic/Handling%20Function%20Pointers/near/395879447" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/topic/Handling.20Function.20Pointers.html#395879447">(Oct 10 2023 at 13:05)</a>:</h4>
+<blockquote>
+<p>(I like writing documentation)</p>
+</blockquote>
+<p>We need more of that in the kernel! :)</p>
+
+
+
+<a name="395880855"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/396592-Networking/topic/Handling%20Function%20Pointers/near/395880855" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Amélie Gonzalez <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/topic/Handling.20Function.20Pointers.html#395880855">(Oct 10 2023 at 13:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/396592-Networking/topic/Handling.20Function.20Pointers/near/395879447">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>(I like writing documentation)</p>
+</blockquote>
+<p>We need more of that in the kernel! :)</p>
+</blockquote>
+<p>I have <strong>some</strong> opinions about that :) and I do agree (and especially in <code>net</code>)</p>
+
+
+
+<a name="396102879"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/396592-Networking/topic/Handling%20Function%20Pointers/near/396102879" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> AllenX <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/396592-Networking/topic/Handling.20Function.20Pointers.html#396102879">(Oct 11 2023 at 14:33)</a>:</h4>
+<p>got it <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

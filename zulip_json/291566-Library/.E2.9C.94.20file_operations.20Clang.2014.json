@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>When using Clang 14 with Bindgen (at least in Arch Linux) did you noticed that the <code>write</code> field from <code>file_operations</code> is using a <code>mut*</code> instead of a <code>const*</code>? Currently I have</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// snip</span>\n<span class=\"cp\">#[repr(C)]</span><span class=\"w\"></span>\n<span class=\"cp\">#[derive(Copy, Clone)]</span><span class=\"w\"></span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">file_operations</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">write</span>: ::<span class=\"n\">core</span>::<span class=\"n\">option</span>::<span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg1</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">file</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg2</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_types</span>::<span class=\"n\">c_char</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg3</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg4</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">loff_t</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">isize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"c1\">// more code</span>\n</code></pre></div>\n<p>But instead we need</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">write</span>: ::<span class=\"n\">core</span>::<span class=\"n\">option</span>::<span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg1</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">file</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg2</span>: <span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">c_types</span>::<span class=\"n\">c_char</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg3</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">arg4</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">loff_t</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">isize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"o\">&gt;</span><span class=\"w\"></span>\n</code></pre></div>\n<p>And to make this work I needed to do some <code>sed</code> sorcery to change it into the same thing</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gd\">--- a/rust/Makefile</span><span class=\"w\"></span>\n<span class=\"gi\">+++ b/rust/Makefile</span><span class=\"w\"></span>\n<span class=\"gu\">@@ -304,6 +304,8 @@ quiet_cmd_bindgen = BINDGEN $@</span><span class=\"w\"></span>\n\n<span class=\"w\"> </span>$(obj)/bindings_generated.rs: private bindgen_target_flags = \\<span class=\"w\"></span>\n<span class=\"w\"> </span>    $(shell grep -v '^\\#\\|^$$' $(srctree)/$(src)/bindgen_parameters)<span class=\"w\"></span>\n<span class=\"gi\">+$(obj)/bindings_generated.rs: private bindgen_target_extra = ; \\</span><span class=\"w\"></span>\n<span class=\"gi\">+    sed -Ei '/struct file_operations/,/arg2: \\*/ s|(arg2: \\*.*)|\\1\\n//m|' $@; sed -Ei '/^\\/\\/m/,/arg2/ s|(arg2: \\*)mut|\\1const|' $@</span><span class=\"w\"></span>\n<span class=\"w\"> </span>$(obj)/bindings_generated.rs: $(src)/kernel/bindings_helper.h \\<span class=\"w\"></span>\n<span class=\"w\"> </span>    $(src)/bindgen_parameters FORCE<span class=\"w\"></span>\n<span class=\"w\"> </span>   $(call if_changed_dep,bindgen)<span class=\"w\"></span>\n</code></pre></div>\n<p>Did this happen to someone?</p>",
+        "id": 289799180,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1657932405
+    },
+    {
+        "content": "<p>I can't reproduce it with Clang 14.0.1. Which is your exact Clang (in particular, <code>libclang</code>) and <code>bindgen</code> versions?</p>",
+        "id": 289880724,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658059410
+    },
+    {
+        "content": "<p>I see Arch Linux has Clang 14.0.6 (not sure if patched)</p>",
+        "id": 289881047,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658059909
+    },
+    {
+        "content": "<p>I was using Clang 14.0.6 and Bindgen 0.56.0, although I've reproduced the issue in 0.60.1. And by the way, what's the patch you've mentioned and which distro are you on?</p>",
+        "id": 289886475,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658066344
+    },
+    {
+        "content": "<p>I tried with Clang 14.0.6 compiled from source, and I see the correct result (<code>arg2: *const c_types::c_char,</code>).</p>",
+        "id": 289980037,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157478
+    },
+    {
+        "content": "<p>By \"patched\" I meant that I don't know whether Arch Linux uses the vanilla upstream sources or whether they might apply patches on top.</p>",
+        "id": 289980116,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157496
+    },
+    {
+        "content": "<p>I don't see in the struct definition anything that suggests the <code>const</code> is gated by a kernel config either, at least in v5.19-rc7: <a href=\"https://elixir.bootlin.com/linux/v5.19-rc7/source/include/linux/fs.h#L1968\">https://elixir.bootlin.com/linux/v5.19-rc7/source/include/linux/fs.h#L1968</a></p>",
+        "id": 289980412,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157623
+    },
+    {
+        "content": "<p>But, just in case, could you try to reproduce it with one of the <code>.github/workflow</code> configs for instance?</p>",
+        "id": 289980587,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157707
+    },
+    {
+        "content": "<p>Also, which kernel tree are you using? The <code>rust</code> branch based on <code>rc6</code>, or <code>rust-next</code>, or...?</p>",
+        "id": 289980745,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157763
+    },
+    {
+        "content": "<p>Finally, could you please post what is the output of <code>bindgen scripts/rust-is-available-bindgen-libclang.h</code>?</p>",
+        "id": 289980872,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157839
+    },
+    {
+        "content": "<p>Ah, and one more thing since you compiled a newer <code>bindgen</code>: could you please try <code>bindgen --version --verbose</code>? Since 0.60.0 it prints the <code>libclang</code> version being picked up (Emilio added it for us <a href=\"https://github.com/rust-lang/rust-bindgen/issues/2138\">https://github.com/rust-lang/rust-bindgen/issues/2138</a>).</p>",
+        "id": 289981279,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658157985
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980116\">said</a>:</p>\n<blockquote>\n<p>By \"patched\" I meant that I don't know whether Arch Linux uses the vanilla upstream sources or whether they might apply patches on top.</p>\n</blockquote>\n<p>Arch only uses <a href=\"https://github.com/archlinux/svntogit-packages/tree/16c537b9f1a32e2c77d3381a48b3116cfe61eb87/trunk\">two patches</a> (one for default strong ssp and another that fixes <code>clang-tidy</code>) but AFAICT there's nothing out of place.</p>",
+        "id": 290009079,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658170934
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980587\">said</a>:</p>\n<blockquote>\n<p>But, just in case, could you try to reproduce it with one of the <code>.github/workflow</code> configs for instance?</p>\n</blockquote>\n<p>With <code>kernel-x86_64-release.config</code> it doesn't fail to compile when I run <code>make rust LLVM=1</code>, but with my <code>.config</code> it seems that I have no luck <span aria-label=\"oh no\" class=\"emoji emoji-1f615\" role=\"img\" title=\"oh no\">:oh_no:</span></p>",
+        "id": 290009100,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658170946
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980745\">said</a>:</p>\n<blockquote>\n<p>Also, which kernel tree are you using? The <code>rust</code> branch based on <code>rc6</code>, or <code>rust-next</code>, or...?</p>\n</blockquote>\n<p>Both <code>v5.18.12</code> with the 7th version of the patches and with <code>rust</code> from <code>Rust-for-Linux/linux</code> at <code>HEAD</code> (the current commit).</p>",
+        "id": 290009132,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658170959
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289980872\">said</a>:</p>\n<blockquote>\n<p>Finally, could you please post what is the output of <code>bindgen scripts/rust-is-available-bindgen-libclang.h</code>?</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>$ bindgen scripts/rust-is-available-bindgen-libclang.h\nscripts/rust-is-available-bindgen-libclang.h:2:9: warning: clang version 14.0.6\n  [-W#pragma-messages], err: false\n/* automatically generated by rust-bindgen 0.56.0 */\n</code></pre></div>",
+        "id": 290009148,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658170970
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/file_operations.20Clang.2014/near/289981279\">said</a>:</p>\n<blockquote>\n<p>Ah, and one more thing since you compiled a newer <code>bindgen</code>: could you please try <code>bindgen --version --verbose</code>? Since 0.60.0 it prints the <code>libclang</code> version being picked up (Emilio added it for us <a href=\"https://github.com/rust-lang/rust-bindgen/issues/2138\">https://github.com/rust-lang/rust-bindgen/issues/2138</a>).</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>$ bindgen --version --verbose\nbindgen 0.56.0\n\n$ bindgen --version --verbose\nbindgen 0.60.1\nClang: clang version 14.0.6\n</code></pre></div>",
+        "id": 290009163,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658170981
+    },
+    {
+        "content": "<p>Also here's my <code>.config</code> for the <code>5.18.12</code> kernel, though <code>make menuconfig</code> can update it easily. <a href=\"/user_uploads/35136/1-kkwK4EQx8BvYd7dexLvRXS/config\">config</a></p>",
+        "id": 290009656,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658171198
+    },
+    {
+        "content": "<p>Opened up Rust-for-Linux/linux#835 for reviews. Happens that when I was doing a BTF with pahole build it expanded a definition, namely <code>BTF_TYPE_TAG(value)</code>, to be <code>__attribute__((btf_type_tag(#value)))</code>, this confounds bindgen and makes it discard the const qualifier in attributed function parameters. That's why <code>write</code> got a <code>mut*</code> in the bindings.</p>",
+        "id": 290624599,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1658597334
+    },
+    {
+        "content": "<p>Thanks for taking a look at that!</p>",
+        "id": 290625655,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1658598827
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"485103\">Martin Rodriguez Reboredo</span> has marked this topic as resolved.</p>",
+        "id": 290635130,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1658612749
+    }
+]

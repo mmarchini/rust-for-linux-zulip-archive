@@ -1,0 +1,108 @@
+<html>
+<head><meta charset="utf-8"><title>CONFIG_CONSTRUCTORS · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html">CONFIG_CONSTRUCTORS</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="424908838"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/424908838" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#424908838">(Mar 05 2024 at 16:28)</a>:</h4>
+<p>When you enable CONFIG_RUST, this also implicitly enables CONFIG_CONSTRUCTORS due to a <code>select</code> in the Kconfig. Why do we have this?</p>
+
+
+
+<a name="424925549"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/424925549" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#424925549">(Mar 05 2024 at 17:49)</a>:</h4>
+<p>See commit 4b9a68f2e59a0 ("rust: add support for static synchronisation primitives") in the old <code>rust</code> branch:</p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>    rust: add support for static synchronisation primitives
+
+    This allows drivers to declare global shared variables (`static`) that
+    can be mutated when the synchronisation primitive is held.
+
+    Although we want to discourage the use of globals, some drivers still
+    need them. For example, a driver that needs to allocate an id to each
+    instance of a device that is attached (and free it up when it's
+    detached) may have a global variable to manage ids, access to which
+    needs to synchronised.
+
+    We use constructors to implement this, so we select
+    `CONFIG_CONSTRUCTORS` automatically when `RUST` is selected.
+</code></pre></div>
+<p>i.e. <code>init_static_sync!</code> used <code>.ctors</code> (later <code>.init_array</code>): <a href="https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/sync.rs#L135">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/sync.rs#L135</a></p>
+<p><span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span></p>
+
+
+
+<a name="424926441"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/424926441" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#424926441">(Mar 05 2024 at 17:55)</a>:</h4>
+<p>Okay, but we don't actually support that right now.</p>
+
+
+
+<a name="424928304"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/424928304" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#424928304">(Mar 05 2024 at 18:05)</a>:</h4>
+<p>Perhaps it would make more sense to remove the select and gate such features behind <code>#[cfg(CONFIG_CONSTRUCTORS)]</code>?</p>
+
+
+
+<a name="424937929"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/424937929" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#424937929">(Mar 05 2024 at 19:03)</a>:</h4>
+<p>I mean, in general, I do not think that CONFIG_CONSTRUCTORS is the right choice for global mutexes. We can replicate the C macro for global mutexes, and code-before-main is in general fraught with issues. For example, it looks like the <code>init_static_sync!</code> macro is unsound because one global could access another global during initialization, which will lead to issues depending on the order in which they are initialized.</p>
+
+
+
+<a name="425347326"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425347326" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425347326">(Mar 07 2024 at 16:31)</a>:</h4>
+<p>Unless I hear any objections, I'm going to submit a patch that removes <code>select CONSTRUCTORS</code>.</p>
+
+
+
+<a name="425362878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425362878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425362878">(Mar 07 2024 at 17:53)</a>:</h4>
+<p>No objections from me. if we still need something like this in the future, we can discuss then what to do.</p>
+<p><span class="user-mention" data-user-id="546447">@Benno Lossin</span> , I think we briefly discussed this in some forum but I don't remember which anymore, so restarting the discussion here. How can we use <code>pin_init</code> to initialise static instances of pinned structures like locks?</p>
+
+
+
+<a name="425497572"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425497572" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425497572">(Mar 08 2024 at 11:13)</a>:</h4>
+<p>the only thing we need to do would be to first construct a <code>impl PinInit</code> value and then call <code>PinInit::__pinned_init()</code> from the initializer code.</p>
+
+
+
+<a name="425503498"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425503498" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425503498">(Mar 08 2024 at 11:55)</a>:</h4>
+<p>I think that we should not be using initializers unless it is absolutely necessary. It is not necessary for locks; there's nothing preventing us from replicating the DEFINE_SPINLOCK macro in Rust.</p>
+
+
+
+<a name="425510143"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425510143" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425510143">(Mar 08 2024 at 12:37)</a>:</h4>
+<p>of course we can just have a macro that wraps that, I think <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> was after how the internals would work</p>
+
+
+
+<a name="425510351"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425510351" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425510351">(Mar 08 2024 at 12:39)</a>:</h4>
+<p>If you replicate the DEFINE_SPINLOCK macro to avoid needing initializers, then you probably can't use pin-init since traits are not const.</p>
+
+
+
+<a name="425514105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425514105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425514105">(Mar 08 2024 at 13:00)</a>:</h4>
+<p>the question is what are the use cases for statics? I personally do not use them at all, but in userspace that might be easier. If they can be avoided most of the time, then having a solution that only allows simple use-cases might be better than a general mechanism to initialize statics via pin-init. But if people want to e.g. initialize structures with nested locks etc. then we should probably use pin-init.</p>
+
+
+
+<a name="425519436"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/CONFIG_CONSTRUCTORS/near/425519436" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/CONFIG_CONSTRUCTORS.html#425519436">(Mar 08 2024 at 13:32)</a>:</h4>
+<p>My only use of globals is a mutex containing a linked list of all binder contexts.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

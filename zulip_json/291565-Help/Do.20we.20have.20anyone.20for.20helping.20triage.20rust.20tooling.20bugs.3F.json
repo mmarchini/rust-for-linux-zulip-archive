@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Hi! So today I won the bug lottery and also managed to discover a bug where if I attempt to build this kernel, rustc just hangs. I guess I was wondering if we have anyone here who triages issues like this or at least knows how I could turn a kernel branch like this into an example of whatever is hanging the compiler when I try to build this, so I can actually file a bug for it upstream:</p>\n<p><a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/tree/rust/rust-stuck?ref_type=heads\">https://gitlab.freedesktop.org/lyudess/linux/-/tree/rust/rust-stuck?ref_type=heads</a></p>\n<p>(Also, I'm kind of generally stuck since I can't build it without the compiler freezing, heh)</p>",
+        "id": 600770020,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780695329
+    },
+    {
+        "content": "<p>Do you know where it's stuck? If not, could you try running rustc under a debugger to capture a backtrace while it's stuck?</p>",
+        "id": 600772577,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780696949
+    },
+    {
+        "content": "<p>Yep one sec</p>",
+        "id": 600772650,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780696999
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/35136/0z_UZljjAFd-qsbJ8yrcy12o/PastedText.txt\">Right here</a></p>",
+        "id": 600772682,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780697020
+    },
+    {
+        "content": "<p>there's two other threads as well but neither of them looked relevant</p>",
+        "id": 600772745,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780697051
+    },
+    {
+        "content": "<blockquote>\n<p>I guess I was wondering if we have anyone here who triages issues like this or at least knows how I could turn a kernel branch like this into an example of whatever is hanging the compiler when I try to build this</p>\n</blockquote>\n<p>I try to track toolchain related stuff in our usual lists from <a href=\"https://github.com/Rust-for-Linux/linux/issues/2\">#2</a>. We never had the compiler hanging from what I recall, but we have definitely hit e.g. ICEs in the past, and issues generally get fixed when we report them upstream.</p>\n<p>I can reproduce the hang -- using the new trait solver on <code>kernel</code> gives a hint:</p>\n<div class=\"codehilite\" data-code-language=\"txt\"><pre><span></span><code>     error[E0283]: type annotations needed\n        --&gt; rust/kernel/drm/device.rs:232:22\n         |\n     232 |         fbdev_probe: T::Object::ALLOC_OPS.fbdev_probe,\n         |                      ^^^^^^^^^ cannot infer type for type parameter `Ctx` declared on the associated type `Object`\n         |\n         = note: the type must implement `drm::device::DeviceContext`\n</code></pre></div>\n<p>And with the following the hang does not happen anymore:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/drm/device.rs b/rust/kernel/drm/device.rs</span>\n<span class=\"gh\">index 9641102bd87f..a32c79dfd6e8 100644</span>\n<span class=\"gd\">--- a/rust/kernel/drm/device.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/drm/device.rs</span>\n<span class=\"gu\">@@ -229,7 +229,7 @@ const fn compute_features() -&gt; u32 {</span>\n<span class=\"w\"> </span>        dumb_map_offset: T::Object::&lt;Uninit&gt;::ALLOC_OPS.dumb_map_offset,\n\n<span class=\"w\"> </span>        show_fdinfo: None,\n<span class=\"gd\">-        fbdev_probe: T::Object::ALLOC_OPS.fbdev_probe,</span>\n<span class=\"gi\">+        fbdev_probe: T::Object::&lt;Uninit&gt;::ALLOC_OPS.fbdev_probe,</span>\n\n<span class=\"w\"> </span>        major: T::INFO.major,\n<span class=\"w\"> </span>        minor: T::INFO.minor,\n</code></pre></div>\n<p>I hope that helps!</p>",
+        "id": 600789344,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1780704538
+    },
+    {
+        "content": "<p>This hangs it:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Bound</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n\n<span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Alloc</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">OPS</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Driver</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Object</span><span class=\"o\">&lt;</span><span class=\"n\">Ctx</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Bound</span><span class=\"o\">&gt;</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Alloc</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">f</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Driver</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Object</span><span class=\"p\">::</span><span class=\"n\">OPS</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>which one can easily see in e.g. Compiler Explorer. It may be one of the existing issues they have, but I will fill it anyway.</p>",
+        "id": 600793245,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1780705298
+    },
+    {
+        "content": "<p>Done: <a href=\"https://github.com/rust-lang/rust/issues/157516\">https://github.com/rust-lang/rust/issues/157516</a></p>",
+        "id": 600794516,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1780705823
+    },
+    {
+        "content": "<p>Linked at: <a href=\"https://github.com/Rust-for-Linux/linux/issues/355\">https://github.com/Rust-for-Linux/linux/issues/355</a></p>",
+        "id": 600794757,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1780705949
+    },
+    {
+        "content": "<p>Yes this helps tremendously, thank you!</p>",
+        "id": 601010017,
+        "sender_full_name": "Lyude",
+        "timestamp": 1780854376
+    },
+    {
+        "content": "<p>You're welcome!</p>",
+        "id": 601067745,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1780900904
+    }
+]

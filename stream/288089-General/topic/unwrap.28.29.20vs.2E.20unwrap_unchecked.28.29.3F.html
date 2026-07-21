@@ -1,0 +1,85 @@
+<html>
+<head><meta charset="utf-8"><title>unwrap() vs. unwrap_unchecked()? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html">unwrap() vs. unwrap_unchecked()?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="591209866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591209866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591209866">(Apr 27 2026 at 18:54)</a>:</h4>
+<p>Hi! Recently in a patch review that I received (the patch review from Alexander on my shmem series in particular) and I noticed that some of the suggested code actually used <code>unwrap()</code> vs. <code>unwrap_unchecked()</code>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// PANIC: `populate` has just succeeded, guaranteeing that `sgt_res` is populated.</span>
+<span class="nb">Ok</span><span class="p">(</span><span class="n">sgt_res</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">unwrap</span><span class="p">())</span>
+</code></pre></div>
+<p>Where previously this would have used <code>unwrap_unchecked()</code>, in part because the actual assignment that populated the variable was on the line directly above the unchecked unwrap.</p>
+<p>Do we have an explicit rule for when to use one or the other?</p>
+<p>FWIW, I've always preferred <code>unwrap_unchecked()</code> for locations where the actual <code>Some()</code> assignment is guaranteed by a type invariant, or the assignment happens immediately above the unchecked unwrap in the source file. And I've usually explicitly avoided <code>unwrap()</code>. I can see some situations where I would possibly want to use <code>unwrap()</code> if I expect it to be possible that a type invariant could be violated on the C side, but that's about it.</p>
+
+
+
+<a name="591215662"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591215662" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591215662">(Apr 27 2026 at 19:26)</a>:</h4>
+<p>Neither if possible</p>
+
+
+
+<a name="591215775"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591215775" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591215775">(Apr 27 2026 at 19:27)</a>:</h4>
+<p><code>Option::insert</code> can give you a reference possible, but I suppose you need a immutable reference here?</p>
+
+
+
+<a name="591215905"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591215905" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591215905">(Apr 27 2026 at 19:28)</a>:</h4>
+<p>Well I mean of course, I try to avoid both when possible - but it does come up quite often when doing stuff like making guarantees around how C apis work. I'm mostly wondering as a general rule once you've tried other things</p>
+
+
+
+<a name="591215993"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591215993" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591215993">(Apr 27 2026 at 19:28)</a>:</h4>
+<p>If you have to choose between two, and if you know that compiler can see the <code>Option</code> not being able to be <code>None</code> -- then use <code>unwrap()</code> with panic comment would be my preferred option</p>
+
+
+
+<a name="591216309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591216309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591216309">(Apr 27 2026 at 19:30)</a>:</h4>
+<p>If there's no code size penalty then there's not really down side of <code>unwrap()</code> compared to <code>unwrap_unchecked()</code></p>
+
+
+
+<a name="591216443"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591216443" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591216443">(Apr 27 2026 at 19:31)</a>:</h4>
+<p>Oh! I didn't even realize the compiler could optimize out unwrap()s</p>
+
+
+
+<a name="591216471"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591216471" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591216471">(Apr 27 2026 at 19:31)</a>:</h4>
+<p>that helps a lot then :)</p>
+
+
+
+<a name="591217798"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591217798" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591217798">(Apr 27 2026 at 19:39)</a>:</h4>
+<p>Hmm, I just discovered a case where Rust compiler failed to optimize this, when the type has a niche. <a href="https://godbolt.org/z/d5Ybzdzdx">https://godbolt.org/z/d5Ybzdzdx</a></p>
+
+
+
+<a name="591218025"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591218025" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591218025">(Apr 27 2026 at 19:41)</a>:</h4>
+<p>When there's a niche, the <code>Some</code> tag write becomes implicit and LLVM apparently does know about this anymore.</p>
+
+
+
+<a name="591218148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/unwrap%28%29%20vs.%20unwrap_unchecked%28%29%3F/near/591218148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/unwrap.28.29.20vs.2E.20unwrap_unchecked.28.29.3F.html#591218148">(Apr 27 2026 at 19:41)</a>:</h4>
+<p>So I withdraw what I said; <code>DevRes</code> has a niche, so <code>unwrap_unchecked()</code> would be preferred</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

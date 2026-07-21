@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>I'm thinking about how to work in workqueues with the new lifetime model. Let's say we have device private data that looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">MyGpuPrivateData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">wq</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">OwnedWorkqueue</span><span class=\"o\">&lt;'</span><span class=\"na\">foo</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">foo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and that <code>Workqueue::&lt;'a&gt;::spawn</code> accepts any closure that is <code>'a</code>. (Note contravariance in 'a.) Then we want to be able to do this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">MyGpuPrivateData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">spawn_work</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">wq</span><span class=\"p\">.</span><span class=\"n\">spawn</span><span class=\"p\">(</span><span class=\"o\">||</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// ok because `wq` borrows from `foo`</span>\n<span class=\"w\">            </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">foo</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">});</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But my understanding is that the self-referential pin-init stuff only lets you create such self-referential values when constructing <code>MyGpuPrivateData</code> and not after the fact.</p>\n<p>Maybe you can do this by stashing a <code>&amp;Workqueue</code> elsewhere in <code>MyGpuPrivateData</code>?</p>\n<p>Thoughts?</p>\n<p>cc  <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 600111585,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780585616
+    },
+    {
+        "content": "<p><del>this isn't self-referential?</del> ah I see it now</p>",
+        "id": 600112337,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780585785
+    },
+    {
+        "content": "<p>shouldn't the transformation <code>&amp;'a Self -&gt; &amp;'foo Foo</code> always be allowed for <code>MyGpuPrivateData</code>?</p>",
+        "id": 600112908,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780585937
+    },
+    {
+        "content": "<p>not sure where the <code>'foo</code> lifetime would come from, but maybe this can just be a field projection?</p>",
+        "id": 600113007,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780585964
+    },
+    {
+        "content": "<p>There's going to be a <code>with_project</code> API that allows you to this</p>",
+        "id": 600113045,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780585972
+    },
+    {
+        "content": "<p>It uses HRTB to mint <code>'foo</code> lifetime, and the projected type is going to be <code>&amp;'foo Foo</code> for the <code>foo</code> field</p>",
+        "id": 600113153,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780585999
+    },
+    {
+        "content": "<p>ah cool! is it something like this?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">MyGpuPrivateData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">with_project</span><span class=\"o\">&lt;</span><span class=\"n\">R</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">f</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">for</span><span class=\"o\">&lt;'</span><span class=\"na\">foo</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"n\">MyGpuPrivateDataProjected</span><span class=\"o\">&lt;'</span><span class=\"na\">foo</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">R</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">R</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 600113321,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586043
+    },
+    {
+        "content": "<p>Yes</p>",
+        "id": 600113372,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780586054
+    },
+    {
+        "content": "<p><a href=\"https://github.com/Rust-for-Linux/pin-init/blob/dev/selfref/examples/selfref.rs\">https://github.com/Rust-for-Linux/pin-init/blob/dev/selfref/examples/selfref.rs</a></p>",
+        "id": 600113492,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780586083
+    },
+    {
+        "content": "<p>I do wonder if and how field projection could make this nice... <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 600113498,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586084
+    },
+    {
+        "content": "<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to \"all fields below <code>wq</code>\"</p>",
+        "id": 600113780,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780586160
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113498\">said</a>:</p>\n<blockquote>\n<p>I do wonder if and how field projection could make this nice... <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>\n</blockquote>\n<p>I feel like this needs more than just FP, since we have no way of naming the <code>'foo</code> lifetime</p>",
+        "id": 600113801,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586164
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113780\">said</a>:</p>\n<blockquote>\n<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to \"all fields below <code>wq</code>\"</p>\n</blockquote>\n<p>I'd imagine we could have some kind of \"field groups\"</p>",
+        "id": 600113937,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586205
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113780\">said</a>:</p>\n<blockquote>\n<p>By the way, I don't know about the lifetimes being field names. For this use-case, you want a lifetime that corresponds to \"all fields below <code>wq</code>\"</p>\n</blockquote>\n<p>Just use the first field name that needs to be borrowed. Outlive bounds exist for all borrowed fields based on their drop order.</p>",
+        "id": 600114019,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780586226
+    },
+    {
+        "content": "<p>ah, neat</p>",
+        "id": 600114071,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780586238
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Workqueues.20bound.20to.20a.20lifetime/near/600113801\">said</a>:</p>\n<blockquote>\n<p>I feel like this needs more than just FP, since we have no way of naming the <code>'foo</code> lifetime</p>\n</blockquote>\n<ul>\n<li>if we had a places as lifetimes, we could have <code>self: &amp;Self -&gt; &amp;'{self.foo} Foo</code>, which the borrow checker could permit using in a closure that's spawned on the workqueue.</li>\n<li>however that signature is only valid if <code>foo</code> is not dropped before the workqueue is finished. currently it seems to me that this is solved by dropping the workqueue first and then <code>foo</code>.</li>\n</ul>\n<p>Because of this, std can't improve upon the output lifetime of borrowing unless it also supports self-referential types directly (and then it can check that <code>foo</code> is only ever dropped after <code>wq</code>).</p>",
+        "id": 600115938,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586697
+    },
+    {
+        "content": "<p>so I don't think that FP will come in handy here</p>",
+        "id": 600116041,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1780586724
+    },
+    {
+        "content": "<p>The workqueue could also take a new type Data&lt;'foo&gt; as argument that only contains the references the workqueue actually needs from  <code>struct MyGpuPrivateData</code>.</p>\n<p>But if this already works, I guess this is more generic as you can always create a new struct within <code>struct MyGpuPrivateData</code> that contains the workqueue, plus the data you want to expose to the workqueue.</p>",
+        "id": 600116484,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1780586840
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> I assume we can then relax <code>W: RawWorkItem&lt;ID&gt; + Send + 'static</code> to <code>W: RawWorkItem&lt;ID&gt; + Send + 'wq</code>.</p>",
+        "id": 600119189,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1780587590
+    },
+    {
+        "content": "<p>How would you want to handle work items queued on the global system workqueues that must not exceed driver unbind?</p>",
+        "id": 600119616,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1780587713
+    },
+    {
+        "content": "<p>Exactly</p>",
+        "id": 600119700,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780587736
+    },
+    {
+        "content": "<p>Such work items would either have to be made <code>'static</code> or require a different spawn method.</p>",
+        "id": 600119840,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1780587775
+    },
+    {
+        "content": "<p>I guess the spawn method would return a handle that cancels work on drop, and it cannot be forgotten?</p>",
+        "id": 600120030,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1780587828
+    },
+    {
+        "content": "<blockquote>\n<p>and it cannot be forgotten?</p>\n</blockquote>\n<p>What do you mean cannot be forgotten? Do you mean <code>mem::forget</code>?</p>",
+        "id": 600134100,
+        "sender_full_name": "Onur Özkan",
+        "timestamp": 1780591897
+    }
+]

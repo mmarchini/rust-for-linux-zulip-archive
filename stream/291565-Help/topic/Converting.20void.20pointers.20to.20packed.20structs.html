@@ -1,0 +1,274 @@
+<html>
+<head><meta charset="utf-8"><title>Converting void pointers to packed structs · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html">Converting void pointers to packed structs</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="475758878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475758878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475758878">(Oct 09 2024 at 06:25)</a>:</h4>
+<p>It's common in C to do something like this</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">spdm_header</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">version</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">code</span><span class="p">;</span><span class="w">  </span><span class="cm">/* RequestResponseCode */</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">param1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">param2</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">__packed</span><span class="p">;</span>
+
+<span class="kt">ssize_t</span><span class="w"> </span><span class="nf">my_function</span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="n">req_sz</span><span class="p">,)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">spdm_header</span><span class="w"> </span><span class="o">*</span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">req</span><span class="p">;</span>
+<span class="p">...</span>
+</code></pre></div>
+<p>What's the preferred way to do something similar in Rust?</p>
+<p>I was thinking of a <code>From</code> implementation and a <code>from_raw_parts()</code>/<code>from_raw_parts_mut()</code>, something like this (untested).</p>
+<p>The issue is that <code>From</code> can't fail, so I'm not sure what to do if the From fails if an illegal value is supplied.</p>
+<p>Is there a better way I'm not thinking of?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(C, packed)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">SpdmHeader</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">code</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="cm">/* RequestResponseCode */</span>
+<span class="w">    </span><span class="n">param1</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">param2</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="nb">From</span><span class="o">&lt;</span><span class="p">[</span><span class="kt">u8</span><span class="p">]</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SpdmHeader</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">from</span><span class="p">(</span><span class="n">array</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="kt">u8</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">SpdmHeader</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// What happens on a failure? There is no result</span>
+<span class="w">        </span><span class="fm">todo!</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">ssize_t</span><span class="w"> </span><span class="n">my_function</span><span class="p">(</span><span class="n">void</span><span class="w"> </span><span class="o">*</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">size_t</span><span class="w"> </span><span class="n">req_sz</span><span class="p">,)</span>
+<span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">msg_buf</span><span class="w"> </span><span class="o">=</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w">  </span><span class="n">from_raw_parts_mut</span><span class="p">(</span><span class="n">req</span><span class="p">,</span><span class="w"> </span><span class="n">req_sz</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">SpdmHeader</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">msg_buf</span><span class="p">)</span>
+<span class="o">..</span><span class="p">.</span>
+</code></pre></div>
+
+
+
+<a name="475768663"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475768663" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475768663">(Oct 09 2024 at 07:02)</a>:</h4>
+<p>It really depends on what kind of void pointer this is. Is a bunch of bytes you just got from userspace?</p>
+
+
+
+<a name="475801030"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475801030" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475801030">(Oct 09 2024 at 09:02)</a>:</h4>
+<p>There is also the untrusted work from benno which might be a good thing to use here as well</p>
+
+
+
+<a name="475805175"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475805175" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475805175">(Oct 09 2024 at 09:21)</a>:</h4>
+<p>It's a bunch of bytes from a device. So not userspace, but the data is untrusted. Although we can be confident of the number of bytes at least</p>
+
+
+
+<a name="475805221"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475805221" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475805221">(Oct 09 2024 at 09:21)</a>:</h4>
+<p>Do you have a link to that?</p>
+
+
+
+<a name="475805742"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475805742" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475805742">(Oct 09 2024 at 09:24)</a>:</h4>
+<p>The untrusted patch is <a href="https://lore.kernel.org/rust-for-linux/20240925205244.873020-1-benno.lossin@proton.me/#r">here</a>. But that's not landed at all yet, so you probably want to use what exists today.</p>
+
+
+
+<a name="475805938"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475805938" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475805938">(Oct 09 2024 at 09:25)</a>:</h4>
+<p>This is all being built on not yet upstream SPDM patches, so I'm happy to pull in some more out of tree patches if it's the right approach long term</p>
+
+
+
+<a name="475806214"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475806214" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475806214">(Oct 09 2024 at 09:26)</a>:</h4>
+<p>Please see here in Binder:<br>
+<a href="https://android.googlesource.com/kernel/common/+/refs/heads/android-mainline-rust/drivers/android/binder/defs.rs#128">https://android.googlesource.com/kernel/common/+/refs/heads/android-mainline-rust/drivers/android/binder/defs.rs#128</a><br>
+<a href="https://android.googlesource.com/kernel/common/+/refs/heads/android-mainline-rust/drivers/android/binder/process.rs#1108">https://android.googlesource.com/kernel/common/+/refs/heads/android-mainline-rust/drivers/android/binder/process.rs#1108</a></p>
+
+
+
+<a name="475806442"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475806442" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475806442">(Oct 09 2024 at 09:27)</a>:</h4>
+<p>Or ashmem:<br>
+<a href="https://android-review.git.corp.google.com/c/kernel/common/+/3267327/8/drivers/staging/android/ashmem_rust.rs">https://android-review.git.corp.google.com/c/kernel/common/+/3267327/8/drivers/staging/android/ashmem_rust.rs</a> (look at the top of <code>pin_unpin</code>)</p>
+
+
+
+<a name="475806655"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475806655" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475806655">(Oct 09 2024 at 09:28)</a>:</h4>
+<p>Thanks, I'll dig into those tomorrow</p>
+
+
+
+<a name="475806820"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475806820" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475806820">(Oct 09 2024 at 09:29)</a>:</h4>
+<p>Though this is specific to reading from userspace. You'll probably need to do something similar to what's in the <code>kernel::uaccess</code> module (which the above examples use).</p>
+
+
+
+<a name="475830629"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475830629" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475830629">(Oct 09 2024 at 11:13)</a>:</h4>
+<p>we do have the <code>FromBytes</code> and <code>AsBytes</code> traits</p>
+
+
+
+<a name="475830835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/475830835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#475830835">(Oct 09 2024 at 11:14)</a>:</h4>
+<p>but they are missing the respective functions, though someone is working on that: <a href="https://github.com/Rust-for-Linux/linux/issues/1119">https://github.com/Rust-for-Linux/linux/issues/1119</a></p>
+
+
+
+<a name="476124920"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476124920" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476124920">(Oct 10 2024 at 12:44)</a>:</h4>
+<p>For completeness there is also <a href="https://doc.rust-lang.org/stable/core/convert/trait.TryFrom.html"><code>TryFrom</code></a> which is allowed to fail.</p>
+
+
+
+<a name="476295526"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476295526" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476295526">(Oct 11 2024 at 04:22)</a>:</h4>
+<p>Ah, I always forget about TryFrom. Thanks.</p>
+<p>I ended up going with the Unstrusted work from <a href="https://lore.kernel.org/rust-for-linux/20240925205244.873020-1-benno.lossin@proton.me">https://lore.kernel.org/rust-for-linux/20240925205244.873020-1-benno.lossin@proton.me</a>, it's exactly what I was looking for</p>
+
+
+
+<a name="476957694"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476957694" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476957694">(Oct 15 2024 at 10:34)</a>:</h4>
+<p>Another question. I feel like I have a good solution for fixed size structs, but now I'm a bit stuck with how to handle this for trailing array structs. Any ideas?</p>
+<p>Ideally I want to convert the bytes to a vector of <code>u16</code>s, but Vec doesn't work with a pointer cast</p>
+
+
+
+<a name="476958160"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958160" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958160">(Oct 15 2024 at 10:36)</a>:</h4>
+<p>That's a bit more tricky, but can be done. Could you share a struct so I can show an example?</p>
+
+
+
+<a name="476958287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958287">(Oct 15 2024 at 10:37)</a>:</h4>
+<p>This is the C struct (not in mainline)</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">spdm_get_version_rsp</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">version</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">code</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">param1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">param2</span><span class="p">;</span>
+
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">reserved</span><span class="p">;</span>
+<span class="w">    </span><span class="n">u8</span><span class="w"> </span><span class="n">version_number_entry_count</span><span class="p">;</span>
+<span class="w">    </span><span class="n">__le16</span><span class="w"> </span><span class="n">version_number_entries</span><span class="p">[]</span><span class="w"> </span><span class="n">__counted_by</span><span class="p">(</span><span class="n">version_number_entry_count</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">__packed</span><span class="p">;</span>
+</code></pre></div>
+
+
+
+<a name="476958459"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958459" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958459">(Oct 15 2024 at 10:38)</a>:</h4>
+<p>and ideally something like this</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// Doesn't work, just an example</span>
+<span class="cp">#[repr(C, packed)]</span>
+<span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">GetVersionRsp</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">code</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">param1</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">param2</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reserved</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">version_number_entry_count</span><span class="p">:</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">version_number_entries</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="kt">u16</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="476958520"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958520" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958520">(Oct 15 2024 at 10:39)</a>:</h4>
+<p>Using <code>Vec</code> fundamentally means that the data will be in a separate allocation, which is not what the original struct does.</p>
+
+
+
+<a name="476958597"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958597" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958597">(Oct 15 2024 at 10:39)</a>:</h4>
+<p>What does bindgen generate for the struct?</p>
+
+
+
+<a name="476958635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958635">(Oct 15 2024 at 10:39)</a>:</h4>
+<p>Yep. I more meant just a collection of <code>u16</code>s that I can iterate through is what I'm looking for (ideally)</p>
+
+
+
+<a name="476958742"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476958742" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476958742">(Oct 15 2024 at 10:40)</a>:</h4>
+<p>It's a private struct, so bindgen isn't running on it. I'll move some things around and see</p>
+
+
+
+<a name="476959105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476959105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476959105">(Oct 15 2024 at 10:42)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">version_number_entries</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="kt">u16</span><span class="p">]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">version_number_entry_count</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">arr_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">addr_of</span><span class="o">!</span><span class="p">((</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">version_number_entries</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">slice</span><span class="p">::</span><span class="n">from_raw_parts</span><span class="p">(</span><span class="n">arr_ptr</span><span class="p">.</span><span class="n">cast</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">u16</span><span class="o">&gt;</span><span class="p">(),</span><span class="w"> </span><span class="n">len</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="476959127"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476959127" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476959127">(Oct 15 2024 at 10:43)</a>:</h4>
+<p>You're probably going to do something like this.</p>
+
+
+
+<a name="476960975"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476960975" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476960975">(Oct 15 2024 at 10:55)</a>:</h4>
+<p>bindgen says this</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(C, packed)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">spdm_get_version_rsp</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">code</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">param1</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">param2</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">reserved</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">version_number_entry_count</span><span class="p">:</span><span class="w"> </span><span class="nc">u8_</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">version_number_entries</span><span class="p">:</span><span class="w"> </span><span class="nc">__IncompleteArrayField</span><span class="o">&lt;</span><span class="n">__le16</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="476961754"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476961754" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alistair <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476961754">(Oct 15 2024 at 11:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs/near/476959105">said</a>:</p>
+<blockquote>
+<p><div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">version_number_entries</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="kt">u16</span><span class="p">]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">as_ptr</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">version_number_entry_count</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">arr_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">addr_of</span><span class="o">!</span><span class="p">((</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">version_number_entries</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">slice</span><span class="p">::</span><span class="n">from_raw_parts</span><span class="p">(</span><span class="n">arr_ptr</span><span class="p">.</span><span class="n">cast</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">u16</span><span class="o">&gt;</span><span class="p">(),</span><span class="w"> </span><span class="n">len</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Ok, so just an access function. Seems like a good approach. Thanks!</p>
+
+
+
+<a name="476961860"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Converting%20void%20pointers%20to%20packed%20structs/near/476961860" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Converting.20void.20pointers.20to.20packed.20structs.html#476961860">(Oct 15 2024 at 11:00)</a>:</h4>
+<p>Yeah, it should work.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

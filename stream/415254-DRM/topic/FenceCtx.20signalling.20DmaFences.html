@@ -1,0 +1,110 @@
+<html>
+<head><meta charset="utf-8"><title>FenceCtx signalling DmaFences · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html">FenceCtx signalling DmaFences</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="581986659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/581986659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#581986659">(Mar 26 2026 at 16:33)</a>:</h4>
+<p>I tend to believe that the best data structure for storing pointers to the DmaFences you want to signal in the  <code>dma::FenceCtx</code> would be an XArray.</p>
+<p>Reason: you signal fences in order, and you often signal batches. Thus, you want something cache-friendly that gives you a for-each.</p>
+<p>Agreed, <span class="user-mention" data-user-id="929978">@Boris Brezillon</span> ?</p>
+
+
+
+<a name="581987346"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/581987346" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#581987346">(Mar 26 2026 at 16:36)</a>:</h4>
+<p><span class="user-mention" data-user-id="692273">@Philipp Stanner</span> Hehe =&gt; <a href="https://gitlab.freedesktop.org/bbrezillon/linux/-/blob/8bec931a3a222873bf93cd8111d88c2f79df30cd/rust/kernel/sync/dma_fence.rs#L845">https://gitlab.freedesktop.org/bbrezillon/linux/-/blob/8bec931a3a222873bf93cd8111d88c2f79df30cd/rust/kernel/sync/dma_fence.rs#L845</a></p>
+
+
+
+<a name="581987387"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/581987387" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#581987387">(Mar 26 2026 at 16:36)</a>:</h4>
+<p>so yeah, I tend to agree :D</p>
+
+
+
+<a name="581988138"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/581988138" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#581988138">(Mar 26 2026 at 16:39)</a>:</h4>
+<p>the other nice property of XArrays is that they can shrink from the bottom without any moves</p>
+
+
+
+<a name="581988656"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/581988656" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#581988656">(Mar 26 2026 at 16:41)</a>:</h4>
+<p>meaning you can queue new fences with growing seqnos, while older ones are consumed (signalled), and release the memory that was used to store fence pointers with lower seqnos</p>
+
+
+
+<a name="585183180"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585183180" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585183180">(Apr 13 2026 at 13:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="692273">@Philipp Stanner</span> <span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> Dunno if this is relevant <a href="https://www.kernel.org/doc/html/v6.1/RCU/rcubarrier.html#unloading-modules-that-use-call-rcu">https://www.kernel.org/doc/html/v6.1/RCU/rcubarrier.html#unloading-modules-that-use-call-rcu</a></p>
+
+
+
+<a name="585183462"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585183462" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585183462">(Apr 13 2026 at 13:01)</a>:</h4>
+<p>Yeah, I mentioned briefly in the call. I think having that (or <code>synchronize_rcu</code>) called after dropping all fences should be sufficient</p>
+
+
+
+<a name="585183741"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585183741" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585183741">(Apr 13 2026 at 13:02)</a>:</h4>
+<p>Or actually synchronize_rcu is insufficient, it says so explicitly in the doc</p>
+
+
+
+<a name="585185600"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585185600" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585185600">(Apr 13 2026 at 13:09)</a>:</h4>
+<p>Yep, that's what I realized too</p>
+
+
+
+<a name="585185747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585185747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585185747">(Apr 13 2026 at 13:10)</a>:</h4>
+<p><a href="https://elixir.bootlin.com/linux/v7.0-rc7/source/drivers/gpu/drm/xe/xe_hw_fence.c#L32">https://elixir.bootlin.com/linux/v7.0-rc7/source/drivers/gpu/drm/xe/xe_hw_fence.c#L32</a></p>
+
+
+
+<a name="585186171"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585186171" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585186171">(Apr 13 2026 at 13:12)</a>:</h4>
+<p>"We could try placing a synchronize_rcu() in the module-exit code path, but this is not sufficient. Although synchronize_rcu() does wait for a grace period to elapse, it does not wait for the callbacks to complete."</p>
+<p>Could one write a a <code>wait_for_rcu_callbacks()</code> for that scenario?</p>
+<p>edit: forget about it, Boris linked that. Exists.</p>
+
+
+
+<a name="585186207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585186207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585186207">(Apr 13 2026 at 13:12)</a>:</h4>
+<p>we probably need to do that earlier than module_exit() though</p>
+
+
+
+<a name="585186412"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585186412" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585186412">(Apr 13 2026 at 13:13)</a>:</h4>
+<p>Danilo suggested that it could be called whend dropping FenceCtx</p>
+
+
+
+<a name="585186568"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585186568" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585186568">(Apr 13 2026 at 13:14)</a>:</h4>
+<p>We could also add a small optimization so that for <code>FenceCtx&lt;T&gt;</code> only call it when <code>core::mem::needs_drop::&lt;T&gt;()</code></p>
+
+
+
+<a name="585186810"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/FenceCtx%20signalling%20DmaFences/near/585186810" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/FenceCtx.20signalling.20DmaFences.html#585186810">(Apr 13 2026 at 13:15)</a>:</h4>
+<blockquote>
+<p>Danilo suggested that it could be called whend dropping FenceCtx</p>
+</blockquote>
+<p>yep, that's what I was thinking too</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

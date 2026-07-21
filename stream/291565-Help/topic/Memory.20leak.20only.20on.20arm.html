@@ -1,0 +1,56 @@
+<html>
+<head><meta charset="utf-8"><title>Memory leak only on arm · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html">Memory leak only on arm</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="392513706"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392513706" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392513706">(Sep 22 2023 at 13:04)</a>:</h4>
+<p>I'm experiencing a memory leak that's only happening on a real phone, but not on an emulator. Using kmemleak, I see lots and lots and lots of different calls into <code>Box::try_new</code> from many different callsites. It looks like all/most frees from Rust are failing.</p>
+<p>Any ideas what could cause this? I'm using <a href="https://android-review.googlesource.com/c/kernel/common/+/2753373">https://android-review.googlesource.com/c/kernel/common/+/2753373</a></p>
+
+
+
+<a name="392514231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392514231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392514231">(Sep 22 2023 at 13:07)</a>:</h4>
+<p>I guess there are some changes to the allocator files in those patches...</p>
+
+
+
+<a name="392514398"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392514398" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392514398">(Sep 22 2023 at 13:08)</a>:</h4>
+<p>Yeah, I think I figured it out.</p>
+
+
+
+<a name="392514629"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392514629" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392514629">(Sep 22 2023 at 13:09)</a>:</h4>
+<p>yeah, it's removing <code>box_free</code></p>
+
+
+
+<a name="392515696"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392515696" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392515696">(Sep 22 2023 at 13:15)</a>:</h4>
+<p>Just a minor detail xD</p>
+
+
+
+<a name="392515987"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392515987" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392515987">(Sep 22 2023 at 13:16)</a>:</h4>
+<p>Apparently 1.72 removes box_free and puts it in the destructor instead.</p>
+
+
+
+<a name="392554227"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Memory%20leak%20only%20on%20arm/near/392554227" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Memory.20leak.20only.20on.20arm.html#392554227">(Sep 22 2023 at 16:05)</a>:</h4>
+<p>Yeah, please feel free to try the 1.72.0 ones I sent to the list, which do have the <code>Drop</code> change (I will apply them today or so to <code>rust-next</code>,  by the way, but using 1.72.1 since that got released meanwhile -- no changes to <code>alloc</code>).</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

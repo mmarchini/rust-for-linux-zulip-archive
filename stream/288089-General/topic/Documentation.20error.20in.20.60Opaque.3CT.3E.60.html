@@ -1,0 +1,167 @@
+<html>
+<head><meta charset="utf-8"><title>Documentation error in `Opaque&lt;T&gt;` · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html">Documentation error in `Opaque&lt;T&gt;`</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="509750103"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509750103" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509750103">(Apr 02 2025 at 17:00)</a>:</h4>
+<p>Hi, I noticed a documentation error with soundness implications in <code>Opaque&lt;T&gt;</code> <a href="https://github.com/Rust-for-Linux/linux/blob/e6ea10d5dbe082c54add289b44f08c9fcfe658af/rust/kernel/types.rs#L257-L264">here</a>:</p>
+<blockquote>
+<p>No uniqueness for mutable references: it is fine to have multiple <code>&amp;mut Opaque&lt;T&gt;</code> point to the same value.</p>
+</blockquote>
+<p>This is incorrect; it's <em>always</em> Undefined Behavior to have multiple live <code>&amp;mut</code> references pointing to the same value, regardless of the type of the value. The other points in the same documentation correctly describe the assumptions that <em>are</em> removed by <code>Opaque</code>'s use of <code>UnsafeCell</code> and <code>MaybeUninit</code>, so I think the only direct documentation change needed is to remove that one bullet point and changing "all" to "most of" on line 257 above it.</p>
+<p>However, if there's other Rust code that has UB from following the incorrect documentation, that'll need to be fixed too, which is why I'm mentioning this here instead of just submitting a patch for the documentation. Also, I haven't contributed to the kernel before and I'm not sure on the process for this subsystem—where would be the right place to submit a patch for this? Thanks.</p>
+
+
+
+<a name="509750892"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509750892" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509750892">(Apr 02 2025 at 17:04)</a>:</h4>
+<p>It's not immediate UB IIUC in practice.</p>
+
+
+
+<a name="509751029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509751029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509751029">(Apr 02 2025 at 17:05)</a>:</h4>
+<p>We are using it similar to <a href="https://rust-lang.github.io/rfcs/3467-unsafe-pinned.html">https://rust-lang.github.io/rfcs/3467-unsafe-pinned.html</a></p>
+
+
+
+<a name="509752115"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509752115" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509752115">(Apr 02 2025 at 17:11)</a>:</h4>
+<p>The documentation for <code>UnsafeCell</code> seems to say otherwise:</p>
+<blockquote>
+<p>Note that only the immutability guarantee for shared references is affected by <code>UnsafeCell</code>. The uniqueness guarantee for mutable references is unaffected. There is <em>no</em> legal way to obtain aliasing <code>&amp;mut</code>, not even with <code>UnsafeCell&lt;T&gt;</code>.</p>
+</blockquote>
+<p>If I understand correctly, with the usage of <code>UnsafePinned</code> in that RFC, the mutable access is still ultimately done through <code>*mut</code> raw pointers (which can alias), not through <code>&amp;mut</code> references. So, what this means for Rust code using <code>Opaque&lt;T&gt;</code> is that memory access to the stored data needs to be via the provided <code>Opaque::get</code> API (which gives a <code>*mut T</code> raw pointer), not through <code>&amp;mut</code> references.</p>
+
+
+
+<a name="509752451"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509752451" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509752451">(Apr 02 2025 at 17:13)</a>:</h4>
+<blockquote>
+<p>This means, in particular, that <code>&amp;mut UnsafePinned</code> is not necessarily a unique pointer, and thus the compiler cannot just make aliasing assumptions.</p>
+</blockquote>
+
+
+
+<a name="509752924"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509752924" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509752924">(Apr 02 2025 at 17:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="892920">Daniel Hast</span> <a href="#narrow/channel/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60/near/509752115">said</a>:</p>
+<blockquote>
+<p>The documentation for <code>UnsafeCell</code> seems to say otherwise:</p>
+<blockquote>
+<p>Note that only the immutability guarantee for shared references is affected by <code>UnsafeCell</code>. The uniqueness guarantee for mutable references is unaffected. There is <em>no</em> legal way to obtain aliasing <code>&amp;mut</code>, not even with <code>UnsafeCell&lt;T&gt;</code>.</p>
+</blockquote>
+<p>If I understand correctly, with the usage of <code>UnsafePinned</code> in that RFC, the mutable access is still ultimately done through <code>*mut</code> raw pointers (which can alias), not through <code>&amp;mut</code> references. So, what this means for Rust code using <code>Opaque&lt;T&gt;</code> is that memory access to the stored data needs to be via the provided <code>Opaque::get</code> API (which gives a <code>*mut T</code> raw pointer), not through <code>&amp;mut</code> references.</p>
+</blockquote>
+<p>So basically, we need <code>UnsafePinned</code>, but it's not ready yet. However in practice, <code>UnsafeCell&lt;!Unpin&gt;</code> behaves like a <code>UnsafePinned</code>, hence we implement <code>Opaque</code> in this way.</p>
+
+
+
+<a name="509753072"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509753072" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509753072">(Apr 02 2025 at 17:16)</a>:</h4>
+<p>Oh, I see what you're saying, so the idea is that <code>Opaque</code> would act like <code>UnsafePinned</code>? I don't think that avoids UB, though, since <code>Opaque</code> doesn't actually use <code>UnsafePinned</code> (which isn't actually implemented yet), and I'm pretty sure it would require special handling in by the compiler for aliasing <code>&amp;mut</code> references to it not to be UB.</p>
+
+
+
+<a name="509753354"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509753354" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509753354">(Apr 02 2025 at 17:18)</a>:</h4>
+<p>The special handling, in practice right now, is that <code>UnsafeCell&lt;!Unpin&gt;</code> ;-)</p>
+
+
+
+<a name="509753531"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509753531" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509753531">(Apr 02 2025 at 17:19)</a>:</h4>
+<p>and the generated llvm ir won't put <code>noalias</code> for <code>&amp;mut Opaque&lt;!Unpin&gt;</code>.</p>
+
+
+
+<a name="509754788"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509754788" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509754788">(Apr 02 2025 at 17:26)</a>:</h4>
+<p>Here's a snippet in the Rust Playground that shows it still produces UB according to Miri: <a href="https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=cb84850fd6ab2b9a6b6e640adfa2dba2">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=cb84850fd6ab2b9a6b6e640adfa2dba2</a><br>
+So even if the generated LLVM IR currently doesn't put noalias on it, it's still UB at the level of Rust's memory model and it could be broken, for example, by MIR optimizations or other compiler changes without warning. (To be clear, the actual code might be fine, as long as it's using raw pointers for access as provided by the <code>Opaque::get</code> method.)</p>
+
+
+
+<a name="509755183"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509755183" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509755183">(Apr 02 2025 at 17:28)</a>:</h4>
+<p>The code you shared doesn't compile:</p>
+<blockquote>
+<p>--&gt; src/main.rs:15:16<br>
+   |<br>
+14 |     let ref1 = &amp;mut x;<br>
+   |                ------ first mutable borrow occurs here<br>
+15 |     let ref2 = &amp;mut x;<br>
+   |                ^^^^^^ second mutable borrow occurs here<br>
+16 |     black_box(ref1);<br>
+   |               ---- first borrow later used here</p>
+</blockquote>
+
+
+
+<a name="509755491"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509755491" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509755491">(Apr 02 2025 at 17:29)</a>:</h4>
+<p><a href="https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=322ec3d2ff984009f6c6a7a77814272a">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=322ec3d2ff984009f6c6a7a77814272a</a></p>
+
+
+
+<a name="509755729"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509755729" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509755729">(Apr 02 2025 at 17:30)</a>:</h4>
+<p>And Miri passed for the above code snippet.</p>
+
+
+
+<a name="509756053"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509756053" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509756053">(Apr 02 2025 at 17:32)</a>:</h4>
+<p>In other words, you cannot safely get two <code>&amp;mut Opaque&lt;T&gt;</code>, but if you do that unsafely, compilers will generate code without any aliasing assumption, and it's aligned with Rust memory model.</p>
+
+
+
+<a name="509756421"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509756421" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509756421">(Apr 02 2025 at 17:34)</a>:</h4>
+<p>Oops, I forgot to pass through raw pointers there, good point. I'm surprised Miri accepts that, but I guess you're right and it's actually fine. I really thought that was UB but it looks like the memory model properly accounts for that now. Thanks for the clarification!</p>
+
+
+
+<a name="509756564"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509756564" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509756564">(Apr 02 2025 at 17:35)</a>:</h4>
+<p>No problem, thanks for looking into this!</p>
+
+
+
+<a name="509758035"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509758035" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Hast <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509758035">(Apr 02 2025 at 17:43)</a>:</h4>
+<p><del>No, wait, it's still UB according to Miri, it's just that we need an actual write (not just <code>black_box</code>) to observe it: <a href="https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=057318412569ae86d561615eb4c61afa">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=057318412569ae86d561615eb4c61afa</a> </del><br>
+Never mind, that's aliasing the wrong thing, still looks fine.</p>
+
+
+
+<a name="509758770"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509758770" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509758770">(Apr 02 2025 at 17:47)</a>:</h4>
+<p>so yes, that's UB because it derives two <code>&amp;mut i32</code> from the same address. And that's out of the hands of <code>Opaque&lt;T&gt;</code>, so the correct code should not create these <code>&amp;mut i32</code> but directly access the data with place expressions.</p>
+<p><a href="https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=19b0a74c1eee45b8f62e8e68534293f8">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2024&amp;gist=19b0a74c1eee45b8f62e8e68534293f8</a></p>
+
+
+
+<a name="509770730"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509770730" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509770730">(Apr 02 2025 at 18:51)</a>:</h4>
+<p>Yeah, we are cheating a bit, but IIRC we discussed it with upstream Rust at some point, so I think they are aware. We also list it at <a href="https://github.com/Rust-for-Linux/linux/issues/354">https://github.com/Rust-for-Linux/linux/issues/354</a>. So it should be fine.</p>
+<p>Of course, if that assumption changes, then we will definitely need to adapt, but that should be easy, even if we need different code inside <code>Opaque</code> for different compilers.</p>
+
+
+
+<a name="509776272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Documentation%20error%20in%20%60Opaque%3CT%3E%60/near/509776272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Documentation.20error.20in.20.60Opaque.3CT.3E.60.html#509776272">(Apr 02 2025 at 19:20)</a>:</h4>
+<p>yeah upstream rust explicitly has the <code>!Unpin</code> hack for self referential futures that we rely on here.<br>
+there is an rfc  <a href="https://github.com/rust-lang/rfcs/pull/3467">https://github.com/rust-lang/rfcs/pull/3467</a> that makes this behavior explicit</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

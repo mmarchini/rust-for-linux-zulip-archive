@@ -1,0 +1,358 @@
+<html>
+<head><meta charset="utf-8"><title>Can `Waker::wake` sleep? · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html">Can `Waker::wake` sleep?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="324647344"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324647344" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324647344">(Jan 30 2023 at 16:11)</a>:</h4>
+<p><span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> I am trying to get kernel compile under klint, and realized that currently one unresolved aspect is determining if <code>Waker::wake</code> (or <code>ArcWake::wake</code>) could sleep.</p>
+<p>Currently klint will complain if I mark <code>ArcWake::wake</code> as a non-sleepable function, because it may drop <code>Task</code> which may drop <code>Executor</code> which will need to call <code>destroy_workqueue</code>.</p>
+
+
+
+<a name="324718952"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324718952" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324718952">(Jan 30 2023 at 16:15)</a>:</h4>
+<p>I think the fix is to make one of the <code>Arc</code>s currently used <code>Weak</code> -- but <code>Arc</code> in kernel crate does not have weak ref support.</p>
+
+
+
+<a name="324719260"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324719260" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324719260">(Jan 30 2023 at 16:16)</a>:</h4>
+<p>(or we can say that `Waker::wake`` may sleep, but that places restriction on where it could be called -- just queueing into work queue won't sleep even in RT)</p>
+
+
+
+<a name="324723824"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324723824" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324723824">(Jan 30 2023 at 16:35)</a>:</h4>
+<p>Can you make it depends on <code>T::drop()</code> where <code>T: ArcWake</code>?</p>
+
+
+
+<a name="324735186"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324735186" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324735186">(Jan 30 2023 at 17:25)</a>:</h4>
+<p>A <code>Waker</code> is effectively an <code>Arc&lt;dyn RawWaker&gt;</code> (with some extra things to not depend on a particular <code>Arc</code> definition). The inner type is unknown.</p>
+
+
+
+<a name="324746566"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324746566" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324746566">(Jan 30 2023 at 18:18)</a>:</h4>
+<p>You're right. I was missing half of my idea: <span class="user-mention" data-user-id="413824">@Gary Guo</span> I think we need to figure out whether a <code>Future::poll</code> can result into a wakeup in atomic contexts.</p>
+<p>For example, if we were to support a <code>timeout</code> future, we will need to queue a timer to <code>wake</code>: <a href="https://github.com/fbq/linux-rust/blob/dev/rust/timer/rust/kernel/time/timer.rs#L338">example</a>. And timer context is a softirq context, so we cannot sleep, that means all <code>async</code> function that <code>await</code>s the <code>timeout</code> future, cannot be ran by a <code>Task</code> that might sleep on <code>drop</code>.</p>
+<p>I think we can annotate the <code>timeout</code> future since it's going to be implemented by us. What we also need to do is somehow checking whether the future property and the Task/Context property  match when "assigning" a future to a Task/Context where we know the concrete type.</p>
+
+
+
+<a name="324766068"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324766068" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324766068">(Jan 30 2023 at 20:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324746566">said</a>:</p>
+<blockquote>
+<p>You're right. I was missing half of my idea: <span class="user-mention silent" data-user-id="413824">Gary Guo</span> I think we need to figure out whether a <code>Future::poll</code> can result into a wakeup in atomic contexts.</p>
+<p>For example, if we were to support a <code>timeout</code> future, we will need to queue a timer to <code>wake</code>: <a href="https://github.com/fbq/linux-rust/blob/dev/rust/timer/rust/kernel/time/timer.rs#L338">example</a>. And timer context is a softirq context, so we cannot sleep, that means all <code>async</code> function that <code>await</code>s the <code>timeout</code> future, cannot be ran by a <code>Task</code> that might sleep on <code>drop</code>.</p>
+<p>I think we can annotate the <code>timeout</code> future since it's going to be implemented by us. What we also need to do is somehow checking whether the future property and the Task/Context property  match when "assigning" a future to a Task/Context where we know the concrete type.</p>
+</blockquote>
+<p>Where the softirq of the timer runs is not necessarily tied to where the task is running. For example, if the task is running on a dedicated thread or a thread pool, the code in softirq will just wake the [potentially] waiting dedicated thread or enqueue a work item</p>
+
+
+
+<a name="324766259"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324766259" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324766259">(Jan 30 2023 at 20:03)</a>:</h4>
+<p>our rule for async functions is that they _never_ sleep. All sleep-like operations need to be turned into futures</p>
+
+
+
+<a name="324766358"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324766358" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wedson Almeida Filho <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324766358">(Jan 30 2023 at 20:03)</a>:</h4>
+<p>(including, eventually,  GFP_KERNEL memory allocation )</p>
+
+
+
+<a name="324772695"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324772695" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324772695">(Jan 30 2023 at 20:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324766068">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324746566">said</a>:</p>
+<blockquote>
+<p>You're right. I was missing half of my idea: <span class="user-mention silent" data-user-id="413824">Gary Guo</span> I think we need to figure out whether a <code>Future::poll</code> can result into a wakeup in atomic contexts.</p>
+<p>For example, if we were to support a <code>timeout</code> future, we will need to queue a timer to <code>wake</code>: <a href="https://github.com/fbq/linux-rust/blob/dev/rust/timer/rust/kernel/time/timer.rs#L338">example</a>. And timer context is a softirq context, so we cannot sleep, that means all <code>async</code> function that <code>await</code>s the <code>timeout</code> future, cannot be ran by a <code>Task</code> that might sleep on <code>drop</code>.</p>
+<p>I think we can annotate the <code>timeout</code> future since it's going to be implemented by us. What we also need to do is somehow checking whether the future property and the Task/Context property  match when "assigning" a future to a Task/Context where we know the concrete type.</p>
+</blockquote>
+<p>Where the softirq of the timer runs is not necessarily tied to where the task is running. For example, if the task is running on a dedicated thread or a thread pool, the code in softirq will just wake the [potentially] waiting dedicated thread or enqueue a work item</p>
+</blockquote>
+<p>Right, that's why we need both the property of the future and the the property of the context</p>
+
+
+
+<a name="324772974"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324772974" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324772974">(Jan 30 2023 at 20:42)</a>:</h4>
+<p>I'm not talking about whether <code>poll</code> itself sleeps or not, it's the later <code>Waker::wake</code>that we care about</p>
+
+
+
+<a name="324773614"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324773614" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324773614">(Jan 30 2023 at 20:46)</a>:</h4>
+<p>Say a <code>timeout</code> future, we know it may wake up whatever Task in a timer softirq handler, then any future <code>await</code> the <code>timeout</code> shares the same property.</p>
+<p>And since for some Tasks, <code>wake</code> means <code>drop</code> and probably sleep. Therefore using these Task to execute the above futures have the possiblity to call a sleepable function in softirq contexts.</p>
+
+
+
+<a name="324777309"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324777309" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324777309">(Jan 30 2023 at 21:08)</a>:</h4>
+<p>Maybe the <code>Box::try_new()</code> is misleading, but it's not the problem (i.e. the problem still exists even if we remove it) the problem is the timer function/closure will be called in an atomic context, and we need to make sure <code>waker.wake()</code> doesn't sleep.</p>
+
+
+
+<a name="324778375"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324778375" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324778375">(Jan 30 2023 at 21:15)</a>:</h4>
+<p>(Actually the <code>Box</code> was there for a total different reason: I don't want to make <code>Delay</code> generic, and last time I checked making a <code>struct A</code> impl <code>FnMut()</code> requires some unstable feature).</p>
+
+
+
+<a name="324782640"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324782640" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324782640">(Jan 30 2023 at 21:43)</a>:</h4>
+<p>There is an example:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Executor</span>::<span class="n">try_new_owned</span><span class="p">(</span><span class="o">..</span><span class="p">.)</span><span class="o">?</span><span class="w"></span>
+
+<span class="n">e</span><span class="p">.</span><span class="n">spawn</span><span class="p">(</span><span class="k">async</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{</span><span class="w">         </span><span class="c1">// spawns a task, let's say `t1`, and `t1` holds one refereneces of `e`</span>
+<span class="w">    </span><span class="n">Delay</span><span class="p">(</span><span class="mi">10000</span><span class="p">).</span><span class="k">await</span><span class="p">;</span><span class="w">    </span><span class="c1">// wait for 10000 seconds, this will add a timer which holds one reference to `t1`</span>
+<span class="p">});</span><span class="w"></span>
+
+<span class="nb">drop</span><span class="p">(</span><span class="n">e</span><span class="p">);</span><span class="w"> </span><span class="c1">// stop `e`, clean up the queue, revoke futures.</span>
+
+<span class="c1">// reference count fo `t1` is 1 (held by timer closure),  reference count of `e` is 1 (held by `t1`).</span>
+
+<span class="o">&lt;</span><span class="mi">10000</span><span class="w"> </span><span class="n">seconds</span><span class="w"> </span><span class="n">later</span><span class="p">,</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="n">fired</span><span class="o">&gt;</span><span class="w"></span>
+
+<span class="c1">// in timer handler</span>
+
+<span class="n">waker</span><span class="p">.</span><span class="n">wake</span><span class="p">();</span><span class="w"> </span><span class="c1">// `waker` is `t1` and `waker` is consumed.</span>
+
+<span class="c1">// Task::drop() -&gt; Executor::drop() -&gt; BoxQueue::drop() -&gt; destroy_workqueue() -&gt; sleep!!!</span>
+
+<span class="c1">// sleep in timer handler</span>
+</code></pre></div>
+
+
+
+<a name="324784008"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784008" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784008">(Jan 30 2023 at 21:53)</a>:</h4>
+<p>Yeah, that's exactly one of the scenarios that I imagined (and discussed with Miguel about this today).</p>
+
+
+
+<a name="324784181"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784181" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784181">(Jan 30 2023 at 21:54)</a>:</h4>
+<p>Because <code>Waker</code> does not have lifetime associated with it, it might wake up a task that's already cancelled. And we must correctly dealt with this case without sleeping.</p>
+
+
+
+<a name="324784182"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784182" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784182">(Jan 30 2023 at 21:54)</a>:</h4>
+<p>To me, the "leaf" futures matter here: if we replace <code>Delay</code> with an async mutex, we probably are fine.</p>
+
+
+
+<a name="324784431"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784431" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784431">(Jan 30 2023 at 21:55)</a>:</h4>
+<p>I think regardless the futures involved we should make <code>Waker::{wake, wake_by_ref, drop}</code> usable in atomic context.</p>
+
+
+
+<a name="324784744"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784744" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784744">(Jan 30 2023 at 21:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324766259">said</a>:</p>
+<blockquote>
+<p>our rule for async functions is that they _never_ sleep. All sleep-like operations need to be turned into futures</p>
+</blockquote>
+<p>I don't agree about this one. There are definitely useful scenarios where you might want to call into sleepable functions, e.g. accessing userspace memory.</p>
+
+
+
+<a name="324784906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784906">(Jan 30 2023 at 21:58)</a>:</h4>
+<p>Avoiding <code>GFP_KERNEL</code> allocation also sounds very painful, and might have limited value.</p>
+
+
+
+<a name="324784932"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324784932" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324784932">(Jan 30 2023 at 21:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324784431">said</a>:</p>
+<blockquote>
+<p>I think regardless the futures involved we should make <code>Waker::{wake, wake_by_ref, drop}</code> usable in atomic context.</p>
+</blockquote>
+<p>That's a bit too restrictive to me, but I can live with it. My proposal is more like</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">Future</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Delay</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="cp">#[klint(atomic_ctx_wake_need)]</span><span class="w"></span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">poll</span><span class="p">(</span><span class="o">..</span><span class="p">.)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">Future</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Mutex</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">poll</span><span class="p">(</span><span class="o">..</span><span class="p">.)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</code></pre></div>
+
+
+
+<a name="324785142"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785142" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785142">(Jan 30 2023 at 21:59)</a>:</h4>
+<p>I don't think that's doable. There is just a single <code>Waker</code> type.</p>
+
+
+
+<a name="324785367"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785367" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785367">(Jan 30 2023 at 22:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324785142">said</a>:</p>
+<blockquote>
+<p>I don't think that's doable. There is just a single <code>Waker</code> type.</p>
+</blockquote>
+<p>Plus a marker only function <code>Context::from_sleepable_drop_waker()</code></p>
+
+
+
+<a name="324785604"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785604" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785604">(Jan 30 2023 at 22:01)</a>:</h4>
+<p>Which is just <code>Context::from_waker()</code> but <code>klint</code> knows the difference</p>
+
+
+
+<a name="324785616"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785616" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785616">(Jan 30 2023 at 22:01)</a>:</h4>
+<p>When would you want <code>Waker::wake</code> to be sleepable?</p>
+
+
+
+<a name="324785908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785908">(Jan 30 2023 at 22:03)</a>:</h4>
+<p>When I want to save the cost of a non-sleepable <code>Waker::wake</code>?</p>
+
+
+
+<a name="324785979"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324785979" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324785979">(Jan 30 2023 at 22:04)</a>:</h4>
+<p>I assume you will need some callback mechanism to make it non-sleepable</p>
+
+
+
+<a name="324786124"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786124" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786124">(Jan 30 2023 at 22:04)</a>:</h4>
+<p><code>Waker::wake</code> is supposed to be a notification mechanism telling the executor that a <code>Future</code> is ready and should be re-polled.</p>
+
+
+
+<a name="324786348"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786348" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786348">(Jan 30 2023 at 22:06)</a>:</h4>
+<p>Good point!</p>
+
+
+
+<a name="324786493"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786493" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786493">(Jan 30 2023 at 22:07)</a>:</h4>
+<p>So sleeping is an unhappy side-effect</p>
+
+
+
+<a name="324786562"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786562" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786562">(Jan 30 2023 at 22:07)</a>:</h4>
+<p>For the current workqueue implementation it simply just does <code>queue_work_on</code></p>
+
+
+
+<a name="324786686"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786686" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786686">(Jan 30 2023 at 22:08)</a>:</h4>
+<p>I guess people also expect constant execution time of <code>Waker::wake</code></p>
+
+
+
+<a name="324786745"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324786745" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324786745">(Jan 30 2023 at 22:08)</a>:</h4>
+<p>At least people would expect it to return fairly quickly</p>
+
+
+
+<a name="324787397"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324787397" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324787397">(Jan 30 2023 at 22:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324784744">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324766259">said</a>:</p>
+<blockquote>
+<p>our rule for async functions is that they _never_ sleep. All sleep-like operations need to be turned into futures</p>
+</blockquote>
+<p>I don't agree about this one. There are definitely useful scenarios where you might want to call into sleepable functions, e.g. accessing userspace memory.</p>
+</blockquote>
+<p>Same here, this is too restrictive.</p>
+<p>I understand Wedson's point, but engineering-wise, there are always complicated C functions that might sleep, which people want to use. The effort of rewritting them into async verision is huge.</p>
+
+
+
+<a name="324787948"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/324787948" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#324787948">(Jan 30 2023 at 22:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324785979">said</a>:</p>
+<blockquote>
+<p>I assume you will need some callback mechanism to make it non-sleepable</p>
+</blockquote>
+<p>No it doesn't, you can use weak counts.</p>
+
+
+
+<a name="325713132"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/325713132" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#325713132">(Feb 03 2023 at 19:53)</a>:</h4>
+<p>FWIW, Gary created an <a href="https://github.com/Rust-for-Linux/linux/issues/959">issue</a> to track this ;-)</p>
+
+
+
+<a name="325761201"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/325761201" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#325761201">(Feb 04 2023 at 03:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324787397">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324784744">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="531558">Wedson Almeida Filho</span> <a href="#narrow/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F/near/324766259">said</a>:</p>
+<blockquote>
+<p>our rule for async functions is that they _never_ sleep. All sleep-like operations need to be turned into futures</p>
+</blockquote>
+<p>I don't agree about this one. There are definitely useful scenarios where you might want to call into sleepable functions, e.g. accessing userspace memory.</p>
+</blockquote>
+<p>Same here, this is too restrictive.</p>
+<p>I understand Wedson's point, but engineering-wise, there are always complicated C functions that might sleep, which people want to use. The effort of rewritting them into async verision is huge.</p>
+</blockquote>
+<p>What about something like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Allocate memory with [`GFP_KERNEL`].  This can be called even from</span>
+<span class="sd">/// contexts that cannot sleep: if the memory is not available immediately,</span>
+<span class="sd">/// the returned `Future`’s `poll` method will return `Poll::Pending`.</span>
+<span class="k">fn</span> <span class="nf">alloc_bytes</span><span class="p">(</span><span class="n">size</span>: <span class="kt">usize</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">impl</span><span class="w"> </span><span class="n">Future</span><span class="o">&lt;</span><span class="n">Output</span><span class="o">=</span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Box</span><span class="o">&lt;</span><span class="p">[</span><span class="kt">u8</span><span class="p">]</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">OutOfMemory</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span><span class="w"></span>
+<span class="sd">/// Call the provided callback in a sleepable context.</span>
+<span class="sd">/// Example:</span>
+<span class="sd">/// ```</span>
+<span class="sd">/// call_sleepable(|| function_which_might_sleep()).await</span>
+<span class="sd">/// ```</span>
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>
+</code></pre></div>
+
+
+
+<a name="325762193"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/325762193" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#325762193">(Feb 04 2023 at 03:24)</a>:</h4>
+<p>Of course code like the above works, but that basically requires you change all C functions that might sleep into an async function, which is huge amount of work.</p>
+
+
+
+<a name="325766523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/325766523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#325766523">(Feb 04 2023 at 04:32)</a>:</h4>
+<p>What about <code>call_sleepable()</code>?</p>
+
+
+
+<a name="325766842"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Can%20%60Waker%3A%3Awake%60%20sleep%3F/near/325766842" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Can.20.60Waker.3A.3Awake.60.20sleep.3F.html#325766842">(Feb 04 2023 at 04:38)</a>:</h4>
+<p>How will you implement <code>call_sleepable()</code> then?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

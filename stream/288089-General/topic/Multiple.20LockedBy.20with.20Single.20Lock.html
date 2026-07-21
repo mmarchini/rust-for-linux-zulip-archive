@@ -1,0 +1,345 @@
+<html>
+<head><meta charset="utf-8"><title>Multiple LockedBy with Single Lock · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html">Multiple LockedBy with Single Lock</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="578920050"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578920050" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578920050">(Mar 12 2026 at 13:21)</a>:</h4>
+<p>Is there a general recommendation how to use <code>LockedBy::access_mut()</code> on multiple objects simultaneously, protected by the same lock?  <code>access_mut()</code> takes a mutable reference to ensure safe access, but I obviously cannot provide the same reference to multiple calls at the same time.</p>
+<p>I have a patch (see below) to reduce the requirement to just providing the mutable reference once, without borrowing it for the entire lifetime (obviously making the interface unsafe). This makes it very flexible to use.</p>
+<p>But I would also be open to other suggestions like <code>LockedBy::access_mut_multiple(v: [&amp;'a LockedBy&lt;...&gt;; N], owner: &amp;'a mut U) -&gt; [&amp;'a mut T; N]</code>.</p>
+<p>Let me know whether you have better ideas! Or whether I missed something.</p>
+<p>We could also use field projections from <span class="user-mention" data-user-id="546447">@Benno Lossin</span> to make LockedBy generic over a field underneath the lock. Then split-borrows would be able to avoid sharing a mutable reference. But it does not solve the problem where one has to lock <code>n</code> instances of the same object underneath a single lock.</p>
+<div class="codehilite" data-code-language="Darcs Patch"><pre><span></span><code>From a7d06b1e5023b5af01fdbe219c4fce68d1cebd45 Mon Sep 17 00:00:00 2001
+From: David Rheinsberg &lt;david@readahead.eu&gt;
+Date: Thu, 12 Mar 2026 14:00:03 +0100
+Subject: [PATCH] rust/sync: add LockedBy::access_mut_unchecked()
+
+Add a new accessor to `LockedBy`, which allows getting mutable access
+without mutably borrowing the owning object.
+
+This is particularly useful when having to lock multiple objects under
+different instances of `LockedBy`, but protected by the same lock. In
+those cases, the caller needs to retain access to the mutable reference,
+so it can continue calling `access_mut()` on the other instances.
+
+It is now up to the caller to ensure the provided reference is held long
+enough, and a single `LockedBy` instance is not accessed multiple times.
+
+Signed-off-by: David Rheinsberg &lt;david@readahead.eu&gt;
+<span class="gd">---</span>
+ rust/kernel/sync/locked_by.rs | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/rust/kernel/sync/locked_by.rs b/rust/kernel/sync/locked_by.rs
+index 61f100a45b35..8563412b17ae 100644
+<span class="gd">--- a/rust/kernel/sync/locked_by.rs</span>
+<span class="gi">+++ b/rust/kernel/sync/locked_by.rs</span>
+@@ -166,4 +166,33 @@ pub fn access_mut&lt;'a&gt;(&amp;'a self, owner: &amp;'a mut U) -&gt; &amp;'a mut T {
+         // SAFETY: `owner` is evidence that there is only one reference to the owner.
+         unsafe { &amp;mut *self.data.get() }
+     }
+<span class="gi">+</span>
+<span class="gi">+    /// Returns a mutable reference to the protected data when the caller</span>
+<span class="gi">+    /// provides evidence (via a mutable reference) that the owner is locked.</span>
+<span class="gi">+    ///</span>
+<span class="gi">+    /// Unlike [`Self::access_mut()`] this does not require the mutable</span>
+<span class="gi">+    /// reference to be borrowed for the requested lifetime, and thus multiple</span>
+<span class="gi">+    /// different [`LockedBy`] objects can be acquired simultaneously.</span>
+<span class="gi">+    ///</span>
+<span class="gi">+    /// # Panics</span>
+<span class="gi">+    ///</span>
+<span class="gi">+    /// Panics if `owner` is different from the data protected by the lock used</span>
+<span class="gi">+    /// in [`new`](LockedBy::new).</span>
+<span class="gi">+    ///</span>
+<span class="gi">+    /// # Safety</span>
+<span class="gi">+    ///</span>
+<span class="gi">+    /// The caller must hold `owner` for `'a` and must not call into this</span>
+<span class="gi">+    /// function more than once under the same lifetime `'a`.</span>
+<span class="gi">+    pub fn access_mut_unchecked&lt;'a&gt;(&amp;'a self, owner: &amp;mut U) -&gt; &amp;'a mut T {</span>
+<span class="gi">+        build_assert!(</span>
+<span class="gi">+            size_of::&lt;U&gt;() &gt; 0,</span>
+<span class="gi">+            "`U` cannot be a ZST because `owner` wouldn't be unique"</span>
+<span class="gi">+        );</span>
+<span class="gi">+        if !ptr::eq(owner, self.owner) {</span>
+<span class="gi">+            panic!("mismatched owners");</span>
+<span class="gi">+        }</span>
+<span class="gi">+</span>
+<span class="gi">+        // SAFETY: `owner` is evidence that there is only one reference to the owner.</span>
+<span class="gi">+        unsafe { &amp;mut *self.data.get() }</span>
+<span class="gi">+    }</span>
+ }
+<span class="gd">--</span>
+2.53.0
+</code></pre></div>
+
+
+
+<a name="578921666"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578921666" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578921666">(Mar 12 2026 at 13:28)</a>:</h4>
+<p>I think it would be sad if we used <code>unsafe</code> for this. the <code>access_mut_multiple</code> sounds like a good idea, but you probably want to use a tuple of <code>&amp;'a LockedBy&lt;...&gt;</code> instead of an array to allow different contents between the locks.</p>
+<p>I don't think field projection play a role in this, but maybe I misunderstood you.</p>
+
+
+
+<a name="578928376"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578928376" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578928376">(Mar 12 2026 at 13:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578921666">said</a>:</p>
+<blockquote>
+<p>I think it would be sad if we used <code>unsafe</code> for this. the <code>access_mut_multiple</code> sounds like a good idea, but you probably want to use a tuple of <code>&amp;'a LockedBy&lt;...&gt;</code> instead of an array to allow different contents between the locks.</p>
+<p>I don't think field projection play a role in this, but maybe I misunderstood you.</p>
+</blockquote>
+<p>Think of something like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">PlatformDev</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Mutex</span><span class="o">&lt;</span><span class="n">PlatformInner</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">PlatformInner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">sound</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">SoundDev</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">InputDev</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">SoundDev</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">LockedBy</span><span class="o">&lt;</span><span class="n">SoundInner</span><span class="p">,</span><span class="w"> </span><span class="n">PlatformInner</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">InputDev</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">LockedBy</span><span class="o">&lt;</span><span class="n">InputInner</span><span class="p">,</span><span class="w"> </span><span class="n">PlatformInner</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Imagine you want to lock both <code>PlatformInner.{sound, input}.inner</code> at the same time. You cannot do that, since both would need <code>&amp;mut PlatformInner</code>. But you could instead use field-projections to say either only needs access to a field in <code>PlatformInner</code>, like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">SoundDev</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">LockedBy</span><span class="o">&lt;</span><span class="n">SoundInner</span><span class="p">,</span><span class="w"> </span><span class="n">PlatformInner</span><span class="p">,</span><span class="w"> </span><span class="n">field_of</span><span class="o">!</span><span class="p">(</span><span class="n">PlatformInner</span><span class="p">,</span><span class="w"> </span><span class="n">sound</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">InputDev</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">LockedBy</span><span class="o">&lt;</span><span class="n">InputInner</span><span class="p">,</span><span class="w"> </span><span class="n">PlatformInner</span><span class="p">,</span><span class="w"> </span><span class="n">field_of</span><span class="o">!</span><span class="p">(</span><span class="n">PlatformInner</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Now you can lock both at the same time. <code>LockedBy</code> can verify that you hold a reference to a field of the correct locked <code>PlatformInner</code>.</p>
+<p>Maybe a bit over the top, but I have run into situations like this multiple times.</p>
+
+
+
+<a name="578930809"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578930809" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578930809">(Mar 12 2026 at 14:00)</a>:</h4>
+<p>That layout of data with <code>Mutex&lt;Arc&lt;LockedBy&lt;</code> nesting looks weird, why don't you store <code>SoundDev</code> and <code>InputDev</code> directly inside of <code>PlatformInner</code>?</p>
+
+
+
+<a name="578931757"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578931757" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578931757">(Mar 12 2026 at 14:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578930809">said</a>:</p>
+<blockquote>
+<p>That layout of data with <code>Mutex&lt;Arc&lt;LockedBy&lt;</code> nesting looks weird, why don't you store <code>SoundDev</code> and <code>InputDev</code> directly inside of <code>PlatformInner</code>?</p>
+</blockquote>
+<p>Because those devices are passed into the respective kernel subsystems, and those ref-count them. It is kinda the model of ref-counted devices, but they have "userdata" that is owned by a specific context.</p>
+
+
+
+<a name="578932065"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578932065" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578932065">(Mar 12 2026 at 14:05)</a>:</h4>
+<p>if <code>SoundDev</code> &amp; <code>InputDev</code> also have other fields, I could see that (do they have extra fields?)</p>
+
+
+
+<a name="578932136"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578932136" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578932136">(Mar 12 2026 at 14:05)</a>:</h4>
+<p>Yes.</p>
+
+
+
+<a name="578932240"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578932240" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578932240">(Mar 12 2026 at 14:05)</a>:</h4>
+<p>Sorry, should have put some ellipses there.</p>
+
+
+
+<a name="578933233"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578933233" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578933233">(Mar 12 2026 at 14:09)</a>:</h4>
+<p>okay. in that case, I think the following would work better: you store <code>LockedBy&lt;SoundInner, SoundInner&gt;</code> (&amp; the same for <code>InputDev</code>) instead and we add <code>LockedBy::new_of_field</code> that uses field projections to turn <code>&amp;Lock&lt;X, B&gt;</code> into <code>*const U</code> (where <code>X</code> has a field of type <code>U</code>)</p>
+
+
+
+<a name="578933321"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578933321" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578933321">(Mar 12 2026 at 14:09)</a>:</h4>
+<p>we could probably use <span class="user-mention" data-user-id="413824">@Gary Guo</span>'s field projection prototype infrastructure for this</p>
+
+
+
+<a name="578933426"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578933426" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578933426">(Mar 12 2026 at 14:09)</a>:</h4>
+<p>so <code>new_of_field</code> would have to be a macro, but otherwise it should work</p>
+
+
+
+<a name="578933782"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578933782" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578933782">(Mar 12 2026 at 14:10)</a>:</h4>
+<p>Right, that would avoid putting the Frt generic on the LockedBy. Much nicer to use.</p>
+<p>But yeah, this was just a thought I had. I think for now the access_mut_multiple() should work as well.</p>
+
+
+
+<a name="578936976"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578936976" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578936976">(Mar 12 2026 at 14:22)</a>:</h4>
+<p>Why is this needed? Couldn't you just do <code>Lockedby&lt;SoundInner, Arc&lt;SoundDev&gt;&gt;</code> and call <code>access_mut(&amp;mut platform_inner.sound)</code>?</p>
+
+
+
+<a name="578937156"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578937156" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578937156">(Mar 12 2026 at 14:23)</a>:</h4>
+<p>You're then relying on the borrow checker to ensure split mutable borrows are okay</p>
+
+
+
+<a name="578940970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/578940970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#578940970">(Mar 12 2026 at 14:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578937156">said</a>:</p>
+<blockquote>
+<p>You're then relying on the borrow checker to ensure split mutable borrows are okay</p>
+</blockquote>
+<p>That's the idea. Thing is, <code>LockedBy</code> requires <code>Lock&lt;U&gt;</code> in <code>new()</code>. So I think <span class="user-mention" data-user-id="546447">@Benno Lossin</span> was suggesting to change the constructor to take <code>Lock&lt;W&gt;</code> with <code>U</code> being a field of <code>W</code>, and guaranteeing that via field projections.</p>
+
+
+
+<a name="579220057"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579220057" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579220057">(Mar 13 2026 at 09:31)</a>:</h4>
+<p>Even though in this case we would not have to make <code>LockedBy</code> generic over the field representing type, what is the recommendation on how to pin an FRT in a type? Assuming <code>Frt: Field&lt;Base = Foo, Type = Bar&gt;</code>, do you then store a simple <code>PhantomData&lt;Frt&gt;</code> in the type? Or <code>PhantomData&lt;*mut Frt&gt;</code> to be invariant over it, but allow <code>?Sized</code>? You don't technically need to store or access the FRT ever, you just need to pin it over the lifetime of your object.</p>
+
+
+
+<a name="579222311"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579222311" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579222311">(Mar 13 2026 at 09:42)</a>:</h4>
+<p>what do you mean by "pin"? <a href="https://doc.rust-lang.org/std/pin/index.html">my definition</a> of that word doesn't make sense in that context.</p>
+
+
+
+<a name="579222536"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579222536" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579222536">(Mar 13 2026 at 09:43)</a>:</h4>
+<p>the <code>Field</code> trait has <code>Copy</code> as a super trait, so <code>?Sized</code> is not an issue. Do note that we're most likely not going to enable the language feature for FRTs in the kernel (at least for some while), since we still have to figure out if we have the correct design upstream.</p>
+
+
+
+<a name="579222655"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579222655" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579222655">(Mar 13 2026 at 09:44)</a>:</h4>
+<p>I do want to experiment with it out-of-tree though, so having a git branch in the Rust-for-Linux/linux repo that allows people to try it</p>
+
+
+
+<a name="579222817"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579222817" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579222817">(Mar 13 2026 at 09:45)</a>:</h4>
+<p>Oh, in the English sense of the word: How to make sure any member function of that type uses the same Frt. So if you create the object with a given Frt, any member function it should use the same. Meaning, you cannot make the functions generic over the Frt, but must "pin" it in the type (or "lock" it, or "include" it, or whatever English term here is more fitting).</p>
+
+
+
+<a name="579223821"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579223821" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579223821">(Mar 13 2026 at 09:50)</a>:</h4>
+<p>Oh, I just copied the bits I need. The language feature is nice, but not necessary to get something similar.</p>
+
+
+
+<a name="579225914"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579225914" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579225914">(Mar 13 2026 at 10:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="748963">David Rheinsberg</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579222817">said</a>:</p>
+<blockquote>
+<p>Oh, in the English sense of the word: How to make sure any member function of that type uses the same Frt. So if you create the object with a given Frt, any member function it should use the same. Meaning, you cannot make the functions generic over the Frt, but must "pin" it in the type (or "lock" it, or "include" it, or whatever English term here is more fitting).</p>
+</blockquote>
+<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>
+
+
+
+<a name="579266005"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579266005" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579266005">(Mar 13 2026 at 13:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579225914">said</a>:</p>
+<blockquote>
+<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>
+</blockquote>
+<p>Doesn't this make the structure covariant over the FRT? Not sure you could actually pull that off, but the safety requirements of <code>Field</code> do not prevent you from designing subtypable FRTs, do they? A <code>PhantomData&lt;*mut F&gt;</code> would avoid that.</p>
+
+
+
+<a name="579266480"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579266480" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579266480">(Mar 13 2026 at 13:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/578933426">said</a>:</p>
+<blockquote>
+<p>so <code>new_of_field</code> would have to be a macro, but otherwise it should work</p>
+</blockquote>
+<p>If we add a lock view type, we could have <code>fn from_view&lt;L, B: Backend&gt;(owner: View&lt;'_, Lock&lt;L, B&gt;, U&gt;, data: T)</code>?</p>
+
+
+
+<a name="579275908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579275908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579275908">(Mar 13 2026 at 14:03)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="748963">David Rheinsberg</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579266005">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579225914">said</a>:</p>
+<blockquote>
+<p>just add a <code>PhantomData&lt;F&gt;</code> field</p>
+</blockquote>
+<p>Doesn't this make the structure covariant over the FRT? Not sure you could actually pull that off, but the safety requirements of <code>Field</code> do not prevent you from designing subtypable FRTs, do they? A <code>PhantomData&lt;*mut F&gt;</code> would avoid that.</p>
+</blockquote>
+<p>I tested it, and with higher-ranked function pointers I can create 2 conflicting FRTs which have a subtype relationship. So I think <code>PhantomData&lt;*mut F&gt;</code> is required (or some equivalent). I have to note that this is a known issue and documented in <a href="https://github.com/rust-lang/rust/issues/56105">https://github.com/rust-lang/rust/issues/56105</a>.</p>
+
+
+
+<a name="579276868"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579276868" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579276868">(Mar 13 2026 at 14:07)</a>:</h4>
+<p>hmm I guess FRTs themselves should be invariant... do you mind putting your example in the rust playground? (<a href="http://play.rust-lang.org">play.rust-lang.org</a>)</p>
+
+
+
+<a name="579280419"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579280419" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579280419">(Mar 13 2026 at 14:23)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579276868">said</a>:</p>
+<blockquote>
+<p>hmm I guess FRTs themselves should be invariant... do you mind putting your example in the rust playground? (<a href="http://play.rust-lang.org">play.rust-lang.org</a>)</p>
+</blockquote>
+<p>This is based on my own copy of <code>core::field</code>, so I did not convert this fully. But I think this gives an idea of what I did: <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=da212537a3b8e2bb638f6c8e0f646d67">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2024&amp;gist=da212537a3b8e2bb638f6c8e0f646d67</a></p>
+<p>I can try to get this to compile with core::field, if it is still unclear. But not before Monday.</p>
+<p>The trick really is the subtyping relationship of the types <code>A</code> and <code>B</code>, and using this to create distinc <code>Foo&lt;A&gt;</code> and <code>Foo&lt;B&gt;</code>, and implementing <code>Field</code> for those differently, but retaining the subtype relationship. Note especially the last line, where I coerce <code>a</code> to <code>b</code>, which is what I am concerned about.</p>
+
+
+
+<a name="579282318"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579282318" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579282318">(Mar 13 2026 at 14:31)</a>:</h4>
+<p><code>core::field::Field</code> cannot be implemented, so not sure if you can observe the same thing there.</p>
+<p><em>But</em> <code>field_of!(T, field)</code> is a subtype of <code>field_of!(U, field)</code> when <code>T</code> is a subtype of <code>U</code>. That seems wrong &amp; I'll change it</p>
+
+
+
+<a name="579282488"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579282488" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579282488">(Mar 13 2026 at 14:32)</a>:</h4>
+<p>It should be contravariant or invariant?</p>
+
+
+
+<a name="579282827"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579282827" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579282827">(Mar 13 2026 at 14:33)</a>:</h4>
+<p>invariant</p>
+
+
+
+<a name="579282978"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579282978" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579282978">(Mar 13 2026 at 14:34)</a>:</h4>
+<p>I feel that it is somewhat similar to <code>fn(T) -&gt; field</code> so contravariant sounds plausible too</p>
+
+
+
+<a name="579288565"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Multiple%20LockedBy%20with%20Single%20Lock/near/579288565" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock.html#579288565">(Mar 13 2026 at 14:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/288089-General/topic/Multiple.20LockedBy.20with.20Single.20Lock/near/579282978">said</a>:</p>
+<blockquote>
+<p>I feel that it is somewhat similar to <code>fn(T) -&gt; field</code> so contravariant sounds plausible too</p>
+</blockquote>
+<p>I am pretty sure FieldRepresentingType&lt;T&gt; must be invariant over T. field_of! can stay as it is. It has the former as fixed return type anyway.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,68 @@
+<html>
+<head><meta charset="utf-8"><title>flat_map collecting with Kvec · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html">flat_map collecting with Kvec</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="476879362"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/476879362" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#476879362">(Oct 15 2024 at 02:27)</a>:</h4>
+<p>I think this might not be possible, but maybe someone can advise me on an alternate implementation:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">set_partitionRpcPadding</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">fld</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="kt">u32</span><span class="p">;</span><span class="w"> </span><span class="mi">4</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">byte_data</span><span class="p">:</span><span class="w"> </span><span class="nc">KVec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fld</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">flat_map</span><span class="p">(</span><span class="o">|&amp;</span><span class="n">x</span><span class="o">|</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">to_le_bytes</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">store</span><span class="p">[</span><span class="mi">208</span><span class="o">..</span><span class="mi">224</span><span class="p">].</span><span class="n">copy_from_slice</span><span class="p">(</span><span class="o">&amp;</span><span class="n">byte_data</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>This doesn't build because lack of FromIterator I assume, (it's just what I was going in userspace with Vec.) I pretty much just want a safe way to take a an array of sized values and copy the underlying bytes into a slice</p>
+
+
+
+<a name="476894217"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/476894217" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#476894217">(Oct 15 2024 at 04:15)</a>:</h4>
+<p>Danilo listed a few things in his <a href="https://lore.kernel.org/rust-for-linux/20241004154149.93856-19-dakr@kernel.org/">patch</a> about the difficulties for implementing the <code>FromIterator</code> trait for <code>KVec</code>.</p>
+
+
+
+<a name="477076505"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/477076505" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#477076505">(Oct 15 2024 at 21:51)</a>:</h4>
+<p>Yeah, the <a href="https://lore.kernel.org/rust-for-linux/20241004154149.93856-19-dakr@kernel.org/">patch</a> <span class="user-mention" data-user-id="411647">@Boqun Feng</span> linked in is a good explanation.</p>
+<p>The biggest difficulty is that <code>FromIterator</code> (which is required for a generic <code>collect</code> to properly work) doesn't handle GFP flags and allocation failures.</p>
+<p>The GFP stuff may be solvable with <code>PF_MEMALLOC_*</code> flags in the long term, but infallibility is probably too heavy to lift.</p>
+<p>I think for the long term we have to come up with a kernel specific <code>FromIterator</code> trait for collections to implement.</p>
+
+
+
+<a name="477077774"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/477077774" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#477077774">(Oct 15 2024 at 22:01)</a>:</h4>
+<p>any good ideas on what might be a suitable alternate? I can just hack it for now to iterate over each u32, as I autogen this code to avoid collect or maybe just drop into unsafe</p>
+
+
+
+<a name="488174534"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/488174534" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#488174534">(Dec 11 2024 at 19:46)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> what's the status of this btw, and anything I could help out with? Just ran into this with some of the KMS bindings, I can workaround not having collect() but it makes my code sad lol</p>
+
+
+
+<a name="488183575"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/488183575" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#488183575">(Dec 11 2024 at 20:36)</a>:</h4>
+<p>I worked around it in my generator code in the end</p>
+
+
+
+<a name="488192893"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/flat_map%20collecting%20with%20Kvec/near/488192893" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/flat_map.20collecting.20with.20Kvec.html#488192893">(Dec 11 2024 at 21:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/flat_map.20collecting.20with.20Kvec/near/488174534">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> what's the status of this btw, and anything I could help out with? Just ran into this with some of the KMS bindings, I can workaround not having collect() but it makes my code sad lol</p>
+</blockquote>
+<p>I think we need to implement our own <code>FromIterator</code> trait for this to work. I have this on my list, but I'll probably not get to it before somewhen next year. So, depending on how sad it make your code, feel free to pick this up. :) I'm also happy to help out with some parts too.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,813 @@
+<html>
+<head><meta charset="utf-8"><title>Filesystem abstractions · Filesystems · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/index.html">Filesystems</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html">Filesystem abstractions</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="352349639"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/352349639" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#352349639">(Apr 24 2023 at 18:08)</a>:</h4>
+<p>Hi, I took <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span>'s branch <a href="https://github.com/wedsonaf/linux/tree/fs">fs</a> and made an attempt to backport the file system abstractions on top of rust-next, <a href="https://github.com/ariel-miculas/linux/tree/rust-next-fs">see rust-next-fs</a>. The idea was to see what the effort to integrate the filesystem abstractions would look like. The code works, although the commits are not as clean as they could have been (I started cherry picking some commits and then I switched to copying entire files, so it's a bit of a mix).<br>
+You can see the differences <a href="https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:rust-next-fs">here</a>. The missing pieces would be (sufficient for the <code>rust_fs.rs</code> sample, but not necessarily the minimal subset):</p>
+<ul>
+<li>the modules cred, delay, file, fs, fs/param, io_buffer, iov_iter, mm, pages, user_ptr</li>
+<li>macros: count_paren_items in <a href="http://driver.rs">driver.rs</a>, from_kernel_result in <a href="http://error.rs">error.rs</a>, offset_of/container_of in <a href="http://lib.rs">lib.rs</a></li>
+<li>allocator_api in rust_allowed_features</li>
+<li>unstable features: associated_type_defaults, c_size_t, const_mut_refs, duration_constants</li>
+<li>some helper functions in rust/helpers.c</li>
+</ul>
+<p>Apart from changing PointerWrapper to ForeignOwnable I didn't encounter any notable challenge in backporting the code. Some parts of the code are still WIP, so probably it can't be backported as it is.</p>
+<p>My question is what would be the best approach to start integrating these missing modules into rust-next, with the long-term goal of having rust filesystem abstractions, and how could I contribute to this. Thanks</p>
+
+
+
+<a name="352361303"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/352361303" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#352361303">(Apr 24 2023 at 19:10)</a>:</h4>
+<p>Thanks for the hard work!</p>
+<p>I must defer the technical details to <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> , but a starting point to me would be creating a GitHub issue to tracking all the missing modules and clarifying the dependencies so that we know the order to upstream them. I'd assume some of them are trivial to just send out and some of them may need rework or redesign based on feedbacks, therefore tracking these is helpful.</p>
+<p>Take a quick look at your branch, there are a few places you may want to adopt the "state-of-art coding guideline"  ;-)</p>
+<ul>
+<li>Now since we have <code>uapi</code> crate, would it make sense to move these <a href="https://github.com/ariel-miculas/linux/blob/rust-next-fs/rust/kernel/file.rs#L26">flags</a> to the <code>uapi</code> crate? There could be more needed to move.</li>
+<li>Compared to <code>UnsafeCell</code>, <code>Opaque</code> is preferred to wrap "binding struct" since the underlying data may be partially initialized by C side.</li>
+</ul>
+
+
+
+<a name="352361321"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/352361321" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#352361321">(Apr 24 2023 at 19:10)</a>:</h4>
+<p>Also it looks a good time to create a "Filesystem" channel, <span class="user-mention" data-user-id="411490">@Alex Gaynor</span> <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span> <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> <span class="user-mention" data-user-id="413824">@Gary Guo</span> <span class="user-mention" data-user-id="412316">@bjorn3</span> ;-)</p>
+
+
+
+<a name="352472590"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/352472590" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#352472590">(Apr 25 2023 at 09:01)</a>:</h4>
+<p>This is very exciting. Your branch has a significant portion of the bindings that Rust binder depends on, so this would let us significantly reduce the length of the outstanding patch list for us.</p>
+
+
+
+<a name="352577180"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/352577180" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#352577180">(Apr 25 2023 at 15:49)</a>:</h4>
+<p>I've raised issue <a href="https://github.com/Rust-for-Linux/linux/issues/1004">1004</a></p>
+
+
+
+<a name="356893312"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/356893312" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luca <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#356893312">(May 09 2023 at 07:34)</a>:</h4>
+<p>Is there anything to contribute to this issue? I would appreciate a hint to get started.</p>
+
+
+
+<a name="357295443"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357295443" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357295443">(May 10 2023 at 13:41)</a>:</h4>
+<p>Hey <span class="user-mention" data-user-id="411647">@Boqun Feng</span> <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span> <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> , since there are people interested in helping out with this topic, does it make sense, as a starting point,  to begin upstreaming some of the modules that the filesystem abstractions depend on? Of course, taking into account the observations above from <span class="user-mention" data-user-id="411647">@Boqun Feng</span>. Or do you have something else in mind?</p>
+
+
+
+<a name="357303462"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357303462" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357303462">(May 10 2023 at 14:06)</a>:</h4>
+<p>It depends on which modules they are (i.e. some of the bits in the original <code>rust</code> branch were not finished or polished enough), and we also try to have the original authors to submit the code they worked on if possible. Moreover, we can only upstream things that are expecting a user soon (though it does not need to be an immediate one), i.e. no dead code.</p>
+<p>Like <span class="user-mention" data-user-id="411647">@Boqun Feng</span> said, the best starting point is having a branch with the dependencies you need on top of the latest <code>rust-next</code> branch (ideally, with the proper attribution too, so that we can ping the relevant people).</p>
+<p>There is also the question of prioritization. When are you expecting/planning to upstream your filesystem?</p>
+
+
+
+<a name="357308203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357308203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357308203">(May 10 2023 at 14:18)</a>:</h4>
+<p>I have already started a branch where I collect the missing dependencies, so it's not a blocker for me. <span class="user-mention" data-user-id="615602">@Luca</span> reached out to me asking if there's anything he can do to contribute to this issue and I pointed him to this zulip channel,  if there isn't anything at this moment, maybe someone can help him find something to work on.<br>
+Regarding an estimate for my filesystem, it's difficult to tell at this point since I'm still discovering missing pieces, but as soon as I have a proof-of-concept I'll post it here or on the mailing list.</p>
+
+
+
+<a name="357308712"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357308712" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357308712">(May 10 2023 at 14:20)</a>:</h4>
+<p>(the same applies to me, if there's anything I can do to contribute, I'm happy to help)</p>
+
+
+
+<a name="357347550"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357347550" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357347550">(May 10 2023 at 16:23)</a>:</h4>
+<p>Yeah, I looked at <code>rust-next-fs</code>, and it is a good start (modulo reorganizing things a bit, attribution, etc.).</p>
+<p>If you have time, it is likely a good idea to meet at some point to discuss upstreaming etc., like we do with Binder, the M1 GPU driver, the NVMe driver, etc.</p>
+
+
+
+<a name="357347815"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357347815" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357347815">(May 10 2023 at 16:24)</a>:</h4>
+<p><span class="user-mention" data-user-id="615602">@Luca</span> Regarding contributing, we have some general ideas and guidelines at <a href="https://rust-for-linux.com/contributing">https://rust-for-linux.com/contributing</a>.</p>
+
+
+
+<a name="357405374"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357405374" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357405374">(May 10 2023 at 21:11)</a>:</h4>
+<p>are you referring to an in-person meeting? if so, are there any conferences that you're planning to attend where we could meet?</p>
+
+
+
+<a name="357606462"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357606462" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357606462">(May 11 2023 at 14:30)</a>:</h4>
+<p>I meant a remote call (though, of course, it would be great to meet in-person too at some point :)</p>
+
+
+
+<a name="357616130"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/357616130" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#357616130">(May 11 2023 at 15:00)</a>:</h4>
+<p>sounds good, I reckon I'll have something functional in a few weeks and we could schedule a call afterwards :)</p>
+
+
+
+<a name="365055208"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365055208" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365055208">(Jun 10 2023 at 08:47)</a>:</h4>
+<p>80 patches <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="365606278"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365606278" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365606278">(Jun 12 2023 at 15:48)</a>:</h4>
+<p>hey <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span> , can we set up a meeting to discuss the next steps w.r.t. puzzlefs upstreaming?</p>
+
+
+
+<a name="365608469"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365608469" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365608469">(Jun 12 2023 at 15:56)</a>:</h4>
+<p>what time (and day) will work for you?</p>
+
+
+
+<a name="365609889"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365609889" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365609889">(Jun 12 2023 at 16:01)</a>:</h4>
+<p>from 7am to 4pm UTC, any day works</p>
+
+
+
+<a name="365611042"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365611042" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365611042">(Jun 12 2023 at 16:05)</a>:</h4>
+<p>Probably later than 1pm then, so that people from the Americas may join?</p>
+
+
+
+<a name="365611237"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365611237" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365611237">(Jun 12 2023 at 16:05)</a>:</h4>
+<p>Yes, I think probably Wedson should join? Given his work on 9p</p>
+
+
+
+<a name="365612510"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365612510" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365612510">(Jun 12 2023 at 16:09)</a>:</h4>
+<p>How about <time datetime="2023-06-14T13:00:00Z">2023-06-14T06:00:00-07:00</time> ? <span class="user-group-mention" data-user-group-id="436926">@team</span></p>
+
+
+
+<a name="365617492"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365617492" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365617492">(Jun 12 2023 at 16:28)</a>:</h4>
+<p>I think <a href="https://lore.kernel.org/rust-for-linux/20230609063118.24852-50-amiculas@cisco.com/">this</a> patch is interesting from the filesystem abstraction point of view, highlighting where the current design needs to be improved (or maybe only my approach to it)</p>
+
+
+
+<a name="365638928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365638928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365638928">(Jun 12 2023 at 17:55)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365612510">said</a>:</p>
+<blockquote>
+<p>How about <time datetime="2023-06-14T13:00:00Z">2023-06-14T06:00:00-07:00</time> ? <span class="user-group-mention silent" data-user-group-id="436926">team</span></p>
+</blockquote>
+<p>I’m tied up in an internal conference this week, but you guys should go ahead 👍</p>
+
+
+
+<a name="365645799"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365645799" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365645799">(Jun 12 2023 at 18:24)</a>:</h4>
+<p>We can delay it e.g. a week, there is no rush AFAIK.</p>
+
+
+
+<a name="365646403"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365646403" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365646403">(Jun 12 2023 at 18:27)</a>:</h4>
+<p>Yes, will that work for you <span class="user-mention" data-user-id="607542">@Ariel Miculas</span>? Say <time datetime="2023-06-21T13:00:00Z">2023-06-21T06:00:00-07:00</time></p>
+
+
+
+<a name="365668060"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365668060" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365668060">(Jun 12 2023 at 19:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365646403">said</a>:</p>
+<blockquote>
+<p>Yes, will that work for you <span class="user-mention silent" data-user-id="607542">Ariel Miculas</span>? Say <time datetime="2023-06-21T13:00:00Z">2023-06-21T06:00:00-07:00</time></p>
+</blockquote>
+<p>That works for me <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="365761509"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365761509" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365761509">(Jun 13 2023 at 07:04)</a>:</h4>
+<p>yes, it's fine</p>
+
+
+
+<a name="365913494"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365913494" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365913494">(Jun 13 2023 at 15:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="607542">Ariel Miculas</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365761509">said</a>:</p>
+<blockquote>
+<p>yes, it's fine</p>
+</blockquote>
+<p>Will you have an agenda for the meeting? Or less formal, just a list of things you would like to discuss.</p>
+
+
+
+<a name="365914235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365914235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365914235">(Jun 13 2023 at 15:45)</a>:</h4>
+<p>FWIW, this is the hackmd group we use to share all the notes: <a href="https://hackmd.io/join/B1HCGFV7s">https://hackmd.io/join/B1HCGFV7s</a></p>
+
+
+
+<a name="365919047"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365919047" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365919047">(Jun 13 2023 at 16:02)</a>:</h4>
+<p>I would like to discuss: </p>
+<ul>
+<li>the plan to upstream the filesystem abstractions</li>
+<li>support for third-party crates in the kernel</li>
+<li>next steps towards upstreaming puzzlefs</li>
+</ul>
+
+
+
+<a name="365919709"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365919709" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365919709">(Jun 13 2023 at 16:04)</a>:</h4>
+<p>Ah, you moved it to next week? In that case, I am also able to attend.</p>
+
+
+
+<a name="365919877"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365919877" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365919877">(Jun 13 2023 at 16:04)</a>:</h4>
+<p>I care about some of the filesystem abstractions too.</p>
+
+
+
+<a name="365919927"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365919927" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365919927">(Jun 13 2023 at 16:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365919709">said</a>:</p>
+<blockquote>
+<p>Ah, you moved it to next week? In that case, I am also able to attend.</p>
+</blockquote>
+<p>Yes, it's next week. Jun 21</p>
+
+
+
+<a name="365920082"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365920082" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365920082">(Jun 13 2023 at 16:05)</a>:</h4>
+<p>maybe <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span> could add some other topics, since he suggested the meeting; also, let me know if I should prepare something for this meeting, since I don't really know what to expect from it</p>
+
+
+
+<a name="365923222"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365923222" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365923222">(Jun 13 2023 at 16:15)</a>:</h4>
+<p>So my original intention with the meeting was to discuss how to approach the RFC (perhaps doing an internal review first) and the upstreaming in general (e.g. what dependencies you needed). A fair amount of that is done already since the RFC is out, and the rest is basically the first/third points you listed above.</p>
+
+
+
+<a name="365924572"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365924572" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365924572">(Jun 13 2023 at 16:20)</a>:</h4>
+<p>We can also refine the issue: <a href="https://github.com/Rust-for-Linux/linux/issues/1004">https://github.com/Rust-for-Linux/linux/issues/1004</a> in the meeting.</p>
+
+
+
+<a name="365926864"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365926864" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365926864">(Jun 13 2023 at 16:28)</a>:</h4>
+<p>oh, I see, I skipped the internal review step, sorry about that</p>
+
+
+
+<a name="365941530"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/365941530" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#365941530">(Jun 13 2023 at 17:23)</a>:</h4>
+<p>No need to apologize! The step is optional, of course, and everyone is free to submit what they want. But it usually helps to iron out procedural details first, like the"no Cc to fsdevel?" point (which Christian was right to point out), as well as nit-cleanup and potentially other issues.</p>
+
+
+
+<a name="366068354"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/366068354" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#366068354">(Jun 14 2023 at 06:56)</a>:</h4>
+<p>It's still a good thing to have the meeting even though the RFC is out. Lots of things we can discuss, both technical and not.</p>
+
+
+
+<a name="366086972"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/366086972" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#366086972">(Jun 14 2023 at 08:06)</a>:</h4>
+<p>Definitely, I didn't mean to say otherwise. I meant that the topics I wanted to cover originally were already covered by Ariel's list, so I didn't have extra ones to add.</p>
+
+
+
+<a name="367943032"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/367943032" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#367943032">(Jun 20 2023 at 14:13)</a>:</h4>
+<p>Just a reminder: the meeting will be <time datetime="2023-06-21T13:00:00Z">2023-06-21T06:00:00-07:00</time>.</p>
+
+
+
+<a name="368228363"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368228363" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368228363">(Jun 21 2023 at 12:56)</a>:</h4>
+<p>do you have a link?</p>
+
+
+
+<a name="368228408"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368228408" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368228408">(Jun 21 2023 at 12:56)</a>:</h4>
+<p><a href="https://meet.jit.si/384382488443604">Join video call.</a></p>
+
+
+
+<a name="368228573"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368228573" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368228573">(Jun 21 2023 at 12:57)</a>:</h4>
+<p>Let's use this jitsi link ^</p>
+
+
+
+<a name="368228867"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368228867" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368228867">(Jun 21 2023 at 12:58)</a>:</h4>
+<p>Hmm.. looks like hackmd has some fancy new feature? I cannot change the note titles. <span class="user-mention" data-user-id="545090">@Vincenzo Palazzo</span> do you happen to know why?</p>
+
+
+
+<a name="368229500"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368229500" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368229500">(Jun 21 2023 at 13:00)</a>:</h4>
+<p><span class="user-group-mention" data-user-group-id="436926">@team</span> meeting time ;-)</p>
+
+
+
+<a name="368253932"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368253932" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368253932">(Jun 21 2023 at 14:18)</a>:</h4>
+<p>Sorry, had to drop. Thanks for a good meeting <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="368290968"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368290968" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368290968">(Jun 21 2023 at 16:05)</a>:</h4>
+<p>is the chat from the meeting available or is it lost forever?</p>
+
+
+
+<a name="368301286"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368301286" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368301286">(Jun 21 2023 at 16:42)</a>:</h4>
+<p>jitsi doesn’t save the history</p>
+
+
+
+<a name="368315507"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368315507" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368315507">(Jun 21 2023 at 17:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/368228867">said</a>:</p>
+<blockquote>
+<p>Hmm.. looks like hackmd has some fancy new feature? I cannot change the note titles. <span class="user-mention silent" data-user-id="545090">Vincenzo Palazzo</span> do you happen to know why?</p>
+</blockquote>
+<p>no idea?</p>
+
+
+
+<a name="368316863"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368316863" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368316863">(Jun 21 2023 at 17:41)</a>:</h4>
+<p><span class="user-mention" data-user-id="545090">@Vincenzo Palazzo</span> We were wondering if it could be due to the permissions, i.e. does it allow you to change the titles? (since IIRC you were the admin)</p>
+
+
+
+<a name="368317259"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368317259" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368317259">(Jun 21 2023 at 17:43)</a>:</h4>
+<p>let me check</p>
+
+
+
+<a name="368317362"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368317362" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368317362">(Jun 21 2023 at 17:43)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<a name="368317734"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368317734" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368317734">(Jun 21 2023 at 17:44)</a>:</h4>
+<p><a href="/user_uploads/35136/JYX5MLAX3S3IXg5aweq1DWDM/Selection_010.png">Selection_010.png</a></p>
+
+
+
+<a name="368317778"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368317778" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368317778">(Jun 21 2023 at 17:44)</a>:</h4>
+<p><a href="/user_uploads/35136/bg4N5Z5C-9rEUO8LzTsyJ8Be/Selection_010.png">Selection_010.png</a></p>
+
+
+
+<a name="368318121"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368318121" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368318121">(Jun 21 2023 at 17:46)</a>:</h4>
+<p>I also added you and <span class="user-mention" data-user-id="411647">@Boqun Feng</span> as admin</p>
+
+
+
+<a name="368318408"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368318408" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368318408">(Jun 21 2023 at 17:47)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<a name="368318826"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/368318826" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#368318826">(Jun 21 2023 at 17:49)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<a name="373241137"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/373241137" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#373241137">(Jul 07 2023 at 15:03)</a>:</h4>
+<p>I would like to send a v2 patch of the puzzlefs driver, let me know if you have any initial feedback: <a href="https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:puzzlefs_rfc">https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:puzzlefs_rfc</a><br>
+I've also created a branch with the required dependencies: <a href="https://github.com/ariel-miculas/linux/tree/puzzlefs_dependencies">https://github.com/ariel-miculas/linux/tree/puzzlefs_dependencies</a> (which are also included in the previous branch), I will probably only send the commits between puzzlefs_dependencies..puzzlefs_rfc in the patch series</p>
+
+
+
+<a name="373255644"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/373255644" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#373255644">(Jul 07 2023 at 15:46)</a>:</h4>
+<p>Why does <a href="https://github.com/Rust-for-Linux/linux/commit/5f73e9d5c0e485438206bba4b0b22ba0ae084f5b">this</a> still have "WIP" in its title? If some more work is required, please at least explain in the commit log.</p>
+
+
+
+<a name="373266156"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/373266156" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#373266156">(Jul 07 2023 at 16:16)</a>:</h4>
+<p>I just looked at a couple of commits from <a href="https://github.com/ariel-miculas/linux/compare/puzzlefs_dependencies...ariel-miculas:linux:puzzlefs_rfc">https://github.com/ariel-miculas/linux/compare/puzzlefs_dependencies...ariel-miculas:linux:puzzlefs_rfc</a> and here are some notes:</p>
+<ul>
+<li>many <code>unsafe</code> blocks do not have a <code>SAFETY</code> comment.</li>
+<li>certain <code>unsafe</code> blocks are very big and contain multiple function calls making it unclear why all of them are OK and which are actually <code>unsafe</code>.</li>
+<li>some commits (e.g. <code>5fd466ec</code>) are very small and others are very big, I have no clue if it makes sense, since I am a novice when it comes to drivers, but it seems odd.</li>
+<li>certain things (for example the <code>Path</code> stuff) seems like it could use a better abstraction, since sometimes you use <code>&amp;CStr</code> instead, not sure if that is something we have to do.</li>
+</ul>
+<p>I think you can send it as an RFC, but it would be a good idea to state this in the cover letter.</p>
+
+
+
+<a name="373286507"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/373286507" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#373286507">(Jul 07 2023 at 17:36)</a>:</h4>
+<p>Yeah, I agree with <span class="user-mention silent" data-user-id="411647">Boqun Feng</span>'s  and <span class="user-mention silent" data-user-id="546447">y86</span>, it may be a good idea to clean things a bit, especially around procedural matters.</p>
+
+
+
+<a name="373859761"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/373859761" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#373859761">(Jul 10 2023 at 07:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/373255644">said</a>:</p>
+<blockquote>
+<p>Why does <a href="https://github.com/Rust-for-Linux/linux/commit/5f73e9d5c0e485438206bba4b0b22ba0ae084f5b">this</a> still have "WIP" in its title? If some more work is required, please at least explain in the commit log.</p>
+</blockquote>
+<p>I just took it from Wedson and didn't want to modify it: <a href="https://github.com/wedsonaf/linux/commit/6633c50b345f388a07b4c551f752efe34c15c089">https://github.com/wedsonaf/linux/commit/6633c50b345f388a07b4c551f752efe34c15c089</a><br>
+When I start upstreaming the dependencies I will write a commit message and try to get Wedson to add his signed-off-by</p>
+
+
+
+<a name="374268329"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374268329" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374268329">(Jul 11 2023 at 13:31)</a>:</h4>
+<p>I've reorganized the unsafe blocks to contain as little code as possible, added safety comments and also squashed my commits to avoid very small commits. I appreciate if anyone has some time to have another look.</p>
+
+
+
+<a name="374663386"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374663386" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374663386">(Jul 12 2023 at 15:37)</a>:</h4>
+<p>For wrapping a C type structure:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(transparent)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">INode</span><span class="p">(</span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">UnsafeCell</span><span class="o">&lt;</span><span class="n">bindings</span>::<span class="n">inode</span><span class="o">&gt;</span><span class="p">);</span>
+</code></pre></div>
+<p>we now prefer to using <code>Opaque</code>, since the underlying C struct may not be fully initialized from Rust's viewpoint. </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(transparent)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">INode</span><span class="p">(</span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="n">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span>::<span class="n">inode</span><span class="o">&gt;</span><span class="p">);</span>
+</code></pre></div>
+
+
+
+<a name="374664285"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374664285" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374664285">(Jul 12 2023 at 15:40)</a>:</h4>
+<p>thanks, I've changed this in <code>file.rs</code>, seems like I missed this in <code>fs.rs</code></p>
+
+
+
+<a name="374670920"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374670920" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374670920">(Jul 12 2023 at 16:00)</a>:</h4>
+<p>For <a href="https://github.com/Rust-for-Linux/linux/commit/7e100f72e645e847b4551010a36fc8d79afcc568#diff-aa8f23b9e398ceb0f7cf3a26a4a7a81bdd4b9f015e3471c84c067880ac2fa8c9R339">this</a>, we now have <code>from_result</code> (in <code>rust/kernel/error.rs</code>) now. It's not a macro, so you will "manually" pass a closure to it.</p>
+
+
+
+<a name="374677409"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374677409" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374677409">(Jul 12 2023 at 16:21)</a>:</h4>
+<p>seems like I'm missing a default implementation for Opaque&lt;T&gt;</p>
+
+
+
+<a name="374929223"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/374929223" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#374929223">(Jul 13 2023 at 13:19)</a>:</h4>
+<p>thanks for the review <span class="user-mention" data-user-id="411647">@Boqun Feng</span> , I pushed a new version which addresses your comments</p>
+
+
+
+<a name="376299185"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376299185" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luca <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376299185">(Jul 18 2023 at 10:39)</a>:</h4>
+<p>Hey there,<br>
+together with @jonas.dittrich@student.hpi.de I am working on a fs driver. Therefore we are interested in PR <a href="https://github.com/Rust-for-Linux/linux/issues/1004">#1004</a>. We do currently use some abstractions and are therefore interested getting <a href="https://github.com/Rust-for-Linux/linux/issues/1004">#1004</a> merged. We are also working on some new or improoved abstractions for adresspaceoperations and operations and more. Any chance for upstreaming?</p>
+<p>Best<br>
+Luca</p>
+
+
+
+<a name="376398146"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376398146" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376398146">(Jul 18 2023 at 15:51)</a>:</h4>
+<blockquote>
+<p>Any chance for upstreaming?</p>
+</blockquote>
+<p>If you mean for filesystems support in general, there are several parties that would like to have filesystem Rust abstractions in the kernel eventually, so we are trying to make the case for them. Thus it would be useful to know any details on your FS drivers / use case that you may be able to share.</p>
+
+
+
+<a name="376776217"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376776217" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luca <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376776217">(Jul 19 2023 at 19:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/376398146">schrieb</a>:</p>
+<blockquote>
+<blockquote>
+<p>Any chance for upstreaming?</p>
+</blockquote>
+<p>If you mean for filesystems support in general, there are several parties that would like to have filesystem Rust abstractions in the kernel eventually, so we are trying to make the case for them. Thus it would be useful to know any details on your FS drivers / use case that you may be able to share.</p>
+</blockquote>
+<p>We are reimplementing ramfs in rust for educational purposes. Therefore we are interested in more vtable structures which are way more easy to understand than some c like black magic macros ;) in the following days we can provide some code if we were able to order it better.</p>
+
+
+
+<a name="376882319"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376882319" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Xie Minsheng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376882319">(Jul 20 2023 at 08:10)</a>:</h4>
+<p>Hi there,<br>
+I'm considering developing a virtual file system using Rust. In the first phase, I plan to create a simple wrapper for the VFS, similar to wrapfs, to assess the feasibility of using Rust for file system development. In the second phase, I plan to add more functionality.<br>
+While reviewing previous discussions, I noticed that <span class="user-mention" data-user-id="607542">@Ariel Miculas</span>  has significantly improved the abstraction of the VFS. Therefore, I would like to ask if I can begin development based on his branch now ？</p>
+
+
+
+<a name="376900739"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376900739" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376900739">(Jul 20 2023 at 09:12)</a>:</h4>
+<p>Most of the VFS abstractions come from Wedson's <a href="https://github.com/wedsonaf/linux/tree/fs">branch</a> which I have just rebased on top of rust-next. There's <a href="https://github.com/Rust-for-Linux/linux/issues/1004">an open issue</a> regarding upstreaming these filesystem abstractions, but it's not clear yet how we will proceed, since the filesystem maintainers didn't express their opinion on this issue yet. I plan on sending a v2 patch series for puzzlefs next week, maybe this will restart the discussions.</p>
+
+
+
+<a name="376904893"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/376904893" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Xie Minsheng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#376904893">(Jul 20 2023 at 09:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="607542">Ariel Miculas</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/376900739">said</a>:</p>
+<blockquote>
+<p>Most of the VFS abstractions come from Wedson's <a href="https://github.com/wedsonaf/linux/tree/fs">branch</a> which I have just rebased on top of rust-next. There's <a href="https://github.com/Rust-for-Linux/linux/issues/1004">an open issue</a> regarding upstreaming these filesystem abstractions, but it's not clear yet how we will proceed, since the filesystem maintainers didn't express their opinion on this issue yet. I plan on sending a v2 patch series for puzzlefs next week, maybe this will restart the discussions.</p>
+</blockquote>
+<p>Cool !  I think it's enough for me to start working now. I will try to develop on the puzzlefs_dependencies branch that you just published. Thank you !</p>
+
+
+
+<a name="382713828"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/382713828" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#382713828">(Aug 07 2023 at 17:34)</a>:</h4>
+<p>I've added <a href="https://github.com/ariel-miculas/linux/commit/9efc2d4fffdd5b709aaf659e2949bed244e9b78f">new functionality</a> to puzzlefs and the filesystem abstractions, now I'm able to implement the functionality required for iterating directories and looking up a directory entry (without inserting all the directory entries into the dcache when initializing the filesystem, as it was previously done). Feedback is welcome.</p>
+
+
+
+<a name="382716057"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/382716057" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#382716057">(Aug 07 2023 at 17:44)</a>:</h4>
+<p>Looks like <code>DirContext::advance_pos</code> should take a <code>&amp;mut self</code> instead of <code>&amp;self</code>?</p>
+
+
+
+<a name="382717684"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/382717684" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#382717684">(Aug 07 2023 at 17:50)</a>:</h4>
+<p>indeed, I've missed that, thanks</p>
+
+
+
+<a name="389163465"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/389163465" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#389163465">(Sep 05 2023 at 11:06)</a>:</h4>
+<p>A <a href="https://github.com/ariel-miculas/linux/tree/puzzlefs-ro-fs">new version of puzzlefs</a> is available, based on the <a href="https://github.com/wedsonaf/linux/commits/ro-fs">read-only filesystem abstraction branch</a> developed by Wedson. As always, feedback is welcome!</p>
+
+
+
+<a name="389810923"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/389810923" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Baul (Jianguo Bao) <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#389810923">(Sep 08 2023 at 05:14)</a>:</h4>
+<p>serialization framework is so big, is it proper to upstream this code? Does kernel have a common serialization framework currently?</p>
+
+
+
+<a name="389828576"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/389828576" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#389828576">(Sep 08 2023 at 07:48)</a>:</h4>
+<p>I'm not aware of any common serialization framework in the kernel. <code>capnproto</code> is only big because I've included the entire upstream code, but there's a lot of code which depends on <code>std</code>/<code>alloc</code> support which isn't used in the kernel (e.g. it's under <code>#[cfg(feature = "alloc")]</code>).<br>
+There will be a discussion about third-party crate support (such as Cap'n Proto) at Kangrejos and then probably at Linux Plumbers Conference. Upstreaming depends on the maintainers of fs-devel, you can read the kernel threads <a href="https://lore.kernel.org/rust-for-linux/ZIO%2FOqxmFkTFzyDh@moria.home.lan/T/#t">v1</a> and <a href="https://lore.kernel.org/all/20230726164535.230515-1-amiculas@cisco.com/">v2</a> for context. I'm also tracking the puzzlefs driver development in <a href="https://github.com/project-machine/puzzlefs/issues/78">this github issue</a>.</p>
+
+
+
+<a name="415977913"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/415977913" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Carson Range <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#415977913">(Jan 17 2024 at 08:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="607542">Ariel Miculas</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/389828576">said</a>:</p>
+<blockquote>
+<p>I'm not aware of any common serialization framework in the kernel. <code>capnproto</code> is only big because I've included the entire upstream code, but there's a lot of code which depends on <code>std</code>/<code>alloc</code> support which isn't used in the kernel (e.g. it's under <code>#[cfg(feature = "alloc")]</code>).<br>
+There will be a discussion about third-party crate support (such as Cap'n Proto) at Kangrejos and then probably at Linux Plumbers Conference. Upstreaming depends on the maintainers of fs-devel, you can read the kernel threads <a href="https://lore.kernel.org/rust-for-linux/ZIO%2FOqxmFkTFzyDh@moria.home.lan/T/#t">v1</a> and <a href="https://lore.kernel.org/all/20230726164535.230515-1-amiculas@cisco.com/">v2</a> for context. I'm also tracking the puzzlefs driver development in <a href="https://github.com/project-machine/puzzlefs/issues/78">this github issue</a>.</p>
+</blockquote>
+<p>is there still interest in this?  I see these posts are very old, but I would like to get into this area.</p>
+
+
+
+<a name="415978664"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/415978664" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#415978664">(Jan 17 2024 at 08:51)</a>:</h4>
+<p>The latest development wrt the filesystem abstractions is <a href="https://lwn.net/ml/linux-fsdevel/20231018122518.128049-1-wedsonaf@gmail.com/">this patch series</a>. Or are you asking about PuzzleFS in particular?</p>
+
+
+
+<a name="415979928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/415979928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Carson Range <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#415979928">(Jan 17 2024 at 08:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="607542">Ariel Miculas</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/415978664">said</a>:</p>
+<blockquote>
+<p>The latest development wrt the filesystem abstractions is <a href="https://lwn.net/ml/linux-fsdevel/20231018122518.128049-1-wedsonaf@gmail.com/">this patch series</a>. Or are you asking about PuzzleFS in particular?</p>
+</blockquote>
+<p>No, but it seems like theres a lot more done than I expected. Is there a way to see if this got merged?</p>
+
+
+
+<a name="415980426"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/415980426" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#415980426">(Jan 17 2024 at 09:02)</a>:</h4>
+<p>most likely it wasn't merged, based on the recent discussions, e.g. <a href="https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/">https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/</a></p>
+
+
+
+<a name="416091588"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/416091588" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Carson Range <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#416091588">(Jan 17 2024 at 18:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="607542">Ariel Miculas</span> <a href="#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/415980426">said</a>:</p>
+<blockquote>
+<p>most likely it wasn't merged, based on the recent discussions, e.g. <a href="https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/">https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/</a></p>
+</blockquote>
+<p>Maybe I should subscribe to the fs mailing list to, but it seems good progress is being made by <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span>.</p>
+
+
+
+<a name="423677638"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/423677638" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#423677638">(Feb 27 2024 at 19:07)</a>:</h4>
+<p>I have rebased <a href="https://github.com/ariel-miculas/linux/tree/puzzlefs">puzzlefs</a> to use Wedson's <a href="https://github.com/wedsonaf/linux/tree/ext2fs">latest filesystem abstractions</a>, I would like some feedback especially on <a href="https://github.com/ariel-miculas/linux/commit/17e6cb07679248f49c3ab2d1fe0e487a8f099774">this commit</a> which implements the listing of extended attributes.<br>
+<span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> , what are your plans wrt upstreaming your latest version of abstractions?</p>
+
+
+
+<a name="434869651"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/434869651" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Thomas Bertschinger <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#434869651">(Apr 22 2024 at 23:43)</a>:</h4>
+<p>A few weeks ago at the RFL meeting I shared some Rust debugfs wrappers I started working on for bcachefs.<br>
+I wanted to ask about what I should expect for getting those ready to submit to the mailing lists.</p>
+<p>Currently the debugfs wrappers do not use the VFS abstractions, but use bindings::file_operations directly.<br>
+I was wondering if it is suitable to send these patches in that form or if using the VFS abstractions should<br>
+be considered a requirement for submitting this debugfs code.</p>
+<p>A related question is where in the kernel tree to store this. I currently have it under rust/kernel/.<br>
+Long term I would think that once the debugfs abstractions are sufficiently general they will live under fs/debugfs,<br>
+but they likely aren't there yet (in particular using the Rust VFS abstractions is likely a prerequisite for that).<br>
+Kent also suggested submitting the debugfs Rust code under fs/bcachefs/ given that it is still a WIP interface.<br>
+Would this be suitable for staging purposes?</p>
+<p>Here is the link to the patches [1]. This is still a work in progress at this point but I hope to get them ready<br>
+for submission soon based on the feedback to these questions. It hasn't yet been rebased on the latest rust-next (the alloc crate changes in particular) but that is on the to-do list.</p>
+<p>[1] <a href="https://github.com/bertschingert/bcachefs/commits/bcachefs-rust-debugfs-testing/">https://github.com/bertschingert/bcachefs/commits/bcachefs-rust-debugfs-testing/</a></p>
+
+
+
+<a name="437167467"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/437167467" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#437167467">(May 05 2024 at 22:18)</a>:</h4>
+<p>Hey Thomas, sorry for the late reply. I talked about this briefly with <span class="user-mention" data-user-id="531558">@Wedson Almeida Filho</span> a few days ago.</p>
+<p>One quick note on the paths: <code>rust/kernel/</code> is the current place for abstractions, but eventually the code will be moved into each subsystem when we split the <code>kernel</code> crate. So whether it is in <code>rust/kernel/</code> or not is not really important (regarding the "WIP" status).</p>
+<p>Now, if you think upstreaming without the VFS abstractions is the only sensible way to bootstrap the effort, then as long as the code is properly marked as WIP/staging and Kent and other FS maintainers are happy with that approach, it should be fine. However, I would say it should be made very clear in the code/docs/... that the goal is to eventually use proper abstractions etc.</p>
+<p>One way to do that would be putting the "staging" marker directly in the path, like in <code>drivers/staging/</code>. Then essentially you have your staging area.</p>
+<p>So, in summary: it is not what we would recommend, but it may be fine if you can justify it, other FS maintainers agree, you commit to eventually use proper abstractions and you are happy tagging it as <code>fs/staging/</code> or similar meanwhile. In other words, what we are looking for is that subsystem maintainers are aware that the goal is to have the abstractions in place and used, but exceptions sometimes need to be made. :)</p>
+
+
+
+<a name="451831408"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/451831408" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yiyang Wu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#451831408">(Jul 16 2024 at 18:28)</a>:</h4>
+<p>Hi everyone, so i'm a kernel newcomer who plans to port the current C implementation of EROFS using Rust as my beginner project with my mentor. I've noticed that the former VFS patches V2 in May when i apply my project  and i haven't seen any updates since. Our current plan though is still to keep the rust code inside the fs/erofs directory and use the C binding since according to the most recent mailing list discussion it is rejected but my optimal and original plan is to use this vfs abstraction because it fits into the current C source code logic pretty well. Is the current patch-set in the mailing list up-to date or are there any more updates based on that for me to track on? Thanks.</p>
+
+
+
+<a name="493632347"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/493632347" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Flora R. <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#493632347">(Jan 14 2025 at 17:14)</a>:</h4>
+<p>Hi, I'm new to kernel development and have been working with the abstractions as part of a university project [0]. I'm thinking about (re)submitting parts of the abstraction patches. If you're also interested in that and/or there are any new developments, I'd love to hear from you!<br>
+[0] <a href="https://github.com/fyrk/linux">https://github.com/fyrk/linux</a></p>
+
+
+
+<a name="506219902"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/506219902" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#506219902">(Mar 17 2025 at 17:37)</a>:</h4>
+<p>Hi all, I’m new to Kernel development (meaning I have zero experience) and same for development of a file system. However, I have an idea for a new file system that has Cybersecurity features built-in. The main Cybersecurity feature that I’m designing in is ransomware detection, process quarantining, and affected file rollbacks. It’s designed to be a Copy-on-Write system to help with the versioning to do the file rollbacks. I want it to me multi-threaded as well for efficiency. Check out the GitHub repo README: <a href="https://github.com/bhh32/cyber-fs">https://github.com/bhh32/cyber-fs</a> for the main design features. I just need help getting started figuring out how to do the Kernel integrations.</p>
+
+
+
+<a name="555699378"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/555699378" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#555699378">(Nov 15 2025 at 00:38)</a>:</h4>
+<p>Has the development of VFS abstractions in Rust been abandoned since Wedson left or is there some branch where there is active development on the abstractions? I'm porting a simple fs to Rust for my master thesis and I would love to be working on the most up-to-date branch and even help with contributing to Rust VFS abstractions.</p>
+
+
+
+<a name="556633589"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556633589" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556633589">(Nov 15 2025 at 20:42)</a>:</h4>
+<p>Cc <span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> who I think wanted to eventually work in that space.</p>
+
+
+
+<a name="556634150"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556634150" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556634150">(Nov 15 2025 at 20:48)</a>:</h4>
+<p>As far as I know, the most recent stuff is what Wesson did with ext2. I am planning to pick that up but I was not able to yet. Let me know if you start rebasing on upstream, that would save me a ton of work :)</p>
+
+
+
+<a name="556634910"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556634910" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556634910">(Nov 15 2025 at 20:58)</a>:</h4>
+<p>I'm working of a fairly new rust-next branch kernel v6.18, and trying to port some of wedsons work  from the vfs-v2 branch. Do you know how wedson got around the orphan rule. I'm trying to define a module_fs! macro but since the Module trait is not defined in my toy fs crate it won't compile</p>
+
+
+
+<a name="556635894"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556635894" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556635894">(Nov 15 2025 at 21:10)</a>:</h4>
+<p>I didn't look. Maybe he just put ext2 in the kernel crate and call it a day?</p>
+
+
+
+<a name="556636659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556636659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556636659">(Nov 15 2025 at 21:23)</a>:</h4>
+<p>I don't think so, because both ext2 and tarfs are defined under fs/{tarfs|rust-ext2} while the macro and fs module type are defined in rust/kernel/fs.rs. I'll figure it out. For rebasing upstream, whats the best way to go about it, I'm starting very slow, just getting the minimum amount of code to register the filesystem, then mount, read sb and first inode, and going from there.</p>
+
+
+
+<a name="556636811"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/556636811" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#556636811">(Nov 15 2025 at 21:25)</a>:</h4>
+<p>That is probably a good way to properly understand the code. But it is maybe faster to just rebase all of it.</p>
+
+
+
+<a name="563649812"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563649812" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563649812">(Dec 13 2025 at 22:19)</a>:</h4>
+<p><span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> I'm almost finished building a simple write based file system with (mostly) wedsons VFS abstractions. Some abstractions might be missing, do you want me to open a PR or do you want to take a look first?</p>
+<p>the fs is located in fs/rustezfs</p>
+<p><a href="https://github.com/lsig/linux-rustfs">https://github.com/lsig/linux-rustfs</a></p>
+
+
+
+<a name="563651199"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563651199" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563651199">(Dec 13 2025 at 22:47)</a>:</h4>
+<p>A PR is good <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span> I'll take a look.</p>
+
+
+
+<a name="563651220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563651220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563651220">(Dec 13 2025 at 22:48)</a>:</h4>
+<p>Are you familiar with how to use the mailing lists?</p>
+
+
+
+<a name="563651832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563651832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563651832">(Dec 13 2025 at 23:04)</a>:</h4>
+<p>no, but i'm guessing there are some docs I can follow (if you have link that would be great), so I shouldn't open a PR on the Rust-for-linux github.</p>
+
+
+
+<a name="563652796"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563652796" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563652796">(Dec 13 2025 at 23:29)</a>:</h4>
+<p>A PR is ok, if you want some feedback before sending to the list.</p>
+
+
+
+<a name="563652816"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563652816" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563652816">(Dec 13 2025 at 23:30)</a>:</h4>
+<p><a href="https://docs.kernel.org/process/submitting-patches.html">https://docs.kernel.org/process/submitting-patches.html</a></p>
+
+
+
+<a name="563652831"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563652831" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563652831">(Dec 13 2025 at 23:31)</a>:</h4>
+<p>I can help if you have any questions</p>
+
+
+
+<a name="563653670"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/563653670" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#563653670">(Dec 13 2025 at 23:55)</a>:</h4>
+<p>I need to make CLIPPY happy (mostly safety comments) and then i'll submit a PR in the next couple of days to get your feedback, thanks for the help.</p>
+
+
+
+<a name="566335699"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/566335699" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#566335699">(Jan 05 2026 at 11:55)</a>:</h4>
+<p>Did you queue the PR? Is it <a href="https://github.com/Rust-for-Linux/linux/pull/1214">this one</a>?</p>
+
+
+
+<a name="572009871"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/572009871" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> lsig <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#572009871">(Feb 04 2026 at 21:09)</a>:</h4>
+<p>Hey, just came back from vacation and cleaned up most of the clippy warnings. Lined up the PR and cc'd you on github. <a href="https://github.com/Rust-for-Linux/linux/pull/1222">https://github.com/Rust-for-Linux/linux/pull/1222</a>. There are some conflicts but hopefully nothing major.</p>
+
+
+
+<a name="572221110"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/572221110" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#572221110">(Feb 05 2026 at 18:24)</a>:</h4>
+<p>Thanks, I'll take a look as soon as possible.</p>
+
+
+
+<a name="598091036"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/598091036" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Timo Neyer <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#598091036">(May 27 2026 at 13:39)</a>:</h4>
+<p>Hi, we are a small student team at a university and would like to work on the filesystem abstractions. Is there a concrete topic we could help you with? Otherwise, we would continue working on our filesystem abstractions and a fat driver. Do you have a recommendation?</p>
+
+
+
+<a name="598288804"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/384413-Filesystems/topic/Filesystem%20abstractions/near/598288804" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/384413-Filesystems/topic/Filesystem.20abstractions.html#598288804">(May 28 2026 at 09:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/channel/384413-Filesystems/topic/Filesystem.20abstractions/near/572221110">said</a>:</p>
+<blockquote>
+<p>Thanks, I'll take a look as soon as possible.</p>
+</blockquote>
+<p>Hi, sorry I was not able to look into this. My work assignments has slightly shifted, and file systems are not currently on my radar for the immediate future.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

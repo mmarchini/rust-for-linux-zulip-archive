@@ -1,0 +1,224 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> is trying to change how the assignment of address spaces to VMs work, and in doing so, he's found an issue with the way things are currently designed. The plan is to have a new type, <code>AddressSpaceManager</code> in charge of AS allocation. </p>\n<p>We currently have a more rudimentary slot allocator (in <a href=\"http://slot_allocator.rs\">slot_allocator.rs</a>) that merely tracks which AS are free, but that doesn't reclaim slots when the VM is destroyed, nor does it keep a distinction between idle slots (which should remain in place as long as we have unassigned slots) and unassigned slots themselves. So this type is an overall improvement over <a href=\"http://slot_allocator.rs\">slot_allocator.rs</a>.</p>\n<p>Ideally, we would be able to do this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">Drop</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Vm</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">drop</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">      </span><span class=\"n\">mmu</span><span class=\"p\">.</span><span class=\"n\">as_manager</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">().</span><span class=\"n\">remove_vm</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">//vm_dropped</span>\n<span class=\"w\">   </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>So the Vm must somehow store a reference to the AddressSpaceManager.</p>\n<p>We would also need to access the VM on the fault handler, i.e.: from the Mmu threaded IRQ handler.  At the moment, this means storing an Arc&lt;Mutex&lt;Vm&gt;&gt; in AddressSpaceSlotData, i.e.:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">AddressSpaceSlotData</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// VM currently bound to this AS</span>\n<span class=\"w\">    </span><span class=\"n\">vm</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"nc\">Vm</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"c1\">// This would be an Arc&lt;Mutex&lt;Vm&gt;&gt; instead.</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// Last time this slot was used</span>\n<span class=\"w\">    </span><span class=\"n\">last_used_seqno</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">enum</span><span class=\"w\"> </span><span class=\"nc\">AddressSpaceSlot</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">Free</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">Active</span><span class=\"p\">(</span><span class=\"n\">AddressSpaceSlotData</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"n\">Idle</span><span class=\"p\">(</span><span class=\"n\">AddressSpaceSlotData</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">),</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">AddressSpaceManager</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// IO mem region</span>\n<span class=\"w\">    </span><span class=\"n\">iomem</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Arc</span><span class=\"o\">&lt;</span><span class=\"n\">Devres</span><span class=\"o\">&lt;</span><span class=\"n\">IoMem</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// Number of AS slots</span>\n<span class=\"w\">    </span><span class=\"n\">slot_count</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// AS slots</span>\n<span class=\"w\">    </span><span class=\"n\">slots</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">AddressSpaceSlot</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"mi\">32</span><span class=\"p\">],</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// Sequence number incremented each time vm_active() is called</span>\n<span class=\"w\">    </span><span class=\"n\">use_seqno</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This creates a circular reference, because now the AddressSpaceManager holds an Arc&lt;Mutex&lt;Vm&gt;&gt;. I see two ways around this</p>\n<p>a) rewrite it so the circular reference is gone<br>\nb) add a Weak&lt;T&gt; type to the kernel</p>\n<p>I am convinced that a) is possible, but I haven't been able to come up with something so far, perhaps anyone has a better idea?</p>\n<p><a href=\"https://gitlab.freedesktop.org/bbrezillon/linux/-/tree/tyr-kbo?ref_type=heads\">Here's a branch</a> with an initial implementation by Boris. He would have to switch from &amp;Vm to Arc&lt;Mutex&lt;Vm&gt;&gt;, but otherwise the basic idea is there.</p>\n<p>cc <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> <span class=\"user-mention\" data-user-id=\"878151\">@Beata Michalska</span></p>",
+        "id": 546252417,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761056927
+    },
+    {
+        "content": "<p>You won't be able to have lifetimes on these structs, so anything involving <code>&amp;Vm</code> definitely won't work.</p>",
+        "id": 546253964,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057301
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> yeah I mentioned that</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"n\">vm</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"nc\">Vm</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"c1\">// This would be an Arc&lt;Mutex&lt;Vm&gt;&gt; instead.</span>\n</code></pre></div>",
+        "id": 546254202,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057354
+    },
+    {
+        "content": "<p>So I mean, what we do in Binder for this kind of thing is that there's a <code>release</code> method on our <code>BinderProcess</code> struct that runs on process exit. That method performs various cleanup which has the side-effect of breaking all cycles. I think that is the main alternative to consider.</p>",
+        "id": 546254829,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057483
+    },
+    {
+        "content": "<p>That can work, but it's not automatic :/</p>",
+        "id": 546254925,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057506
+    },
+    {
+        "content": "<p>i.e: given that we're trying to push safety with Rust and etc, maybe it would be better to have things on drop() as an additional safety layer</p>",
+        "id": 546255161,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057561
+    },
+    {
+        "content": "<p>In the case of Binder, I can't really rely on the refcounts actually hitting zero for cleanup anyway, so I have to do it that way. There could be references to the objects from other binder processes.</p>",
+        "id": 546255211,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057571
+    },
+    {
+        "content": "<p>Ah wait, we're saying slightly different things. What I mean is that there's a specific call where Vm's are destroyed (DRM_PANTHOR_IOCTL_VM_DESTROY), and that we could reach the allocator through TyrData and free the slot at that point, but that would still be a manual process.</p>",
+        "id": 546255791,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057695
+    },
+    {
+        "content": "<p>but what you're saying is having a method to break cycles, which is slightly different</p>",
+        "id": 546255880,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057715
+    },
+    {
+        "content": "<p>I mean, it's just a general method to perform all the cleanup tasks.</p>",
+        "id": 546256128,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057776
+    },
+    {
+        "content": "<p>that are necessary on process exit</p>",
+        "id": 546256154,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057783
+    },
+    {
+        "content": "<p>I wonder what <code>impl Drop for TyrDriver</code> does, I see it's hooked up to drm_device::release on the C side </p>\n<p>Cc <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 546256350,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057830
+    },
+    {
+        "content": "<p>It goes through each BinderThread and if there is an active transaction, then it sends a reply to notify that the process died. This also has the effect on breaking process-&gt;thread-&gt;process cycles.</p>",
+        "id": 546256359,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761057831
+    },
+    {
+        "content": "<p>Hold on. Maybe we should discuss this once I have something to show.</p>",
+        "id": 546256516,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761057869
+    },
+    {
+        "content": "<blockquote>\n<p>I wonder what <code>impl Drop for TyrDriver</code> does, I see it's hooked up to drm_device::release on the C side </p>\n</blockquote>\n<p>This might be the point where we break any cycles, for example.</p>",
+        "id": 546256582,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057884
+    },
+    {
+        "content": "<p>So it's not based on some code excerpt that are not linked to the rest of the driver</p>",
+        "id": 546256620,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761057895
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> this issue is not only about that code you've shown btw, we have the same problem with CSGs, for example. There's nothing to return CSGs to the scheduler once they're not bound.</p>",
+        "id": 546256844,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057945
+    },
+    {
+        "content": "<p>it's a general pattern really that's been happening in a few places</p>",
+        "id": 546256913,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761057961
+    },
+    {
+        "content": "<p>As I was saying to <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span>, I use this as an exercise to leverage some rust concepts, and at the same time, get familiar with the Tyr codebase</p>",
+        "id": 546256945,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761057969
+    },
+    {
+        "content": "<p>It might be that I'm just overthinking it</p>",
+        "id": 546256989,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761057982
+    },
+    {
+        "content": "<p>yes, CSGs have the same issue, but groups are also destroyed explicitly (with GROUP_DESTROY, or when the file is closed)</p>",
+        "id": 546257214,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761058034
+    },
+    {
+        "content": "<p>This is just me imagining things, but let's say that the vm gets unbound in three scenarios:</p>\n<ol>\n<li>When another vm needs it.</li>\n<li>When the vm has a fault.</li>\n<li>When the userspace that owns it closes its fd.</li>\n</ol>\n<p>In that case, I think cases 2 and 3 just have to explicitly remove it.</p>",
+        "id": 546257269,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058047
+    },
+    {
+        "content": "<p>If you lazily leave weak references around, you're also going to be consuming memory you don't need anymore. A weak reference might let you run the object's destructor, but you can't free the allocation that holds the object.</p>",
+        "id": 546257872,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058182
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/529528-Tyr/topic/Should.20we.20consider.20a.20Weak.3CT.3E.20type.3F/near/546256350\">said</a>:</p>\n<blockquote>\n<p>I wonder what <code>impl Drop for TyrDriver</code> does, I see it's hooked up to drm_device::release on the C side </p>\n<p>Cc <span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span></p>\n</blockquote>\n<p><code>TyrDriver</code> is the driver's device private data type you return from <code>probe()</code>. It is dropped when the driver is unbound.</p>\n<p>When the DRM device is dropped, it drops <code>TyrDriver::Data</code> which lives within the <code>drm::Device</code>.</p>\n<p>The fact that you implement both traits for the same type should not have any practical relevance, other than that it can indeed be a bit confusing at a first glance. :)</p>\n<p>I hope that helps!</p>",
+        "id": 546258554,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761058318
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> so given Danilo's answer above, even if we have a A points to B points to A using Arcs, we can still use this drop call above to undo it IIUC?</p>",
+        "id": 546259115,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761058423
+    },
+    {
+        "content": "<p>If there's a cycle, then drop doesn't run.</p>",
+        "id": 546259466,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058502
+    },
+    {
+        "content": "<p>since it runs when the count hits zero</p>",
+        "id": 546259523,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058516
+    },
+    {
+        "content": "<p>yeah but this drop() runs when the driver is unbound, it doesn't rely on the refcounts on each Arc</p>",
+        "id": 546259693,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761058554
+    },
+    {
+        "content": "<p>Right, yes.</p>",
+        "id": 546259850,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058596
+    },
+    {
+        "content": "<p>Another pattern that may be useful is to have a <code>VmMainRef(Arc&lt;Vm&gt;)</code> that has a destructor for performing cleanup. This kind of thing is much more reliable than <code>drop</code> for an object in an <code>Arc</code>.</p>",
+        "id": 546259879,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058604
+    },
+    {
+        "content": "<p>So the process has its \"main\" reference to the vm somewhere. And when <em>that</em> reference goes out of scope, it's removed.</p>",
+        "id": 546260139,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058669
+    },
+    {
+        "content": "<p>Of course, any pattern involving drop is going to require that you take the lock in drop. A proper <code>release</code> method often allows you to take the lock fewer times.</p>",
+        "id": 546260301,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761058700
+    },
+    {
+        "content": "<blockquote>\n<p>So the process has its \"main\" reference to the vm somewhere. And when <em>that</em> reference goes out of scope, it's removed.</p>\n</blockquote>\n<p>Can you expand a bit? how would the destructor here be different?</p>",
+        "id": 546260532,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1761058759
+    },
+    {
+        "content": "<blockquote>\n<p>yeah but this drop() runs when the driver is unbound, it doesn't rely on the refcounts on each Arc</p>\n</blockquote>\n<p>Right but that's not what we want.</p>",
+        "id": 546261053,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761058883
+    },
+    {
+        "content": "<p>We want VMs/Groups/xxx to go away soon after the file has been dropped, or when those objects are explicitly destroyed (xxx_DESTROY ioctls).</p>",
+        "id": 546261276,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761058947
+    },
+    {
+        "content": "<p>If you have a circular ref, like is the case with AS slots or CSGs, you need to kill this cycle explicitly</p>",
+        "id": 546261556,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1761059020
+    },
+    {
+        "content": "<p>I think no matter what you need a function that runs on fd close, and in that function you should just clear CSG and VMs explicitly. RAII is nice, but it's not something that solves all your problems when you have cyclic refcounted objects.</p>",
+        "id": 546261956,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1761059138
+    }
+]

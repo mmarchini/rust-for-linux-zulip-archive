@@ -1,0 +1,158 @@
+[
+    {
+        "content": "<p>Are drivers written in Rust generally going to be secure against malicious devices?  I ask because drivers written in C typically are not, and in Qubes OS there are several cases where the lack of a hardened driver is causing problems.</p>",
+        "id": 325759878,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1675479290
+    },
+    {
+        "content": "<p>This is something that came up in a discussion with some of the DRM folks... Personally, I think they should be, because otherwise that just opens up a lot of attack surface.</p>\n<p>In general my GPU driver tries not to trust the GPU firmware, though there is one <a href=\"https://github.com/AsahiLinux/linux/blob/gpu/rust-wip/drivers/gpu/drm/asahi/object.rs#L30\">big fundamental problem</a> that makes it impractical to be provably secure against a malicious device with today's Rust support (C sort of makes it possible but not ergonomic). It's somewhat academic though, in that I think it's unlikely that the compiler will generate code that would introduce vulnerabilities, but it could...</p>",
+        "id": 325955384,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675601818
+    },
+    {
+        "content": "<p>It seems like the \"correct\" solution to that would be to use volatile operations rather than atomics?</p>",
+        "id": 326001075,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1675623511
+    },
+    {
+        "content": "<p>But currently, Rust's \"volatile\" doesn't have atomic semantics, I think some of these operations are needed to be 32bit or 64bit atomic and volatile</p>",
+        "id": 326005191,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675626097
+    },
+    {
+        "content": "<p>Also Rust atomics are not volatile, so compilers can merge two atomics into one <em>in theory</em>.</p>",
+        "id": 326005312,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675626180
+    },
+    {
+        "content": "<p>Merging two atomic operations is definitely allowed, yes, and I wouldn't be surprised if there are optimizations that do so.</p>",
+        "id": 326006434,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1675626986
+    },
+    {
+        "content": "<p>Right, so when talking with C code or external hardware, I think we need \"volatile atomics\" sometimes. Not sure whether Lina's case requires that.</p>",
+        "id": 326006827,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675627297
+    },
+    {
+        "content": "<p>There's an active discussion about volatile atomics over on the rust-lang zulip: &lt;<a href=\"https://rust-lang.zulipchat.com/#narrow/stream/136281-t-lang.2Fwg-unsafe-code-guidelines/topic/volatile.20atomic.20in.20Rust.3F\">https://rust-lang.zulipchat.com/#narrow/stream/136281-t-lang.2Fwg-unsafe-code-guidelines/topic/volatile.20atomic.20in.20Rust.3F</a>&gt;</p>",
+        "id": 326006912,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1675627333
+    },
+    {
+        "content": "<p>The issue is less the atomicity itself and more that the compiler shouldn't expect data to not change out from under it. For example, let's say you have this kind of code:</p>\n<div class=\"codehilite\"><pre><span></span><code>1    let mut buf = [0; 4];\n2    if count &gt; 4 { return Err(EINVAL); }\n3    gpu_shared_struct.foo = count;\n4    // some other code\n5    buf[..count].fill(1);\n</code></pre></div>\n<p>The compiler could elide any bounds checking in line 5, because the bound was already checked in line 2. But let's say line 4 causes register pressure, so the compiler decides to load back <code>gpu_shared_struct.foo</code> into <code>count</code>. Now the GPU could cause the CPU to overflow <code>buf</code> by changing that value.</p>\n<p>In C we have <code>READ_ONCE</code> and <code>WRITE_ONCE</code> to avoid this. Volatile also basically avoids this but it's a bigger hammer since it also forbids reordering and other things...</p>",
+        "id": 326028616,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675645488
+    },
+    {
+        "content": "<p>What I really want is some kind of qualifier, ideally something that can be applied ergonomically to references, that tells the compiler to do exactly the reads and writes shown (reordering allowed but not adding more).</p>",
+        "id": 326028731,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675645597
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326028616\">said</a>:</p>\n<blockquote>\n<p>The issue is less the atomicity itself and more that the compiler shouldn't expect data to not change out from under it. For example, let's say you have this kind of code:</p>\n<div class=\"codehilite\"><pre><span></span><code>1    let mut buf = [0; 4];\n2    if count &gt; 4 { return Err(EINVAL); }\n3    gpu_shared_struct.foo = count;\n4    // some other code\n5    buf[..count].fill(1);\n</code></pre></div>\n<p>The compiler could elide any bounds checking in line 5, because the bound was already checked in line 2. But let's say line 4 causes register pressure, so the compiler decides to load back <code>gpu_shared_struct.foo</code> into <code>count</code>. Now the GPU could cause the CPU to overflow <code>buf</code> by changing that value.</p>\n<p>In C we have <code>READ_ONCE</code> and <code>WRITE_ONCE</code> to avoid this. Volatile also basically avoids this but it's a bigger hammer since it also forbids reordering and other things...</p>\n</blockquote>\n<p>volatile allows reordering with normal memory accesses, just disallows reordering with another volatile</p>",
+        "id": 326032245,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675648906
+    },
+    {
+        "content": "<p>Also since this somewhat involves with optimization, I doubt Rust can provide anything LLVM doesn’t support in the near future ;-)</p>",
+        "id": 326033424,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675650109
+    },
+    {
+        "content": "<p>Yeah, this might need LLVM changes. I don't think it's urgent because it's low risk, but I think it's something we should push for, even if it takes a while to get all the pieces together ^^</p>",
+        "id": 326037149,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675653370
+    },
+    {
+        "content": "<p>It's not just about hardware too, think about buffers shared with userspace, or even userspace processes sharing memory...</p>",
+        "id": 326037169,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675653395
+    },
+    {
+        "content": "<p>Single mutable reference semantics just can't apply with shared memory without some kind of overarching entity enforcing that, which you almost never have, so we need another solution.</p>",
+        "id": 326037197,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675653437
+    },
+    {
+        "content": "<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>",
+        "id": 326037217,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675653477
+    },
+    {
+        "content": "<p>As far as I can tell, <code>READ_ONCE</code> and <code>WRITE_ONCE</code> are implemented using volatile operations as well, so those seem like the equivalent, no?</p>",
+        "id": 326061878,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1675670698
+    },
+    {
+        "content": "<p>Hmm, true, I thought they were something smarter than that these days...</p>",
+        "id": 326063898,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675671497
+    },
+    {
+        "content": "<p>The tricky thing is I don't necessarily want to make everything volatile... I <em>do</em> want the compiler to optimize writes however it wants, what I don't want is for it to read things back or expect them to be the way it left them!</p>\n<p>Most of what I do with GPU memory is write (sometimes very large) structs, so it seems silly to use such a big hammer for that. For example, it's perfectly fine to reorder everything, split or merge writes, etc... I wouldn't want to lose performance by marking every field of multi-kilobyte structs as volatile. I already use actual atomics where ordering and access type strictly matters (things like ring buffer pointers).</p>",
+        "id": 326064601,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675671766
+    },
+    {
+        "content": "<p>So I guess what I really want is some kind of \"read-guarded\" value: reads should be volatile, but not writes (and writes should never cause reads to be synthesized)</p>",
+        "id": 326064861,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675671859
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217\">said</a>:</p>\n<blockquote>\n<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>\n</blockquote>\n<p>I already implemented this in <a href=\"https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs\">my qubes-castable crate</a>.</p>",
+        "id": 339720556,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1678034349
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/339720556\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217\">said</a>:</p>\n<blockquote>\n<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>\n</blockquote>\n<p>I already implemented this in <a href=\"https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs\">my qubes-castable crate</a>.</p>\n</blockquote>\n<p>I'm aware, that's my reference! I meant I haven't integrated it yet / made it work for the driver ^^</p>",
+        "id": 342300860,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1678970975
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/342300860\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/339720556\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20driver.20security/near/326037217\">said</a>:</p>\n<blockquote>\n<p>This also ties in with the <code>Castable</code> story which I haven't implemented yet (a trait to mark known-all-bit-patterns-safe types and structs composed solely of them, which is another requirement for anything that is shared memory).</p>\n</blockquote>\n<p>I already implemented this in <a href=\"https://github.com/QubesOS/qubes-gui-rust/blob/c4fc24dabb54c9b9df537883084db357ec10efc6/qubes-castable/src/lib.rs\">my qubes-castable crate</a>.</p>\n</blockquote>\n<p>I'm aware, that's my reference! I meant I haven't integrated it yet / made it work for the driver ^^</p>\n</blockquote>\n<p>Ah nice, thanks!  Feel free to submit PRs or file issues for anything you would find useful.</p>",
+        "id": 343790235,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1679520891
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> FYI <code>qubes-castable</code> is dual-licensed MIT/Apache 2 and <code>#![no_std]</code> so you should be able to just use it in kernel code directly.  I’d prefer that we both be using the same code.</p>",
+        "id": 344556700,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1679780014
+    },
+    {
+        "content": "<p>I know, I'm not planning on reimplementing it! There's going to be interactions with the uapi and pinned-init series, which is why I'm not looking into this yet. If the other folks are happy with qubes-castable we can use it ^^</p>",
+        "id": 345837134,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680237956
+    },
+    {
+        "content": "<p>That would be absolutely amazing!</p>",
+        "id": 346694547,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1680563035
+    }
+]

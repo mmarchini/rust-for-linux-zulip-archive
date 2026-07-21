@@ -1,0 +1,536 @@
+<html>
+<head><meta charset="utf-8"><title>Inconsistency of `from_raw`. · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html">Inconsistency of `from_raw`.</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="450324501"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450324501" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450324501">(Jul 10 2024 at 01:56)</a>:</h4>
+<p>We have <code>ARef::from_raw()</code>, which doesn't increase the refcount itself, i.e. it takes away the reference count of the input pointer. However, <code>Device::from_raw()</code> will increase the refcount of device, i.e. it uses its own reference count.</p>
+<p>I find this may be a bit confusing in the future, hence bring this up. Thoughts? <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span></p>
+
+
+
+<a name="450437708"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450437708" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450437708">(Jul 10 2024 at 12:27)</a>:</h4>
+<p>I would say that for <code>from_raw</code>, it shouldn't increment the refcount for consistency with te standard library <code>Arc::from_raw</code>.</p>
+
+
+
+<a name="450493371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450493371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450493371">(Jul 10 2024 at 15:52)</a>:</h4>
+<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>
+
+
+
+<a name="450504050"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450504050" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450504050">(Jul 10 2024 at 16:30)</a>:</h4>
+<p>Yes, so a <code>-&gt; ARef&lt;_&gt;</code> function may have at least two semantics: 1) using the reference count provided by the caller, or 2) using an own reference count. I feel we better have some general naming rule to separate these two cases.</p>
+
+
+
+<a name="450504577"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450504577" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450504577">(Jul 10 2024 at 16:32)</a>:</h4>
+<p>For example, case <a href="https://github.com/Rust-for-Linux/linux/issues/2">#2</a> could have a <code>get_</code> prefix indicating the refcount increased.</p>
+
+
+
+<a name="450507063"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450507063" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450507063">(Jul 10 2024 at 16:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450493371">said</a>:</p>
+<blockquote>
+<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>
+</blockquote>
+<p>I am a bit confused, you said that you agree with Alice, but you say that you want <code>from_raw</code> to increment the refcount?</p>
+
+
+
+<a name="450507308"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450507308" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450507308">(Jul 10 2024 at 16:49)</a>:</h4>
+<p>another alternative for your current situation would be to use <code>let r = Device::as_ref(..);</code> and then <code>ARef::from(r)</code></p>
+
+
+
+<a name="450507357"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450507357" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450507357">(Jul 10 2024 at 16:49)</a>:</h4>
+<p>then we could avoid having a <code>from_raw</code> function.</p>
+
+
+
+<a name="450507581"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450507581" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450507581">(Jul 10 2024 at 16:50)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450507063">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450493371">said</a>:</p>
+<blockquote>
+<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>
+</blockquote>
+<p>I am a bit confused, you said that you agree with Alice, but you say that you want <code>from_raw</code> to increment the refcount?</p>
+</blockquote>
+<p>AFAICS, I did not. I said that in <code>Device::from_raw</code> we need to increment the ref-count by one, because we don't own a reference to the <code>Device</code> yet. <code>ARef::from_raw</code> expects us to own the reference to the thing we pass the <code>ARef::from_raw</code> though.</p>
+
+
+
+<a name="450507704"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450507704" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450507704">(Jul 10 2024 at 16:51)</a>:</h4>
+<p>I understood Alice in that all <code>from_raw</code> functions should take control of a refcount</p>
+
+
+
+<a name="450508017"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450508017" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450508017">(Jul 10 2024 at 16:53)</a>:</h4>
+<p>Oh, you mean as in every method named <code>from_raw</code>?</p>
+
+
+
+<a name="450508092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450508092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450508092">(Jul 10 2024 at 16:53)</a>:</h4>
+<p>that's how I understood it, yes, but I don't know if Alice also meant it that way</p>
+
+
+
+<a name="450508326"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450508326" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450508326">(Jul 10 2024 at 16:54)</a>:</h4>
+<p>I understood it as the semantics of <code>ARef::from_raw</code> should be aligned to upstream <code>Arc::from_raw</code>.</p>
+<p>I don't think that <code>Device::from_raw</code> and <code>ARef::from_raw</code> should have the same semantics, actually for <code>Device::from_raw</code> that'd be a bug.</p>
+
+
+
+<a name="450508402"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450508402" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450508402">(Jul 10 2024 at 16:55)</a>:</h4>
+<p><code>Device::from_raw</code> doesn't consume the reference, that is passed in.</p>
+
+
+
+<a name="450510280"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450510280" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450510280">(Jul 10 2024 at 17:04)</a>:</h4>
+<p>I’d suggest we change the name of Device::from_raw() instead of the implementation</p>
+
+
+
+<a name="450510326"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450510326" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450510326">(Jul 10 2024 at 17:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450507308">said</a>:</p>
+<blockquote>
+<p>another alternative for your current situation would be to use <code>let r = Device::as_ref(..);</code> and then <code>ARef::from(r)</code></p>
+</blockquote>
+<p>can't we just do this and avoid the <code>from_raw</code> function alltogether?</p>
+
+
+
+<a name="450510717"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450510717" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450510717">(Jul 10 2024 at 17:07)</a>:</h4>
+<p>We can, but having a function doing the above doesn’t hurt, right? Plus if users have to repeat this again and again, they would introduce their version of a helper function.</p>
+
+
+
+<a name="450511789"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450511789" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450511789">(Jul 10 2024 at 17:11)</a>:</h4>
+<p>but to some degree, you are right, the implementation of that function (whose name now is Device::from_raw()) should use as_ref() + from(), instead of directly calling get_device()</p>
+
+
+
+<a name="450515636"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450515636" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450515636">(Jul 10 2024 at 17:26)</a>:</h4>
+<p>e.g.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">Device</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Gets a refcounted reference to [`Self`]</span>
+<span class="w">    </span><span class="sd">///</span>
+<span class="w">    </span><span class="sd">/// # Safety</span>
+<span class="w">    </span><span class="sd">/// `ptr` must be a valid pointer with at least one reference count until the function return.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">get_from_raw</span><span class="p">(</span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">device</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">ARef</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// SAFETY: Per function safety requirement, `ptr` is a valid pointer and has at least one</span>
+<span class="w">        </span><span class="c1">// reference count until the function return, which is larger then the scope of the `&amp;Device`</span>
+<span class="w">        </span><span class="c1">// created by `Device::as_ref(ptr)`.</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="450518895"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450518895" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450518895">(Jul 10 2024 at 17:38)</a>:</h4>
+<p>Sounds reasonable, I'd call it <code>from_raw_get</code> though.</p>
+
+
+
+<a name="450522332"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450522332" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450522332">(Jul 10 2024 at 17:54)</a>:</h4>
+<p>I wouldn't create such a function in the first place. How many times do you need to call it anyways? I think writing</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>instead of</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">from_raw_get</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>doesnt really hurt. and creating the additional function increases the total number of <code>unsafe</code> by 2</p>
+
+
+
+<a name="450567600"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450567600" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450567600">(Jul 10 2024 at 21:21)</a>:</h4>
+<p>I should say I'm OK with removing the function if no real user, I was more worried about the inconsistency.</p>
+
+
+
+<a name="450567734"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450567734" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450567734">(Jul 10 2024 at 21:22)</a>:</h4>
+<p>but we certainly need more document on the usage of the ".into()" above.</p>
+
+
+
+<a name="450672635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450672635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450672635">(Jul 11 2024 at 10:23)</a>:</h4>
+<p>Generally, I'm fine with just doing</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>but I think we need to consider new people looking at the API of <code>Device</code> only finding <code>Device::as_ref</code>.</p>
+<p>Having a dedicated <code>Device::from_raw_get</code> makes it obvious  to new  people that this is an option.</p>
+
+
+
+<a name="450680777"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450680777" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450680777">(Jul 11 2024 at 11:13)</a>:</h4>
+<p>we could add this as an example on the docs on debice and/or on as_ref</p>
+
+
+
+<a name="450750167"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450750167" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450750167">(Jul 11 2024 at 16:09)</a>:</h4>
+<p>Would you like to submit a patch doing that or guide someone else (via a first good issue maybe)?  :)</p>
+
+
+
+<a name="450750751"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450750751" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450750751">(Jul 11 2024 at 16:11)</a>:</h4>
+<p><span class="user-mention" data-user-id="546447">@Benno Lossin</span>  Sounds reasonable, adding an example might be tricky though, since we can't create a valid <code>Device</code> in the example. I made the <code>Firmware</code> example no_run for that purpose and did hide the <code>Device</code> creation, since it's not relevant for the <code>Firmware</code> example.</p>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span>  Do you mean Benno or me?</p>
+
+
+
+<a name="450751850"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450751850" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450751850">(Jul 11 2024 at 16:15)</a>:</h4>
+<p>I meant Benno</p>
+
+
+
+<a name="450752264"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450752264" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450752264">(Jul 11 2024 at 16:16)</a>:</h4>
+<p>I currently don't have the bandwidth, but if you want to create a good-first-issue, then go ahead</p>
+
+
+
+<a name="450753347"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450753347" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450753347">(Jul 11 2024 at 16:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450751850">said</a>:</p>
+<blockquote>
+<p>I meant Benno</p>
+</blockquote>
+<p>Because like I said, I would just rename the <code>Device::from_raw()</code> into <code>Device::from_raw_get()</code>, and I I take it Danilo you are OK with it. But if Benno thinks it's important to avoid <code>Device::from_raw_get()</code> at all, I'm happy to see a patch from him ;-)</p>
+
+
+
+<a name="450756654"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450756654" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450756654">(Jul 11 2024 at 16:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450752264">said</a>:</p>
+<blockquote>
+<p>I currently don't have the bandwidth, but if you want to create a good-first-issue, then go ahead</p>
+</blockquote>
+<p>Done: <a href="https://github.com/Rust-for-Linux/linux/issues/1088">https://github.com/Rust-for-Linux/linux/issues/1088</a></p>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="546447">@Benno Lossin</span> let me know if I should change anything ;-)</p>
+
+
+
+<a name="450757014"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450757014" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450757014">(Jul 11 2024 at 16:36)</a>:</h4>
+<p>By the way, I copied and pasted the "This requires ..." paragraph from other first good issues, it's very handy ;-)</p>
+
+
+
+<a name="450757678"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450757678" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450757678">(Jul 11 2024 at 16:40)</a>:</h4>
+<p>looks good!</p>
+<p>IIUC the device abstractions aren't upstreamed yet, right? in that case it might be easier for Danilo to just change the next version</p>
+
+
+
+<a name="450757773"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450757773" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450757773">(Jul 11 2024 at 16:41)</a>:</h4>
+<p>It's already in Greg's tree</p>
+
+
+
+<a name="450758245"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450758245" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450758245">(Jul 11 2024 at 16:44)</a>:</h4>
+<p>and it's already rc7, so likely we cannot make it.</p>
+
+
+
+<a name="450758457"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450758457" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450758457">(Jul 11 2024 at 16:45)</a>:</h4>
+<p>but if Danilo has his own plan, I'm happy to close the issue.</p>
+
+
+
+<a name="450758628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450758628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450758628">(Jul 11 2024 at 16:46)</a>:</h4>
+<p>did Greg say that he picked the patches? I don't see such a mail</p>
+
+
+
+<a name="450759332"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450759332" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450759332">(Jul 11 2024 at 16:50)</a>:</h4>
+<p>I don't think he mentioned this at the exact time he picked it up (he said he was going to at v3, and he picked at v4), it's now sitting in device-core tree:</p>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/commit/?h=driver-core-next&amp;id=a674fefd17324fc467f043568e738b80ca22f2b4">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/commit/?h=driver-core-next&amp;id=a674fefd17324fc467f043568e738b80ca22f2b4</a></p>
+
+
+
+<a name="450777151"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450777151" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450777151">(Jul 11 2024 at 18:20)</a>:</h4>
+<p>When Greg applies something to his tree, only the submitter (and maybe tags) get notified by a bot.</p>
+
+
+
+<a name="450811041"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/450811041" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#450811041">(Jul 11 2024 at 21:05)</a>:</h4>
+<p>Yeah, I would just call it something else than <code>from_raw</code>. E.g., you can call it <code>get_device</code> to reuse the name of the existing C function of the same name.</p>
+
+
+
+<a name="451734039"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/451734039" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Panagiotis Foliadis <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#451734039">(Jul 16 2024 at 10:59)</a>:</h4>
+<p>Hello! I have tried to solve this issue as my first contribution and im having a little trouble with replacing</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">from_raw_get</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>with</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>The <code>Device</code> struct does not implement the necessary traits for the <code>as_ref()</code> call. From what I understand this is to be submitted in this patch:<br>
+<code>https://lore.kernel.org/rust-for-linux/20240618234025.15036-10-dakr@redhat.com/</code>.<br>
+How should i proceed?</p>
+
+
+
+<a name="451741900"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/451741900" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#451741900">(Jul 16 2024 at 11:52)</a>:</h4>
+<p><span class="user-mention" data-user-id="736615">@Panagiotis Foliadis</span> <code>Device</code> implements a method <code>as_ref</code>.</p>
+<p>In rust/kernel/pci.c you can call it like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="nc">ARef</span><span class="o">&lt;</span><span class="n">device</span><span class="p">::</span><span class="n">Device</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">device</span><span class="p">::</span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">pdev</span><span class="p">).</span><span class="n">dev</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>If we go for removing <code>Device::from_raw</code> entirely, then a patch would only need to do exactly this, remove the function.</p>
+<p>If we go for a better implementation (which I personally still prefer), namely <code>Device::from_raw_get</code>, you do something similar to the above in that method.</p>
+
+
+
+<a name="451769826"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/451769826" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Charalampos Mitrodimas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#451769826">(Jul 16 2024 at 14:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/451741900">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="736615">Panagiotis Foliadis</span> <code>Device</code> implements a method <code>as_ref</code>.</p>
+</blockquote>
+<p>Does <code>Device::as_ref</code> exist on any of the rust-for-linux upstream branches?</p>
+
+
+
+<a name="451770666"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/451770666" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#451770666">(Jul 16 2024 at 14:24)</a>:</h4>
+<p>Ah, this is on it's way upstream (Linus' tree) and sits in Greg's tree until it's merged in the next days.</p>
+<p>Use this tree as base: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a></p>
+
+
+
+<a name="454011363"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/454011363" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#454011363">(Jul 25 2024 at 17:43)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/451770666">said</a>:</p>
+<blockquote>
+<p>Ah, this is on it's way upstream (Linus' tree) and sits in Greg's tree until it's merged in the next days.</p>
+<p>Use this tree as base: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a></p>
+</blockquote>
+<p>Oh woah some of your work got upstream? Nice :D</p>
+
+
+
+<a name="454011560"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/454011560" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#454011560">(Jul 25 2024 at 17:44)</a>:</h4>
+<p>Yeah, baby steps we take. :)</p>
+
+
+
+<a name="454288718"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/454288718" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Panagiotis Foliadis <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#454288718">(Jul 26 2024 at 12:24)</a>:</h4>
+<p>Ok so im having a couple of issues in understanding what this issue needs exactly.</p>
+<p>From what I understand, the <code>Device::from_raw</code> function returns a mutable reference to a <code>Device(Opaque&lt;bindings::phy_device)</code> struct by passing a <code>bindings::phy_device</code> mutable pointer.<br>
+The <code>as_ref</code> function (which needs the implementation of the AsRef trait in the <code>Device</code> struct) is a reference to reference conversion, therefore it has a different functionality.</p>
+<p>Also the <code>as_ref</code> method does not exist in the <a href="https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a> branch for the <code>Device(Opaque&lt;bindings&gt;::phy_device)</code> struct and im still not sure if i need to implement this or just remove the <code>from_raw</code> function (since just removing the <code>from_raw</code> function will not compile).</p>
+
+
+
+<a name="454295155"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/454295155" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#454295155">(Jul 26 2024 at 13:05)</a>:</h4>
+<p>You're looking at <code>phy::Device</code>. We're talking about the generic <code>device::Device</code> though.</p>
+<p>The code also just hit Linus' tree, you can find <code>device::Device::from_raw</code> here: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/device.rs#n54">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/device.rs#n54</a></p>
+
+
+
+<a name="464358099"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/464358099" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Panagiotis Foliadis <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#464358099">(Aug 22 2024 at 12:25)</a>:</h4>
+<p>Sorry for the late response!<br>
+I have a question about the examples that I need to add to the documentation.<br>
+For the case of the <code>Device::as_ref</code> I believe the </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>is enough, however im struggling to find a correct example to add to the <code>ARef</code> struct that connects to the removal of the <code>Device::from_raw</code> function  (since the github issues specifies that an example should be added to the <code>ARef</code> struct).<br>
+The <code>Device::as_ref</code> + <code>into()</code> doesnt have anything to do with the <code>ARef</code> struct right?</p>
+
+
+
+<a name="473354490"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/473354490" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Guilherme Giácomo Simões <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#473354490">(Sep 28 2024 at 14:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450510717">said</a>:</p>
+<blockquote>
+<p>We can, but having a function doing the above doesn’t hurt, right? Plus if users have to repeat this again and again, they would introduce their version of a helper function.</p>
+</blockquote>
+<p>I degree with <span class="user-mention" data-user-id="411647">@Boqun Feng</span>   when he say that if users have to repeat this again, again and again ... Some people will create the help function. <br>
+I think that we should rename this function for <code>get_from_raw()</code> for difference between <code>Arch::from_raw()</code> and inside this function only call <code>Device::as_ref().into()</code>, how already suggest for <span class="user-mention" data-user-id="411647">@Boqun Feng</span></p>
+<p>I'm a started in the linux kernel contributor, and I can sent a patch for this... My change is anything like </p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/rust/kernel/device.rs b/rust/kernel/device.rs</span>
+<span class="gh">index 851018eef885..915abc9e7616 100644</span>
+<span class="gd">--- a/rust/kernel/device.rs</span>
+<span class="gi">+++ b/rust/kernel/device.rs</span>
+<span class="gu">@@ -41,28 +41,15 @@</span>
+<span class="w"> </span>pub struct Device(Opaque&lt;bindings::device&gt;);
+
+<span class="w"> </span>impl Device {
+<span class="gd">-    /// Creates a new reference-counted abstraction instance of an existing `struct device` pointer.</span>
+<span class="gi">+    /// Gets a refcounted reference to [`Self`]</span>
+<span class="w"> </span>    ///
+<span class="w"> </span>    /// # Safety
+<span class="gd">-    ///</span>
+<span class="gd">-    /// Callers must ensure that `ptr` is valid, non-null, and has a non-zero reference count,</span>
+<span class="gd">-    /// i.e. it must be ensured that the reference count of the C `struct device` `ptr` points to</span>
+<span class="gd">-    /// can't drop to zero, for the duration of this function call.</span>
+<span class="gd">-    ///</span>
+<span class="gd">-    /// It must also be ensured that `bindings::device::release` can be called from any thread.</span>
+<span class="gd">-    /// While not officially documented, this should be the case for any `struct device`.</span>
+<span class="gd">-    pub unsafe fn from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>
+<span class="gd">-        // SAFETY: By the safety requirements, ptr is valid.</span>
+<span class="gd">-        // Initially increase the reference count by one to compensate for the final decrement once</span>
+<span class="gd">-        // this newly created `ARef&lt;Device&gt;` instance is dropped.</span>
+<span class="gd">-        unsafe { bindings::get_device(ptr) };</span>
+<span class="gd">-</span>
+<span class="gd">-        // CAST: `Self` is a `repr(transparent)` wrapper around `bindings::device`.</span>
+<span class="gd">-        let ptr = ptr.cast::&lt;Self&gt;();</span>
+<span class="gd">-</span>
+<span class="gd">-        // SAFETY: `ptr` is valid by the safety requirements of this function. By the above call to</span>
+<span class="gd">-        // `bindings::get_device` we also own a reference to the underlying `struct device`.</span>
+<span class="gd">-        unsafe { ARef::from_raw(ptr::NonNull::new_unchecked(ptr)) }</span>
+<span class="gi">+    /// `ptr` must be a valid pointer with at least one reference count until the function return.</span>
+<span class="gi">+    pub unsafe fn get_from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>
+<span class="gi">+        // SAFETY: Per function safety requirement, `ptr` is a valid pointer and has at least one</span>
+<span class="gi">+        // reference count until the function return, which is larger then the scope of the `&amp;Device`</span>
+<span class="gi">+        // created by `Device::as_ref(ptr)`.</span>
+<span class="gi">+        unsafe { Device::as_ref(ptr) }.into()</span>
+<span class="w"> </span>    }
+
+<span class="w"> </span>    /// Obtain the raw `struct device *`.
+<span class="gh">diff --git a/rust/kernel/firmware.rs b/rust/kernel/firmware.rs</span>
+<span class="gh">index dee5b4b18aec..23a0a758fc72 100644</span>
+<span class="gd">--- a/rust/kernel/firmware.rs</span>
+<span class="gi">+++ b/rust/kernel/firmware.rs</span>
+<span class="gu">@@ -44,7 +44,7 @@ fn request_nowarn() -&gt; Self {</span>
+<span class="w"> </span>///
+<span class="w"> </span>/// # fn no_run() -&gt; Result&lt;(), Error&gt; {
+<span class="w"> </span>/// # // SAFETY: *NOT* safe, just for the example to get an `ARef&lt;Device&gt;` instance
+<span class="gd">-/// # let dev = unsafe { Device::from_raw(core::ptr::null_mut()) };</span>
+<span class="gi">+/// # let dev = unsafe { Device::get_from_raw(core::ptr::null_mut()) };</span>
+<span class="w"> </span>///
+<span class="w"> </span>/// let fw = Firmware::request(c_str!("path/to/firmware.bin"), &amp;dev)?;
+<span class="w"> </span>/// let blob = fw.data();
+</code></pre></div>
+
+
+
+<a name="473377195"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/473377195" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Guilherme Giácomo Simões <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#473377195">(Sep 28 2024 at 19:09)</a>:</h4>
+<p>In the truth, I'm confused, because in the example showing by <span class="user-mention" data-user-id="411647">@Boqun Feng</span> , he  removed the line that increment refcount. But if function don't increment refcount, then your name don't need changed, becuase will be equal the Arc::from_raw that don't increment refcount too .. . </p>
+<p>I think that the function Device::from_raw() only need change your name for Device::get_from_raw() or Device::get_device().  And I prefer Device::get_device() for be equal de get_device() in .c file. </p>
+<p>Then, this change is anything like this: </p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/rust/kernel/device.rs b/rust/kernel/device.rs</span>
+<span class="gh">index 851018eef885..5dfbe7c0824c 100644</span>
+<span class="gd">--- a/rust/kernel/device.rs</span>
+<span class="gi">+++ b/rust/kernel/device.rs</span>
+<span class="gu">@@ -51,7 +51,7 @@ impl Device {</span>
+<span class="w"> </span>    ///
+<span class="w"> </span>    /// It must also be ensured that `bindings::device::release` can be called from any thread.
+<span class="w"> </span>    /// While not officially documented, this should be the case for any `struct device`.
+<span class="gd">-    pub unsafe fn from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>
+<span class="gi">+    pub unsafe fn get_from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>
+<span class="w"> </span>        // SAFETY: By the safety requirements, ptr is valid.
+<span class="w"> </span>        // Initially increase the reference count by one to compensate for the final decrement once
+<span class="w"> </span>        // this newly created `ARef&lt;Device&gt;` instance is dropped.
+<span class="gh">diff --git a/rust/kernel/firmware.rs b/rust/kernel/firmware.rs</span>
+<span class="gh">index dee5b4b18aec..23a0a758fc72 100644</span>
+<span class="gd">--- a/rust/kernel/firmware.rs</span>
+<span class="gi">+++ b/rust/kernel/firmware.rs</span>
+<span class="gu">@@ -44,7 +44,7 @@ fn request_nowarn() -&gt; Self {</span>
+<span class="w"> </span>///
+<span class="w"> </span>/// # fn no_run() -&gt; Result&lt;(), Error&gt; {
+<span class="w"> </span>/// # // SAFETY: *NOT* safe, just for the example to get an `ARef&lt;Device&gt;` instance
+<span class="gd">-/// # let dev = unsafe { Device::from_raw(core::ptr::null_mut()) };</span>
+<span class="gi">+/// # let dev = unsafe { Device::get_from_raw(core::ptr::null_mut()) };</span>
+<span class="w"> </span>///
+<span class="w"> </span>/// let fw = Firmware::request(c_str!("path/to/firmware.bin"), &amp;dev)?;
+<span class="w"> </span>/// let blob = fw.data();
+</code></pre></div>
+<p>For this way, your implementation will be equal before. But your name is differente so as not to confuse with Arc::from_raw().</p>
+
+
+
+<a name="473389384"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/473389384" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#473389384">(Sep 28 2024 at 22:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="736615">Panagiotis Foliadis</span> <a href="#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/464358099">said</a>:</p>
+<blockquote>
+<p>Sorry for the late response!<br>
+I have a question about the examples that I need to add to the documentation.<br>
+For the case of the <code>Device::as_ref</code> I believe the </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Device</span><span class="p">::</span><span class="n">as_ref</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">}.</span><span class="n">into</span><span class="p">();</span>
+</code></pre></div>
+<p>is enough, however im struggling to find a correct example to add to the <code>ARef</code> struct that connects to the removal of the <code>Device::from_raw</code> function  (since the github issues specifies that an example should be added to the <code>ARef</code> struct).<br>
+The <code>Device::as_ref</code> + <code>into()</code> doesnt have anything to do with the <code>ARef</code> struct right?</p>
+</blockquote>
+<p>Note that in my example, into()’s return type is ARef&lt;Device&gt;</p>
+
+
+
+<a name="473452071"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/473452071" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Guilherme Giácomo Simões <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#473452071">(Sep 29 2024 at 14:02)</a>:</h4>
+<p>I'm a started in the linux kernel development... <br>
+I sent this patchs:</p>
+<p>I sent this patch<br>
+[1/2] <a href="https://lore.kernel.org/rust-for-linux/CAM_RzfavjM9VPJhTi1czOSC0BFOc3FUHRMdzFrU9fJE+WJMKbw@mail.gmail.com/T/#u">https://lore.kernel.org/rust-for-linux/CAM_RzfavjM9VPJhTi1czOSC0BFOc3FUHRMdzFrU9fJE+WJMKbw@mail.gmail.com/T/#u</a></p>
+<p>[2/2] <a href="https://lore.kernel.org/rust-for-linux/CAM_RzfbQK5fzqXQN89JCEzD1Bz5ZtQdAz3xD0yaYFx_GC7Pm0Q@mail.gmail.com/T/#u">https://lore.kernel.org/rust-for-linux/CAM_RzfbQK5fzqXQN89JCEzD1Bz5ZtQdAz3xD0yaYFx_GC7Pm0Q@mail.gmail.com/T/#u</a> </p>
+<p>I don't know if is right, but I think that yes.</p>
+
+
+
+<a name="473898402"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/473898402" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Guilherme Giácomo Simões <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#473898402">(Oct 01 2024 at 00:53)</a>:</h4>
+<p>The ultimate PATCH<br>
+<a href="https://lore.kernel.org/rust-for-linux/20240930194637.98260-1-trintaeoitogc@gmail.com/T/#u">https://lore.kernel.org/rust-for-linux/20240930194637.98260-1-trintaeoitogc@gmail.com/T/#u</a></p>
+
+
+
+<a name="474313899"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Inconsistency%20of%20%60from_raw%60./near/474313899" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Guilherme Giácomo Simões <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E.html#474313899">(Oct 02 2024 at 14:29)</a>:</h4>
+<p>the last PATCH v3<br>
+<a href="https://lore.kernel.org/rust-for-linux/20241001205603.106278-1-trintaeoitogc@gmail.com/T/#u">https://lore.kernel.org/rust-for-linux/20241001205603.106278-1-trintaeoitogc@gmail.com/T/#u</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

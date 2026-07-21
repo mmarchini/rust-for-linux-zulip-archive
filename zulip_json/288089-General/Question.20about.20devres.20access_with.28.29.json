@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <br>\nI had question about Devres optimization for bypassing RCU you recently posted. For Nova, this compile-time optimization is only possible during probe() or any other path where device unbinding is not possible correct?  2. To address <a href=\"https://github.com/Rust-for-Linux/linux/issues/1\">#1</a>, Is it possible to hold a (Arc) reference to Device&lt;Bound&gt; and then we wait for reference count to drop to 0,  before allowing device unbinding or does that throw a wrench in device driver unbinding?</p>",
+        "id": 517521724,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1747051593
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"598482\">@Joel Fernandes</span>,</p>\n<p>What do you mean with \"to address <a href=\"https://github.com/Rust-for-Linux/linux/issues/1\">#1</a>\"? What does it relate to?</p>\n<p>In general: Yes, <code>Devres::access()</code> can only be used from a scope where you have a <code>&amp;Device&lt;Bound&gt;</code>.</p>\n<p>Note that this is sufficient, since it is guaranteed that during the lifetime of such a reference the device can't be unbound. Obviously <code>probe()</code> is a good example for providing a <code>&amp;Device&lt;Bound&gt;</code>, since the device can't be unbound as long as <code>probe()</code> runs.</p>\n<p>It is <em>not</em> possible to have an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code> (note that the compiler won't let you by design), since it would be impossible to guarantee that for the duration of the lifetime of an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code> the device is <em>not</em> unbound, since one could extend the lifetime of an <code>Arc&lt;Device&lt;Bound&gt;&gt;</code>infinitely.</p>\n<p>However, the plan is to provide a <code>&amp;Device&lt;Bound&gt;</code> reference whenever possible. For instance, IRQ abstractions can do so from an IRQ handler, since we can (and have to) make it an invariant of the IRQ abstraction that the IRQ handler is removed <em>before</em> the device is unbound, hence for the duration of an IRQ handler we can provide a <code>&amp;Device&lt;Bound&gt;</code>. The same would be true for SYSFS abstractions or, depending on the particular subsystem, subsystem callbacks and / or IOCTLs.</p>\n<p>We can even implement \"fenced\" variants of workqueues, etc. which guarantee that they're teared down <em>before</em> the corresponding <code>Device</code> is unbound and hence can provide a <code>&amp;Device&lt;Bound&gt;</code> reference.</p>",
+        "id": 517587266,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747064277
+    },
+    {
+        "content": "<blockquote>\n<p>Is it possible to hold a (Arc) reference to Device&lt;Bound&gt; and then we wait for reference count to drop to 0, before allowing device unbinding or does that throw a wrench in device driver unbinding?</p>\n</blockquote>\n<p>No, the lifetime of a <code>struct device</code> is entirely independent from its state of being bound to a driver. It'd also be the wrong solution to forcefully keep a device bound to a driver. The bound state is something the driver has to be capable of to react to, it's nothing a driver should be allowed (or be capable of) controlling -- that's up to core code.</p>",
+        "id": 517591235,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747065065
+    },
+    {
+        "content": "<p>Thanks Danilo, this makes it a lot clearer. For some reason I thought a bound device could be used in nova-core all the time but it sounds like we can just use it in some contexts. So in the future when aux bus or whatever talks to nova-core and we need to do something with a Device, it sounds like we’d still need RCU-based accesses unless it is a special case like probe or irq handling. Correct me if I’m wrong though. Cc <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span> <span class=\"user-mention\" data-user-id=\"782725\">@John Hubbard</span> <span class=\"user-mention\" data-user-id=\"765503\">@Alistair</span> <span class=\"user-mention\" data-user-id=\"897540\">@Timur Tabi</span></p>",
+        "id": 517593103,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1747065473
+    },
+    {
+        "content": "<p>Or perhaps if we can guarantee in a certain context that a device is bound, we’d be fine</p>",
+        "id": 517593534,
+        "sender_full_name": "Joel Fernandes",
+        "timestamp": 1747065560
+    },
+    {
+        "content": "<p>For nova-core I'm rather confident that we can get away with (almost) always having a <code>&amp;Device&lt;Bound&gt;</code> in scope when we need it.</p>\n<p>It depends a bit on nova-drm, since DRM allows IOCTLs after the parent device has been unbound, but I'm pretty sure we can find a solution for that in the interface between nova-core and nova-drm.</p>",
+        "id": 517594331,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747065724
+    },
+    {
+        "content": "<p>I guess there should be a way in the DRM ioctl code to ensure that the device is still bound, convert our device reference to a bound one, and pass that to nova-core?</p>",
+        "id": 517841107,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747145292
+    },
+    {
+        "content": "<p>You can only do that if you can guarantee that the device is actually bound when the ioctl() is called and it is not unbound during the ioctl(). DRM doesn't guarantee that.</p>",
+        "id": 517841658,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747145409
+    },
+    {
+        "content": "<p>Anyways, we can handle it from the API. nova-drm shouldn't be able to call into nova-core after the device has been unbound. nova-core abstracts the hardware, if the hardware is gone (i.e. the device is unbound), it shouldn't be called.</p>",
+        "id": 517842114,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747145522
+    },
+    {
+        "content": "<p>Isn't there a way to hold on a do-not-unbind lock that would allow such a conversion to take place?</p>",
+        "id": 517842390,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747145577
+    },
+    {
+        "content": "<p>It's not on the driver to control unbind, it's on the driver to properly handle the event at any time. But even if we would, what would we win? Replace the Devres RCU with another lock?</p>",
+        "id": 517842856,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747145670
+    },
+    {
+        "content": "<p>Hopefully a less constraining one yes <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 517843097,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747145714
+    },
+    {
+        "content": "<p>Besides that, what would be the purpose? Artificially keep the bound state and try reading from and writing to a device that's potentially gone (i.e. unplugged)?</p>",
+        "id": 517843443,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747145793
+    },
+    {
+        "content": "<p>It's just that I don't see how the problem could be solved. If nova-core is called from nova-drm, it becomes part of it and thus responsible to handle the unbound event at any time as well. So this would limit the places where we can use Device&lt;Bound&gt;</p>",
+        "id": 517843947,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747145914
+    },
+    {
+        "content": "<p>And a device can be unplugged while probe() is running all the same</p>",
+        "id": 517844033,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747145938
+    },
+    {
+        "content": "<p>Or maybe I don't understand the problem space. Actually I'm pretty sure I don't</p>",
+        "id": 517844524,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747146058
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/288089-General/topic/Question.20about.20devres.20access_with.28.29/near/517843947\">said</a>:</p>\n<blockquote>\n<p>It's just that I don't see how the problem could be solved. If nova-core is called from nova-drm, it becomes part of it and thus responsible to handle the unbound event at any time as well. So this would limit the places where we can use Device&lt;Bound&gt;</p>\n</blockquote>\n<p>I'm not sure there are a lot of DRM ioctls() from which we'd call nova-core functions that need register accesses; are there any at all? I'd assume that all those would only hit GSP paths?</p>\n<p>Otherwise, there may be a few nova-core functions to be called from nova-drm that need to do the <code>try_access_with()</code> dance. But that'd be fine, that's exactly what we have it for.</p>",
+        "id": 517846952,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747146656
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/288089-General/topic/Question.20about.20devres.20access_with.28.29/near/517843097\">said</a>:</p>\n<blockquote>\n<p>Hopefully a less constraining one yes <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>Well, I think a quick RCU read side critical section covering a few I/O accesses is much less constraining and costly than a huge \"device bound\" mutex.</p>",
+        "id": 517848783,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747147094
+    },
+    {
+        "content": "<p>If we end up doing GSP initialization lazily then the entry point for the whole dance will be an open() call. If that qualifies for having a bound device, that's fine I guess.</p>",
+        "id": 517849818,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1747147342
+    },
+    {
+        "content": "<p>Looking ahead, the direction of GSP design is definitely toward, \"GSP owns register accesses. The OS kernel driver must go through GSP in order to accomplish tasks that, in the past, would have been done via direct BAR0 access from the driver\".</p>\n<p>I'm hoping that we can eventually get down to just a few register accesses from the nova-core, and even those would be mostly during GPU initialization.</p>\n<p>For now though, maybe we should document a table of registers that nova-core accesses, and at what stage (init vs. channel allocation vs...), and update it as we go along. That would allow quantifying the cost of try_access_with(), and we could see if it actually turns into a problem.</p>",
+        "id": 517910198,
+        "sender_full_name": "John Hubbard",
+        "timestamp": 1747165523
+    },
+    {
+        "content": "<p><code>try_access_with()</code> itself is never the problem, it just catches bugs that we also catch in DRM C drivers with <code>drm_dev_enter()</code> and <code>drm_dev_exit()</code>.</p>\n<p>More general, if you can't prove that the device can't be unbound while using I/O memory, i.e. you're in a call path where the device can be unbound concurrently, we ultimately need some kind of protection.</p>\n<p>Think of it in C. Let's say in <code>probe()</code> you call <code>pcim_iomap()</code> and store the base address in some reference counted structure, e.g. your driver specific DRM device.</p>\n<p>Think of what happens if in a call path where the (PCI) device can be unbound concurrently (e.g. DRM ioctl()) you just access the I/O memory -- it potentially faults.</p>\n<p>DRM ioctls() are prone to that, hence they protect things with <code>drm_dev_enter()</code> and <code>drm_dev_exit()</code>, which in the end is a specialized version of <code>Devres</code> and <code>try_access_with()</code>.</p>\n<p>Besides that, I doubt that an RCU read side critical section for MMIO accesses becomes a relevant cost. And as mentioned, I'm pretty sure that we can almost always avoid that in nova-core anyways.</p>",
+        "id": 517922474,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1747170085
+    },
+    {
+        "content": "<p>I think there are vmm paths where we need to flush BARs that might still need register access (I think TLB flushes are register based)</p>",
+        "id": 517933961,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1747175281
+    },
+    {
+        "content": "<p>lazy GSP init isn't something we will be that interested in, so I really wouldn't waste time considering it</p>",
+        "id": 517934071,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1747175328
+    },
+    {
+        "content": "<p>we want to load the driver and power manage the device properly without userspace ever interacting</p>",
+        "id": 517934108,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1747175352
+    },
+    {
+        "content": "<p>suspend/resume + dynamic power mgmt should all be happening once nova-core is loaded</p>",
+        "id": 517934148,
+        "sender_full_name": "Dave Airlie",
+        "timestamp": 1747175383
+    }
+]

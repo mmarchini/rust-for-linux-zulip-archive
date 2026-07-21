@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>I'm implementing per-file VM ioctl support and need to store <code>Arc&lt;Vm&lt;'bound&gt;&gt;</code> in a DriverFile implementor, but DriverFile requires Self to be a concrete type with no lifetime parameter.  <code>'bound</code>  comes from  <code>IoMem&lt;'bound&gt; </code> holding a real  <code>&amp;'bound Device&lt;Bound&gt; </code>.</p>\n<p>Has anyone dealt with storing lifetime-bound objects in a DriverFile implementor?</p>",
+        "id": 609135232,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783573117
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"981233\">@Deborah Brouwer</span> <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span></p>",
+        "id": 609135413,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783573221
+    },
+    {
+        "content": "<p>Sorry what is this DriverFile thing?</p>",
+        "id": 609156894,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1783582159
+    },
+    {
+        "content": "<p>DriverFile is the trait DRM drivers implement for their file-private data. It requires Self to be a concrete type with no lifetime parameter. My <code>vm_create</code> ioctl creates <code>Vm&lt;'bound&gt;</code> from device registration data and needs to store <code>Arc&lt;Vm&lt;'bound&gt;&gt;</code> in the DriverFile implementor.</p>",
+        "id": 609160535,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783583421
+    },
+    {
+        "content": "<p>I think you need to wrap in a Devres to erase the lifetime.</p>",
+        "id": 609167500,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1783585403
+    },
+    {
+        "content": "<p>Just to confirm the approach: would it make sense to use <code>IoMem::into_devres()</code> to get <code>Devres&lt;IoMem&lt;'static&gt;&gt;</code>, then drop the <code>'bound</code> lifetime parameter from <code>Mmu</code> and the rest of the chain (<code>AddressSpaceManager</code>, <code>Vm</code>, etc.)? </p>\n<p>The <code>'bound</code> only comes from <code>IoMem</code> holding <code>&amp;'bound Device&lt;Bound&gt;</code>, so wrapping it in <code>Devres</code> would make <code>Vm</code> lifetime-free and <code>DriverFile</code> could stay as-is.</p>",
+        "id": 609194294,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783593561
+    },
+    {
+        "content": "<p>Is it possible to have the Devres wrap the <code>Arc&lt;Vm&lt;'bound&gt;&gt;</code> value? cc <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 609214795,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1783600006
+    },
+    {
+        "content": "<p>Avoid having to store <code>Arc&lt;Vm&lt;'bound&gt;&gt;</code> inside <code>DriverFile</code> is the better approach I'd say</p>",
+        "id": 609235578,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783605130
+    },
+    {
+        "content": "<p>You can store it inside registration data and just store a handle in DriverFile</p>",
+        "id": 609235833,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783605196
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> the file is the per-session context and we'd ideally like to use it to manage the lifetime of the session objects, like this VM</p>",
+        "id": 609237415,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1783605557
+    },
+    {
+        "content": "<p>I tried adding a lifetime parameter to <code>DriverFile</code>, but <code>ForeignOwnable</code> erases types to <code>void*</code> across the FFI boundary, requiring <code>T: 'static</code> for soundness. <code>Vm&lt;'a&gt;</code> can't satisfy this, so <code>XArray&lt;Arc&lt;Vm&lt;'a&gt;&gt;&gt;</code> doesn't compile. Removing the <code>'static</code> bound would work, but the compiler-enforced safety would degrade to <code>unsafe</code> caller responsibility -- I'm not sure if that's acceptable.</p>",
+        "id": 609266251,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783612655
+    },
+    {
+        "content": "<p>There's nothing unsound for removing <code>T: 'static</code></p>",
+        "id": 609266517,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783612727
+    },
+    {
+        "content": "<p>You just need to add where bounds to a few places, see <code>Box</code>'s impl</p>",
+        "id": 609266651,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783612760
+    },
+    {
+        "content": "<p>Thanks! I'll try removing <code>T: 'static</code>, following <code>Box</code>'s impl. There's a second issue: with a lifetime on <code>DriverFile</code>, I need <code>reg_data</code> and <code>file_data</code> to share the same lifetime, but accessing them through nested <code>for&lt;'a&gt;</code> closures produces two independent lifetimes. Is there a recommended pattern for this?</p>",
+        "id": 609270158,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783613825
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/529528-Tyr/topic/Tyr.3A.20storing.20lifetime-bound.20objects.20in.20DriverFile/near/609214795\">said</a>:</p>\n<blockquote>\n<p>Is it possible to have the Devres wrap the <code>Arc&lt;Vm&lt;'bound&gt;&gt;</code> value? cc <span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span></p>\n</blockquote>\n<p><code>DevresLt</code> can do that, but only if <code>Vm&lt;'a&gt;</code> does not borrow something whose lifetime strictly ends at <code>'a</code>. IOW, <code>'a</code> must only originate from owned device resource values.</p>",
+        "id": 609272834,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783614635
+    },
+    {
+        "content": "<p>Eventually we want that the file private data to carry a lifetime and only live until the file is closed or the DRM device is unregistered (whichever happens first).</p>",
+        "id": 609274544,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783615164
+    },
+    {
+        "content": "<p>I just started looking into this a few days ago (in parallel to some related TTM topics).</p>",
+        "id": 609275176,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783615310
+    },
+    {
+        "content": "<p>Are you planning to work on this yourself, or would you like me to go ahead and put together a prototype? Just want to make sure we're not duplicating effort.</p>",
+        "id": 609280376,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783616991
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 609343371,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783641760
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"1018855\">@Alvin Sun</span> I already got some code, which I think I could send out this week. In case something else comes up, would you be interested in taking over?</p>",
+        "id": 609822133,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783944338
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/529528-Tyr/topic/Tyr.3A.20storing.20lifetime-bound.20objects.20in.20DriverFile/near/609822133\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"1018855\">Alvin Sun</span> I already got some code, which I think I could send out this week. In case something else comes up, would you be interested in taking over?</p>\n</blockquote>\n<p>Sounds good, looking forward to the patches! If you get tied up, I'd be happy to take over with your guidance.</p>",
+        "id": 609999669,
+        "sender_full_name": "Alvin Sun",
+        "timestamp": 1783994550
+    }
+]

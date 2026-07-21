@@ -1,0 +1,140 @@
+[
+    {
+        "content": "<p>Trying to <a href=\"https://github.com/Fabo/linux/commit/140c7b2e7f4716edcbb80d5cf5ee04f18cab4def#diff-f50f81924731ed128cc982390334605ed2bf6caaf6170e39b04b8a6c90785944R73\">rebase Fabo's I2C driver</a></p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">NCV6336_DESC</span>: <span class=\"nc\">Desc</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Desc</span>::<span class=\"n\">new</span>::<span class=\"o\">&lt;</span><span class=\"n\">Ncv6336</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">c_str</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"ncv6336\"</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"n\">Type</span>::<span class=\"n\">Voltage</span><span class=\"p\">)</span>\n<span class=\"w\">       </span><span class=\"p\">.</span><span class=\"n\">with_owner</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">THIS_MODULE</span><span class=\"p\">)</span>\n<span class=\"w\">       </span><span class=\"o\">....</span>\n</code></pre></div>\n<p>onto recent <a href=\"https://github.com/Rust-for-Linux/linux/commits/rust-dev\">rust-dev</a> which has <a href=\"https://github.com/Rust-for-Linux/linux/commit/1d7e11a4201f433ce5358676125c88f1bb52f330\">rust: macros: fix soundness issue in <code>module!</code> macro</a> fails due to unkown <code>THIS_MODULE</code>.</p>\n<p>Any hint how to \"translate\" the <code>with_owner(&amp;THIS_MODULE)</code> to the module soundness fix?</p>",
+        "id": 433512583,
+        "sender_full_name": "Dirk Behme",
+        "timestamp": 1713271027
+    },
+    {
+        "content": "<p><code>THIS_MODULE</code> should be public</p>",
+        "id": 433512816,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713271088
+    },
+    {
+        "content": "<p>It looks like it's included in the things made inaccessible</p>",
+        "id": 433512869,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713271102
+    },
+    {
+        "content": "<p>oh that is a mistake... <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> IIRC that commit is not yet upstreamed, can you fix that directly? or should I send a fix?</p>",
+        "id": 433529259,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713275989
+    },
+    {
+        "content": "<p>I think it should be enough to move it outside the two mods. Do we need anything else from there to be accessible? eg <code>__IS_RUST_MODULE</code>?</p>",
+        "id": 433529878,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713276130
+    },
+    {
+        "content": "<p>also cc <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span></p>",
+        "id": 433558949,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713283754
+    },
+    {
+        "content": "<p>do you have a fix (and a test) that I can apply?</p>",
+        "id": 433564421,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713285388
+    },
+    {
+        "content": "<p>not yet, I can make one later, currently not at home</p>",
+        "id": 433565354,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713285656
+    },
+    {
+        "content": "<p>Ok, I think I could put something in the <code>rust-dev</code> myself, but I probably need a test as well.</p>",
+        "id": 433565679,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713285762
+    },
+    {
+        "content": "<p>I think this should work:</p>\n<div class=\"codehilite\" data-code-language=\"Darcs Patch\"><pre><span></span><code>diff --git a/rust/macros/module.rs b/rust/macros/module.rs\nindex 293beca0a583..0664b957a70a 100644\n<span class=\"gd\">--- a/rust/macros/module.rs</span>\n<span class=\"gi\">+++ b/rust/macros/module.rs</span>\n@@ -199,6 +199,17 @@ pub(crate) fn module(ts: TokenStream) -&gt; TokenStream {\n             /// Used by the printing macros, e.g. [`info!`].\n             const __LOG_PREFIX: &amp;[u8] = b\\\"{name}\\\\0\\\";\n\n<span class=\"gi\">+            // SAFETY: `__this_module` is constructed by the kernel at load time and will not be</span>\n<span class=\"gi\">+            // freed until the module is unloaded.</span>\n<span class=\"gi\">+            #[cfg(MODULE)]</span>\n<span class=\"gi\">+            static THIS_MODULE: kernel::ThisModule = unsafe {{</span>\n<span class=\"gi\">+                kernel::ThisModule::from_ptr(&amp;kernel::bindings::__this_module as *const _ as *mut _)</span>\n<span class=\"gi\">+            }};</span>\n<span class=\"gi\">+            #[cfg(not(MODULE))]</span>\n<span class=\"gi\">+            static THIS_MODULE: kernel::ThisModule = unsafe {{</span>\n<span class=\"gi\">+                kernel::ThisModule::from_ptr(core::ptr::null_mut())</span>\n<span class=\"gi\">+            }};</span>\n<span class=\"gi\">+</span>\n             // Double nested modules, since then nobody can access the public items inside.\n             mod __module_init {{\n                 mod __module_init {{\n@@ -215,17 +226,6 @@ mod __module_init {{\n\n                     static mut __MOD: Option&lt;{type_}&gt; = None;\n\n<span class=\"gd\">-                    // SAFETY: `__this_module` is constructed by the kernel at load time and will not be</span>\n<span class=\"gd\">-                    // freed until the module is unloaded.</span>\n<span class=\"gd\">-                    #[cfg(MODULE)]</span>\n<span class=\"gd\">-                    static THIS_MODULE: kernel::ThisModule = unsafe {{</span>\n<span class=\"gd\">-                        kernel::ThisModule::from_ptr(&amp;kernel::bindings::__this_module as *const _ as *mut _)</span>\n<span class=\"gd\">-                    }};</span>\n<span class=\"gd\">-                    #[cfg(not(MODULE))]</span>\n<span class=\"gd\">-                    static THIS_MODULE: kernel::ThisModule = unsafe {{</span>\n<span class=\"gd\">-                        kernel::ThisModule::from_ptr(core::ptr::null_mut())</span>\n<span class=\"gd\">-                    }};</span>\n<span class=\"gd\">-</span>\n                     // Loadable modules need to export the `{{init,cleanup}}_module` identifiers.\n                     /// # Safety\n                     ///\n@@ -301,7 +301,7 @@ mod __module_init {{\n                     ///\n                     /// This function must only be called once.\n                     unsafe fn __init() -&gt; core::ffi::c_int {{\n<span class=\"gd\">-                        match &lt;{type_} as kernel::Module&gt;::init(&amp;THIS_MODULE) {{</span>\n<span class=\"gi\">+                        match &lt;{type_} as kernel::Module&gt;::init(&amp;super::super::THIS_MODULE) {{</span>\n                             Ok(m) =&gt; {{\n                                 // SAFETY:\n                                 // no data race, since `__MOD` can only be accessed by this module and\n</code></pre></div>\n<p>And to test it, you can try to add this line to the <code>rust_minimal</code> sample:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">THIS_MODULE</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 433569768,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713287115
+    },
+    {
+        "content": "<p>I was about to send the same thing ;-)</p>",
+        "id": 433569840,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713287145
+    },
+    {
+        "content": "<p>Also I think maybe we can just put your patch in as it is, after all, no mainline usage of <code>THIS_MODULE</code> global variable.</p>",
+        "id": 433569992,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713287195
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"669329\">@Dirk Behme</span> if you want me to put it in <code>rust-dev</code>, please let me know, otherwise, I will wait for Miguel's response on how to handle this (a new patch or fixing the existing patch).</p>",
+        "id": 433570696,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713287445
+    },
+    {
+        "content": "<p>We may just rebase since there is enough time.</p>",
+        "id": 433582219,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1713292133
+    },
+    {
+        "content": "<p>Done now. Applied essentially the same diff (but on top of the nits I already did). Please take a look and let me now if you find anything wrong.</p>",
+        "id": 433591287,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1713295838
+    },
+    {
+        "content": "<p>I forgot to Cc <span class=\"user-mention\" data-user-id=\"669329\">@Dirk Behme</span> -- sorry!</p>\n<p><a href=\"https://lore.kernel.org/rust-for-linux/CANiq72m4P8NNr7M0Bv6bFpLonPu=WZC_x-k1KdtzqUd=vtLObA@mail.gmail.com/\">https://lore.kernel.org/rust-for-linux/CANiq72m4P8NNr7M0Bv6bFpLonPu=WZC_x-k1KdtzqUd=vtLObA@mail.gmail.com/</a></p>",
+        "id": 433592650,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1713296392
+    },
+    {
+        "content": "<p>(But I did mention you in the commit message)</p>",
+        "id": 433592744,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1713296415
+    },
+    {
+        "content": "<p>Just picked it up in <code>rust-dev</code> ;-)</p>",
+        "id": 433595443,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1713297567
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291565-Help/topic/How.20to.20use.20THIS_MODULE.20with.20.22.20rust.3A.20macros.3A.20fix.20soundness.20.2E.22/near/433591287\">said</a>:</p>\n<blockquote>\n<p>Done now. Applied essentially the same diff (but on top of the nits I already did). Please take a look and let me now if you find anything wrong.</p>\n</blockquote>\n<p>LGTM (sorry for the extra work, I made the changes on my original patch, not the one in <code>rust-next</code>).</p>\n<p>Just to make sure that we don't need to fix this fix again: the other constants <code>__IS_RUST_MODULE</code> and <code>__MOD</code> (and the other functions) do not need to be public?</p>",
+        "id": 433602033,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713300247
+    },
+    {
+        "content": "<p>Thanks for catching this, <span class=\"user-mention silent\" data-user-id=\"669329\">Dirk Behme</span>!</p>",
+        "id": 433602086,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1713300267
+    },
+    {
+        "content": "<p>Thanks for double-checking!</p>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291565-Help/topic/How.20to.20use.20THIS_MODULE.20with.20.22.20rust.3A.20macros.3A.20fix.20soundness.20.2E.22/near/433602033\">said</a>:</p>\n<blockquote>\n<p>Just to make sure that we don't need to fix this fix again: the other constants <code>__IS_RUST_MODULE</code> and <code>__MOD</code> (and the other functions) do not need to be public?</p>\n</blockquote>\n<p>I don't think so -- that is (or should be) why I prefixed them with the double underscore. In any case, even if that was not the case, they are not referenced in mainline currently, so it is not a big deal to change it later like Boqun said.</p>",
+        "id": 433604372,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1713300778
+    },
+    {
+        "content": "<p>I picked <a href=\"https://github.com/Rust-for-Linux/linux/commit/47bdc055149952cd0365c9dfdca93e6475164fc2\">the updated patch from rust-dev</a>. Many thanks for fixing it that fast! <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 433665180,
+        "sender_full_name": "Dirk Behme",
+        "timestamp": 1713332860
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"669329\">Dirk Behme</span> has marked this topic as resolved.</p>",
+        "id": 433665249,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1713332891
+    }
+]

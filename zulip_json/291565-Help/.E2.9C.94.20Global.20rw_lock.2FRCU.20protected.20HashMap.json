@@ -1,0 +1,470 @@
+[
+    {
+        "content": "<p>Hey, for the Security Module I'm developing for my master's thesis (see old thread <a href=\"#narrow/channel/288089-General/topic/Rust-based.20LSMs\">here</a> for context) I need a way to store the policy, some additional data (similar to SELinux's persistent label mapping) and also caching data globally.</p>\n<p>Currently I'm using the <a href=\"https://rust.docs.kernel.org/kernel/sync/macro.global_lock.html\"><code>global_lock!</code></a> macro together with <code>KVec</code>s for the storage, but since the policy and additional data only need to be read in most cases, using a mutex and fully locking them for each policy decision feels pretty inefficient. I looked into other options in the kernel and found either rw_locks or RCU, but neither seem to be fully implemented in Rust? Please correct me if I'm wrong.</p>\n<p>For data storage I'm using <code>KVec</code>s at the moment (might look into Lists to limit places of possible allocations), but much data (additional information, caching) would more naturally fit in a HashMap. Is anyone working on bindings or an implementation for that? I thought about trying to port hashbrown to the kernel, not sure if that would be worth doing or if it's a bad fit.</p>\n<p>I know I'm conflating the locking and HashMap topic into one here, but I read in the RCU docs that data structures need to support it, so I felt that the topics are somewhat related.</p>\n<p>As for storing the data in other places, I know LSMs can use the <code>security</code> fields in some structs, but those do not work with LSM stacking and I have not looked too deeply into the state of the blobs that are supposed to enable stacking in all cases. At least for the policy resolution cache I will need to store something in the LSM itself anyway, similar to how SELinux's access vector cache is stored in a static variable.</p>\n<p>Is there a WIP patch for rw_locks/RCU/HashMaps that I could cherry-pick? Or do you have other suggestions what I could look into?</p>",
+        "id": 504589594,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741614999
+    },
+    {
+        "content": "<p>There aren't bindings for this.</p>",
+        "id": 504593770,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1741615827
+    },
+    {
+        "content": "<p>Ok, so at least I didn't miss anything on the mailing list, thanks. I guess my options are then to either build things myself if I have the time or live with what's there.</p>",
+        "id": 504599915,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741617016
+    },
+    {
+        "content": "<p>I have some of the RCU protected pointer wrapper in my atomic patchset: <a href=\"https://lore.kernel.org/rust-for-linux/20241101060237.1185533-14-boqun.feng@gmail.com/\">https://lore.kernel.org/rust-for-linux/20241101060237.1185533-14-boqun.feng@gmail.com/</a></p>",
+        "id": 504701469,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741646427
+    },
+    {
+        "content": "<p>It doesn't have <code>call_rcu()</code> support though</p>",
+        "id": 504701538,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741646463
+    },
+    {
+        "content": "<p>Thanks! I don't think the missing <code>call_rcu()</code> is a problem. But I don't think I can use this to protect data I'm storing in a <code>static</code> variable though, can I? <code>Rcu&lt;P&gt;</code> is only <code>Sync</code> where <code>P: Sync</code>, whereas the other <code>Lock</code> implementations/backends only require a <code>Send</code> bound to be <code>Sync</code>. And how would I acquire the <code>Pin&lt;&amp;mut Self&gt;</code> to exchange the content in that case?</p>\n<p>Also, to get the patchset (with v2.1 applied) to compile on v6.14-rc6 I had to remove two calls to <code>cast_mut()</code> because <code>ForeignOwnable::into_foreign()</code> already returns <code>*mut crate::ffi::c_void</code>:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/sync/rcu.rs b/rust/kernel/sync/rcu.rs</span>\n<span class=\"gh\">index 8326b2e0986a..da96f732486f 100644</span>\n<span class=\"gd\">--- a/rust/kernel/sync/rcu.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/sync/rcu.rs</span>\n<span class=\"gu\">@@ -95,7 +95,7 @@ impl&lt;P: ForeignOwnable&gt; Rcu&lt;P&gt; {</span>\n<span class=\"w\"> </span>    pub fn new(p: P) -&gt; Self {\n<span class=\"w\"> </span>        // INVARIANTS: The return value of `p.into_foreign()` is directly stored in the atomic\n<span class=\"w\"> </span>        // variable.\n<span class=\"gd\">-        Self(Atomic::new(p.into_foreign().cast_mut()), PhantomData)</span>\n<span class=\"gi\">+        Self(Atomic::new(p.into_foreign()), PhantomData)</span>\n<span class=\"w\"> </span>    }\n\n<span class=\"w\"> </span>    /// Dereferences the protected object.\n<span class=\"gu\">@@ -243,7 +243,7 @@ pub fn read_copy_update&lt;F&gt;(self: Pin&lt;&amp;mut Self&gt;, f: F) -&gt; Option&lt;RcuOld&lt;P&gt;&gt;</span>\n\n<span class=\"w\"> </span>        // step 3: UPDATE.\n<span class=\"w\"> </span>        if let Some(new) = new {\n<span class=\"gd\">-            let new_ptr = new.into_foreign().cast_mut();</span>\n<span class=\"gi\">+            let new_ptr = new.into_foreign();</span>\n<span class=\"w\"> </span>            // Ordering: Pairs with the address dependency in `dereference()` and\n<span class=\"w\"> </span>            // `read_copy_update()`.\n<span class=\"w\"> </span>            // INVARIANTS: `new.into_foreign()` is directly store into the atomic variable.\n</code></pre></div>",
+        "id": 504840228,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741699467
+    },
+    {
+        "content": "<p>because it's similar to rwlock: multiple reader could exists, so it's <code>Sync</code> only if T is <code>Sync</code>: <a href=\"https://doc.rust-lang.org/std/sync/struct.RwLock.html#impl-Sync-for-RwLock%3CT%3E\">https://doc.rust-lang.org/std/sync/struct.RwLock.html#impl-Sync-for-RwLock%3CT%3E</a></p>",
+        "id": 504850577,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741701764
+    },
+    {
+        "content": "<p>(deleted)</p>",
+        "id": 504850967,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741701848
+    },
+    {
+        "content": "<p>and yes, your adjustment for v6.14-rc6 seems valid, I have the same thing locally.</p>",
+        "id": 504853037,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741702297
+    },
+    {
+        "content": "<p>Ah, so my issue to do something like this for example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Rcu</span><span class=\"o\">&lt;</span><span class=\"n\">KBox</span><span class=\"o\">&lt;</span><span class=\"n\">Policy</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Rcu</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">Policy</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>is that I'm missing something like <code>LazyLock</code> to handle the initialization?</p>",
+        "id": 504853130,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741702317
+    },
+    {
+        "content": "<p>what is the error you got?</p>",
+        "id": 504854456,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741702608
+    },
+    {
+        "content": "<p>Because my current code, using the <code>global_lock</code>, looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">global_lock</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: Initialized in module initializer before first use.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"p\">(</span><span class=\"n\">uninit</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"n\">Policy</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Policy</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">();</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// Called by the main LSM init function</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">init</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: Called exactly once.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">.</span><span class=\"n\">init</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and then later when the LSM hook gets called I evaluate the policy rules using <code>POLICY.lock()</code>, same in the update function for the policy.</p>",
+        "id": 504854622,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741702647
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504854456\">said</a>:</p>\n<blockquote>\n<p>what is the error you got?</p>\n</blockquote>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>error[E0572]: return statement outside of function body\n  --&gt; security/lsm/pdp.rs:21:81\n   |\n21 | static POLICY: Rcu&lt;KBox&lt;Policy&gt;&gt; = Rcu::new(KBox::new(Policy::new(), GFP_KERNEL)?);\n   |                                                                                 ^\n\nerror: aborting due to 1 previous error\n</code></pre></div>\n<p>Since I guess I can't allocate or deal with the <code>Result</code> in the const context.</p>",
+        "id": 504855025,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741702729
+    },
+    {
+        "content": "<p><code>global_lock</code> needs extra init steps because we haven't supported const initialization of locks (due to we need an FFI to initialize)</p>",
+        "id": 504855103,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741702746
+    },
+    {
+        "content": "<p>anyway, I think it might be easier for your case to start with a rwlock.</p>",
+        "id": 504855428,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741702811
+    },
+    {
+        "content": "<p>because to use RCU, your data structure also need to be somewhat <code>Sync</code> (i.e. having interior mutability)</p>",
+        "id": 504855586,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741702857
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504855103\">said</a>:</p>\n<blockquote>\n<p><code>global_lock</code> needs extra init steps because we haven't supported const initialization of locks (due to we need an FFI to initialize)</p>\n</blockquote>\n<p>That's fine though and works for me, I'm looking for a way to replace it with something RCU-protected, since the policy only gets read in most cases.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504855428\">said</a>:</p>\n<blockquote>\n<p>anyway, I think it might be easier for your case to start with a rwlock.</p>\n</blockquote>\n<p>That sounds like it makes more sense then, but there are no bindings for that, are there?</p>",
+        "id": 504855842,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741702917
+    },
+    {
+        "content": "<p>No, but it shouldn't be hard to write one (famous last words)</p>",
+        "id": 504857321,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741703233
+    },
+    {
+        "content": "<p>what does your data structure look like?</p>",
+        "id": 504857896,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741703355
+    },
+    {
+        "content": "<p>Sorry, I just had a meeting with my advisor for the thesis.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504857896\">said</a>:</p>\n<blockquote>\n<p>what does your data structure look like?</p>\n</blockquote>\n<p>The main struct I'm storing is</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[derive(Debug)]</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Policy</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"n\">rules</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">KVec</span><span class=\"o\">&lt;</span><span class=\"n\">Rule</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Through a few other other structs the whole structure (underneath <code>Rule</code>) contains mostly primitive data types and KVecs, some enums and a <code>CString</code> once (which I'm probably replacing by an integer id soon).</p>\n<p>In some places I'm using KVecs even though a HashMap would be more fitting, but since there is none yet this was a way to get something working first and then improve it later.</p>",
+        "id": 504878456,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741707511
+    },
+    {
+        "content": "<p>I also wanted to add caching later, similar to the access vector cache SELinux uses (to store already evaluated policy decisions and respond faster), but since SELinux uses a spinlock for that, that seems like the way to go for that. The bigger problem for that is the missing HashMap to use as a cache.</p>",
+        "id": 504879232,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741707645
+    },
+    {
+        "content": "<p>If I try to create bindings for rwlock, would that work as another <code>Backend</code> for <code>kernel::sync::lock::Lock</code>? Since that only requires a lock operation, but does not differentiate between locking to read and locking to write.</p>",
+        "id": 504883910,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741708481
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781332\">Lukas Fischer</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504883910\">said</a>:</p>\n<blockquote>\n<p>If I try to create bindings for rwlock, would that work as another <code>Backend</code> for <code>kernel::sync::lock::Lock</code>? Since that only requires a lock operation, but does not differentiate between locking to read and locking to write.</p>\n</blockquote>\n<p>I think <code>Backend</code> and <code>kernel::sync::lock::Lock</code> are more designed for exclusive locks, you probably want to start with a simple wrapper for <code>rwlock_t</code> or <code>rwsemphore</code>.</p>",
+        "id": 504895540,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741710648
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504895540\">said</a>:</p>\n<blockquote>\n<p>I think <code>Backend</code> and <code>kernel::sync::lock::Lock</code> are more designed for exclusive locks, you probably want to start with a simple wrapper for <code>rwlock_t</code> or <code>rwsemphore</code>.</p>\n</blockquote>\n<p>Seems reasonable.</p>\n<p>I was reading the docs on the rwlocks though, and for <code>rwlock_t</code> I saw:</p>\n<blockquote>\n<p>NOTE! reader-writer locks require more atomic memory operations than simple spinlocks. Unless the reader critical section is long, you are better off just using spinlocks.</p>\n</blockquote>\n<p>So it seems like I might be trying to prematurely optimize something I haven't even measured yet, just because it seems like it would make sense from the access pattern.</p>\n<blockquote>\n<p>NOTE! We are working hard to remove reader-writer spinlocks in most cases, so please don’t add a new one without consensus. (Instead, see <a href=\"https://docs.kernel.org/RCU/rcu.html\">RCU Concepts</a> for complete information.)</p>\n</blockquote>\n<p>And it also seems as if <code>rwlock_t</code> is not something most people would want to add/use anyway.</p>",
+        "id": 504901172,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741712057
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504855586\">said</a>:</p>\n<blockquote>\n<p>because to use RCU, your data structure also need to be somewhat <code>Sync</code> (i.e. having interior mutability)</p>\n</blockquote>\n<p>I actually thought an RCU wrapper would provide this interior mutability and then more or less provide functions to acquire a read lock and to replace the stored value. But I guess that is too inflexible for some data structures.</p>",
+        "id": 504902384,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741712377
+    },
+    {
+        "content": "<p>First, normally RCU needs to pair with an exclusive lock (e.g. spinlock) as the update locking. That part is yet not supported by the current locking API.</p>",
+        "id": 504902979,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741712520
+    },
+    {
+        "content": "<p>Second, say you have a <code>Rcu&lt;KBox&lt;Policy&gt;&gt;</code>, you can replace the whole <code>KBox&lt;Policy&gt;</code> with <code>Rcu::replace()</code>, but that means whenever you do the update, you need to copy the whole vector.</p>",
+        "id": 504903584,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741712661
+    },
+    {
+        "content": "<p>unless your vector supports RCU update.</p>",
+        "id": 504903687,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741712686
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Global.20rw_lock.2FRCU.20protected.20HashMap/near/504903584\">said</a>:</p>\n<blockquote>\n<p>Second, say you have a <code>Rcu&lt;KBox&lt;Policy&gt;&gt;</code>, you can replace the whole <code>KBox&lt;Policy&gt;</code> with <code>Rcu::replace()</code>, but that means whenever you do the update, you need to copy the whole vector.</p>\n</blockquote>\n<p>I knew about that, but I guess I didn't really think about the consequences of that. Currently my WIP LSM allocates all over the place anyway, but I'll remove allocations from the policy resolution path, where it gets called for access decisions.</p>\n<p>I'm not too set on using vectors, lists would work as well, but it seems like ones with RCU support still need quite a bit of work. Looking at the previous discussions about LKMM in Rust and the related topics, I don't think I can meaningfully contribute to that, sorry.</p>",
+        "id": 504904963,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741713019
+    },
+    {
+        "content": "<p>No problem. I'm working on making it more usable ;-)</p>",
+        "id": 504905187,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741713088
+    },
+    {
+        "content": "<p>Maybe I could provide a RCU protected list soon</p>",
+        "id": 504905285,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741713121
+    },
+    {
+        "content": "<p>I'll look into maybe adding bindings for an rwlock and I'll try different locking variants during the evaluation phase of my thesis. I need to hand it in at the end of May, so everything that isn't available before then will then become an answer to the \"limitations of the current Linux kernel and Rust environment\" research question.</p>",
+        "id": 504906088,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741713342
+    },
+    {
+        "content": "<p>Thanks for your help :)</p>",
+        "id": 504906116,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741713348
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781332\">Lukas Fischer</span> has marked this topic as resolved.</p>",
+        "id": 504906307,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1741713395
+    },
+    {
+        "content": "<p>Just keep me posted, if I can look into your use cases, I may be able to provide the locking mechanism that you may need.</p>",
+        "id": 504906348,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741713411
+    },
+    {
+        "content": "<p>Use cases are more or less:</p>\n<ul>\n<li>store the policy, which means a collection of rules storing details about how to provide access (exact policy semantics are part of unpublished research, so I can't be super specific with this, sorry, I can talk to my advisor <span class=\"user-mention\" data-user-id=\"781784\">@Peter Amthor</span> if you need more details)</li>\n<li>store some additional data for policy evaluation with a user/object to data mapping (feels like a HashMap would be nice there, but that'S also not available yet and especially not with RCU support), this could also be stored using the security context pointers or the lsm blobs but I need to look more into them</li>\n<li>store caching information to speed up policy resolution, which is also a map from user and object (or security context if you want to think in SELinux terms) to access decision (bool)</li>\n</ul>\n<p>The policy and information storage mostly only get read, sometimes updated, how often and how that impacts the performance will be part of my evaluation. The cache gets updated every time an access decision is made. I checked the SELinux code again, and saw that they do actually use RCU for that, with a spinlock to synchronize the writes.</p>\n<p>And of course I don't need to store all this in static variables, I just couldn't think of a different place for it, since the lsm hooks themselves only provide the data structures necessary for each access decision. Those do contain the security fields for LSMs, but they aren't meant to store the whole policy.</p>",
+        "id": 504909383,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741714282
+    },
+    {
+        "content": "<p><a href=\"https://github.com/fbq/linux/tree/dev/rust/atomic-v3\">This</a> seems work, a few things to notice:</p>\n<ul>\n<li>I didn't quite understand your question about <code>LazyLock</code>, but it turns out that <code>Rcu</code> should have a const initializer, hence I added <code>Rcu::null()</code>.</li>\n<li><code>Projectable</code> is an idea for things that can have multiple immutable references and one <code>Pin&lt;&amp;mut&gt;</code>, this is what RCU needs.</li>\n<li><code>ProjectableGlobalLockedBy</code> is similar to normal <code>GlobalLockedBy</code> except that you cannot get an <code>&amp;mut T</code>, because <code>swap()</code> then will ruin the atomicity for accessing the RCU pointer.</li>\n<li>Note that every time you update <code>Policy</code>, you need to copy the whole existing vector, this is because vector itself is not an RCU-aware data structure. But the copy may not be that bad, because readers can still read the old data, until you update it.</li>\n</ul>",
+        "id": 504958411,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1741727961
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/.E2.9C.94.20Global.20rw_lock.2FRCU.20protected.20HashMap/near/504958411\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://github.com/fbq/linux/tree/dev/rust/atomic-v3\">This</a> seems work</p>\n</blockquote>\n<p>Amazing, that is more or less what I was looking for. I've rebased my commits on top of yours, works as it's supposed to.</p>\n<blockquote>\n<ul>\n<li>I didn't quite understand your question about <code>LazyLock</code>, but it turns out that <code>Rcu</code> should have a const initializer, hence I added <code>Rcu::null()</code>.</li>\n</ul>\n</blockquote>\n<p>Yeah I think that's what I was missing there, a const initializer that makes it usable in static variables. I saw that the standard library uses the <code>Lazy</code> types for statics that need allocations or initialization, so I went with that as an example.</p>\n<blockquote>\n<ul>\n<li>Note that every time you update <code>Policy</code>, you need to copy the whole existing vector, this is because vector itself is not an RCU-aware data structure. But the copy may not be that bad, because readers can still read the old data, until you update it.</li>\n</ul>\n</blockquote>\n<p>The only way the policy can get updated is through an interface in securityfs, where a new policy is loaded from userspace. This means it builds a completely new policy from parsing that input anyway, my previous code also only built a new policy object and replaced the one stored in the Mutex. So allocation-wise there's no difference there.</p>",
+        "id": 505123288,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1741783851
+    },
+    {
+        "content": "<p>As part of my evaluation I compared using <code>SpinLock</code>s vs <code>Mutex</code>es for other data which I cannot store using RCU, but since I was already setting up my code for a simple switch between both, I also switched between a <code>Mutex</code> and a <code>SpinLock</code> for the <code>GlobalLockBackend</code> of the <code>ProjectableGlobalLockedBy</code>. That's when I first noticed, that using a SpinLock for that results in a kernel panic with <code>scheduling while atomic</code>.</p>\n<p>This is more or less what I'm using:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">global_lock</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: Initialized in module initializer before first use.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"p\">(</span><span class=\"n\">uninit</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">();</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">static</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ProjectableGlobalLockedBy</span><span class=\"o\">&lt;</span><span class=\"n\">Rcu</span><span class=\"o\">&lt;</span><span class=\"n\">KBox</span><span class=\"o\">&lt;</span><span class=\"n\">Policy</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"n\">ProjectableGlobalLockedBy</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">Rcu</span><span class=\"p\">::</span><span class=\"n\">null</span><span class=\"p\">());</span>\n\n<span class=\"c1\">// SAFETY: All initializers are called exactly once.</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">.</span><span class=\"n\">init</span><span class=\"p\">();</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">set_policy</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Policy</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">policy</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">policy_writer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">policy_writer</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">replace</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Replacing the <code>Mutex</code> in the <code>global_lock!</code> with <code>SpinLock</code> results in the panic, with the <code>Mutex</code> it works. I don't think I'm holding any other locks or using the RCU otherwise in the meantime, as it also does this when this is the very first thing I do with my LSM after booting the kernel. This is not a show stopper for me as I can just keep using a <code>Mutex</code> for my RCU protected data, as that's not part of the case where switching to <code>SpinLock</code>s is actually interesting to look at, but I figured this might be something you want to look at, maybe RCU just is not meant to be used with SpinLocks and I overlooked that?</p>\n<p>FYI I'm still using the version you initially published, I saw that you rebased and force pushed the <code>dev/rust/atomic-v3</code> branch, but I'm still on the stable releases of v6.14 so that I'm not using an rc for the thesis in the end.</p>",
+        "id": 516396821,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746524512
+    },
+    {
+        "content": "<p>If you get a <code>scheduling while atomic</code> inside the spinlock, then you're doing something that sleeps. I don't know what it is, though. RCU shouldn't do that on its own.</p>",
+        "id": 516397319,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746524649
+    },
+    {
+        "content": "<p>I've been trying to figure out what it could be that sleeps, but I can't find anything, from the moment I enter into my code through my securityfs implementation, I'm doing nothing else but reading all the data from user space using a <code>UserSlice</code>, converting it to a <code>Policy</code> object using <code>str::parse</code> and then calling the function I posted with that.</p>\n<p>Since I'm not doing anything else, other kernel threads shouldn't do anything in my LSM either, and even if, shouldn't that not matter with atomics?</p>\n<p>Here's how the data ends up there:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[no_mangle]</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">thesis_lsm_update_policy</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">_file</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">file</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">UserPtr</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">length</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">c_ulong</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">_offset</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">c_longlong</span><span class=\"p\">,</span>\n<span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">c_int</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">fs_update_policy</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">length</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// not the nicest interface since it ignores the offset, but works for now</span>\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">fs_update_policy</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">UserPtr</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">length</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">c_ulong</span><span class=\"p\">,</span>\n<span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">c_int</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">buf</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KVec</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">();</span>\n\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">UserSlice</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">length</span><span class=\"p\">).</span><span class=\"n\">read_all</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">buf</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">e</span><span class=\"p\">.</span><span class=\"n\">to_errno</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">target</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">buf</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">e</span><span class=\"p\">.</span><span class=\"n\">to_errno</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">_</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">update_policy</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">])</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// Read and parse the policy and update it</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">policy</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Policy</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"kt\">str</span><span class=\"p\">::</span><span class=\"n\">from_utf8</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">.</span><span class=\"n\">parse</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"n\">pr_info</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"s\">\"Updating policy to: {policy:?}\"</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">set_policy</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The first function is the one registered under the <code>dentry</code> in the securityfs, the last one calls the <code>set_policy</code> function from above.</p>",
+        "id": 516406654,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527341
+    },
+    {
+        "content": "<p>Doesn't the kernel panic have a backtrace?</p>",
+        "id": 516406821,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527393
+    },
+    {
+        "content": "<p>Ah true, wait</p>",
+        "id": 516406902,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527408
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>root@debian-vm:~$ cat policy &gt; /sys/kernel/security/thesis_lsm/policy\n[   21.399721] BUG: scheduling while atomic: cat/428/0x00000002\n[   21.399990] Modules linked in:\n[   21.400130] CPU: 0 UID: 0 PID: 428 Comm: cat Not tainted 6.14.5-precise-perf+ #636\n[   21.400131] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.1 11/11/2019\n[   21.400132] Call Trace:\n[   21.400134]  &lt;TASK&gt;\n[   21.400135]  dump_stack_lvl+0x5e/0x80\n[   21.400138]  __schedule_bug+0x59/0x70\n[   21.400140]  __schedule+0x65a/0x15f0\n[   21.400142]  ? _RNvXs_NtCs3LkXV6h6Qqj_11thesis_lsm4exprNtB4_10ExpressionNtNtNtCsaNryh1j6xD7_4core3str6traits7FromStr8from_str+0x1e1/0x3a0\n[   21.400145]  schedule+0x6d/0xf0\n[   21.400146]  schedule_timeout+0x32/0x120\n[   21.400147]  ? __kmalloc_node_track_caller_noprof+0x21d/0x4b0\n[   21.400149]  ? _RNvXs_NtCs3LkXV6h6Qqj_11thesis_lsm6policyNtB4_6PolicyNtNtNtCsaNryh1j6xD7_4core3str6traits7FromStr8from_str+0x3a3/0x790\n[   21.400151]  wait_for_common+0xfe/0x1c0\n[   21.400152]  wait_for_completion_state+0x1a/0x40\n[   21.400153]  __wait_rcu_gp+0x12d/0x150\n[   21.400155]  synchronize_rcu_normal+0x127/0x200\n[   21.400157]  ? __pfx_wakeme_after_rcu+0x10/0x10\n[   21.400158]  ? krealloc_noprof+0x1a0/0x310\n[   21.400159]  ? __pfx_call_rcu_hurry+0x10/0x10\n[   21.400160]  _RNvNtCs3LkXV6h6Qqj_11thesis_lsm3pdp10set_policy+0x111/0x1c0\n[   21.400161]  ? __pfx__RNvNtCs3LkXV6h6Qqj_11thesis_lsm3pap13update_policy+0x10/0x10\n[   21.400163]  _RNvNtCs3LkXV6h6Qqj_11thesis_lsm3pap13update_policy+0x74/0x80\n[   21.400164]  _RNvNtCs3LkXV6h6Qqj_11thesis_lsm8bindings22update_policy_or_attrs+0xad/0x130\n[   21.400165]  vfs_write+0x10c/0x3e0\n[   21.400168]  ksys_write+0x77/0xf0\n[   21.400169]  do_syscall_64+0x88/0x170\n[   21.400170]  ? current_time+0x3a/0x140\n[   21.400172]  ? atime_needs_update+0xb1/0x140\n[   21.400173]  ? touch_atime+0x1f/0x150\n[   21.400174]  ? filemap_read+0x505/0x570\n[   21.400175]  ? vfs_read+0x14e/0x310\n[   21.400176]  ? __rseq_handle_notify_resume+0x291/0x5a0\n[   21.400177]  ? arch_exit_to_user_mode_prepare+0x38/0x40\n[   21.400178]  ? syscall_exit_to_user_mode+0xa9/0xe0\n[   21.400179]  ? do_syscall_64+0x94/0x170\n[   21.400180]  ? do_user_addr_fault+0x317/0x660\n[   21.400181]  ? clear_bhb_loop+0x45/0xa0\n[   21.400183]  ? clear_bhb_loop+0x45/0xa0\n[   21.400184]  ? clear_bhb_loop+0x45/0xa0\n[   21.400185]  entry_SYSCALL_64_after_hwframe+0x76/0x7e\n[   21.400186] RIP: 0033:0x7f39ee32d5c7\n[   21.400188] Code: 48 89 fa 4c 89 df e8 78 b3 00 00 8b 93 08 03 00 00 59 5e 48 83 f8 fc 74 1a 5b c3 0f 1f 84 00 00 00 00 00 48 8b 44 24 10 0f 05 &lt;5b&gt; c3 0f 1f 80 00 00 00 00 83 e2 39 83 fa 08 75 de e8 23 ff ff ff\n[   21.400189] RSP: 002b:00007ffdcebb08b0 EFLAGS: 00000202 ORIG_RAX: 0000000000000001\n[   21.400190] RAX: ffffffffffffffda RBX: 00007f39ee29b740 RCX: 00007f39ee32d5c7\n[   21.400191] RDX: 00000000000000c3 RSI: 00007f39ee1f1000 RDI: 0000000000000001\n[   21.400191] RBP: 00000000000000c3 R08: 0000000000000000 R09: 0000000000000000\n[   21.400192] R10: 0000000000000000 R11: 0000000000000202 R12: 00007f39ee1f1000\n[   21.400192] R13: 0000000000000001 R14: 0000000000000000 R15: 0000000000040000\n[   21.400193]  &lt;/TASK&gt;\n[   21.424745] show_signal_msg: 81 callbacks suppressed\n[   21.424747] cat[428]: segfault at 7f39ee37b1c0 ip 00007f39ee37b1c0 sp 00007ffdcebb0a68 error 14 in libc.so.6[dd1c0,7f39ee2c6000+165000] likely on CPU 0 (core 0, socket 0)\n[   21.424751] Code: Unable to access opcode bytes at 0x7f39ee37b196.\nSegmentation fau[   21.424813] BUG: scheduling while atomic: cat/428/0x00000000\nlt[   21.424852] audit: type=1701 audit(1746527440.651:64): auid=0 uid=0 gid=0 ses=1 pid=428 comm=\"cat\" exe=\"/usr/bin/cat\" sig=11 res=1\n[   21.425046] Modules linked in:\n\n[   21.425047] CPU: 0 UID: 0 PID: 428 Comm: cat Tainted: G        W          6.14.5-precise-perf+ #636\n[   21.425048] Tainted: [W]=WARN\n[   21.425049] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.1 11/11/2019\n[   21.425049] Call Trace:\n[   21.425050]  &lt;TASK&gt;\nroot@debian-vm:~[   21.425050]  dump_stack_lvl+0x5e/0x80\n$ [   21.425052]  __schedule_bug+0x59/0x70\n[   21.425053]  __schedule+0x65a/0x15f0\n[   21.425054]  ? __mod_memcg_state+0xc2/0x220\n[   21.425056]  do_task_dead+0x43/0x50\n[   21.425057]  do_exit+0x6bf/0xa10\n[   21.425059]  do_group_exit+0x78/0x90\n[   21.425060]  get_signal+0x6e2/0x780\n[   21.425061]  arch_do_signal_or_restart+0x8e/0x290\n[   21.425063]  irqentry_exit_to_user_mode+0x59/0xd0\n[   21.425064]  asm_exc_page_fault+0x26/0x30\n[   21.425066] RIP: 0033:0x7f39ee37b1c0\n[   21.425067] Code: Unable to access opcode bytes at 0x7f39ee37b196.\n[   21.425067] RSP: 002b:00007ffdcebb0a68 EFLAGS: 00010202\n[   21.425068] RAX: 0000000000000000 RBX: 00007f39ee486fe8 RCX: 0000000000000000\n[   21.425068] RDX: 00007f39ee29ba48 RSI: 0000000000000001 RDI: 0000000000000000\n[   21.425068] RBP: 0000000000000000 R08: 00007ffdcebb0a00 R09: 0000000000000000\n[   21.425069] R10: 00007ffdcebb0910 R11: 00007ffdcebb0990 R12: 00007f39ee485680\n[   21.425069] R13: 00007f39ee4a3c20 R14: 0000000000000002 R15: 00007f39ee487000\n[   21.425070]  &lt;/TASK&gt;\n</code></pre></div>",
+        "id": 516407557,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527606
+    },
+    {
+        "content": "<p>It looks like <code>set_policy</code> calls <code>synchronize_rcu</code> which you definitely can't do while holding a spinlock.</p>",
+        "id": 516407953,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527705
+    },
+    {
+        "content": "<p>I'm not manually calling it, so I guess it's coming from the WIP RCU implementation.</p>",
+        "id": 516408190,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527767
+    },
+    {
+        "content": "<p>No, it's a call inside <code>set_policy</code>.</p>",
+        "id": 516408296,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527809
+    },
+    {
+        "content": "<p>hmm</p>",
+        "id": 516408370,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527834
+    },
+    {
+        "content": "<p>or maybe it's from the krealloc call</p>",
+        "id": 516408392,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527840
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">set_policy</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Policy</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">policy</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">policy_writer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">policy_writer</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">replace</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>But set_policy is just this</p>",
+        "id": 516408393,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527841
+    },
+    {
+        "content": "<p>right</p>",
+        "id": 516408411,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527846
+    },
+    {
+        "content": "<p>There it is.</p>",
+        "id": 516408470,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527864
+    },
+    {
+        "content": "<p>You can't allocate memory with <code>GFP_KERNEL</code> under a spinlock.</p>",
+        "id": 516408471,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527865
+    },
+    {
+        "content": "<p>But I thought I'm taking the spinlock after the allocation there</p>",
+        "id": 516408581,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527889
+    },
+    {
+        "content": "<p>There isn't a spinlock around the call to <code>set_policy</code>?</p>",
+        "id": 516408696,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527929
+    },
+    {
+        "content": "<p>No, the spinlock is taken with <code>let mut guard = POLICY_WRITE_GUARD.lock();</code></p>",
+        "id": 516408745,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746527947
+    },
+    {
+        "content": "<p>What is <code>replace</code>?</p>",
+        "id": 516408826,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746527975
+    },
+    {
+        "content": "<p>That's from Boqun's RCU branch:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">replace</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">new</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">P</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">RcuOld</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">read_copy_update</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">_</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">new</span><span class=\"p\">))</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 516409007,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746528034
+    },
+    {
+        "content": "<p>Which is why I'm wondering if maybe that quick WIP implementation he made for me to support global locks does not work with spinlocks.</p>",
+        "id": 516409084,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746528062
+    },
+    {
+        "content": "<p>And <code>read_copy_update</code>?</p>",
+        "id": 516409159,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746528090
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">   </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">read_copy_update</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">f</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">RcuOld</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">where</span>\n<span class=\"w\">        </span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">FnOnce</span><span class=\"p\">(</span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"p\">::</span><span class=\"n\">Borrowed</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">P</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// step 1: READ.</span>\n<span class=\"w\">        </span><span class=\"c1\">// Ordering: Address dependency pairs with the `store(Release)` in read_copy_update().</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">old_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">NonNull</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">load</span><span class=\"p\">(</span><span class=\"n\">Relaxed</span><span class=\"p\">));</span>\n\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">old</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">old_ptr</span><span class=\"p\">.</span><span class=\"n\">map</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">nonnull</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// SAFETY: Per type invariants `old_ptr` has to be a value return by a previous</span>\n<span class=\"w\">            </span><span class=\"c1\">// `into_foreign()`, and the exclusive reference `self` guarantees that `from_foreign()`</span>\n<span class=\"w\">            </span><span class=\"c1\">// has not been called.</span>\n<span class=\"w\">            </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">P</span><span class=\"p\">::</span><span class=\"n\">borrow</span><span class=\"p\">(</span><span class=\"n\">nonnull</span><span class=\"p\">.</span><span class=\"n\">as_ptr</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">});</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// step 2: COPY, or more generally, initializing `new` based on `old`.</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">new</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">f</span><span class=\"p\">(</span><span class=\"n\">old</span><span class=\"p\">);</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// step 3: UPDATE.</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">new</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">new</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">new_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">new</span><span class=\"p\">.</span><span class=\"n\">into_foreign</span><span class=\"p\">();</span>\n<span class=\"w\">            </span><span class=\"c1\">// Ordering: Pairs with the address dependency in `dereference()` and</span>\n<span class=\"w\">            </span><span class=\"c1\">// `read_copy_update()`.</span>\n<span class=\"w\">            </span><span class=\"c1\">// INVARIANTS: `new.into_foreign()` is directly store into the atomic variable.</span>\n<span class=\"w\">            </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">store</span><span class=\"p\">(</span><span class=\"n\">new_ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Release</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// Ordering: Setting to a null pointer doesn't need to be Release.</span>\n<span class=\"w\">            </span><span class=\"c1\">// INVARIANTS: The atomic variable is set to be null.</span>\n<span class=\"w\">            </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">store</span><span class=\"p\">(</span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">ptr</span><span class=\"p\">::</span><span class=\"n\">null_mut</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">Relaxed</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// INVARIANTS: The exclusive reference guarantess that the ownership of a previous</span>\n<span class=\"w\">        </span><span class=\"c1\">// `into_foreign()` transferred to the `RcuOld`.</span>\n<span class=\"w\">        </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">RcuOld</span><span class=\"p\">(</span><span class=\"n\">old_ptr</span><span class=\"o\">?</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"p\">))</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 516409326,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746528127
+    },
+    {
+        "content": "<p>Not my code though :D</p>",
+        "id": 516409375,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746528140
+    },
+    {
+        "content": "<p>I have to go to lunch, others are waiting for me, I'll be back later, thanks for the help so far. In the end as I said I can just use Mutexes there, this is not mission critical for me.</p>",
+        "id": 516409453,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746528162
+    },
+    {
+        "content": "<p>Are there calls to <code>synchronize_rcu()</code> in any of the destructors of those rcu pointers?</p>",
+        "id": 516409515,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746528189
+    },
+    {
+        "content": "<p>drop Rcu&lt;P&gt; pointer will call synchronize_rcu</p>",
+        "id": 516410283,
+        "sender_full_name": "JCKeep",
+        "timestamp": 1746528454
+    },
+    {
+        "content": "<p>Problem may at the policy_writer.as_mut().replace()? You can disassemble and check</p>",
+        "id": 516410628,
+        "sender_full_name": "JCKeep",
+        "timestamp": 1746528576
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"556237\">JCKeep</span> <a href=\"#narrow/channel/291565-Help/topic/.E2.9C.94.20Global.20rw_lock.2FRCU.20protected.20HashMap/near/516410283\">said</a>:</p>\n<blockquote>\n<p>drop Rcu&lt;P&gt; pointer will call synchronize_rcu</p>\n</blockquote>\n<p>Yeah the point of the <code>read_copy_update</code> function is to safely change the value protected by RCU, so it makes sense it would call it there. The Lock is needed to ensure that only one process at a time can modify the value. Since I needed to store RCU protected data in a static variable, Boqun added a few commits making it work with <code>global_lock</code> by using <code>ProjectableGlobalLockedBy</code>. Since I need to hold the lock to call <code>read_copy_update</code> because it guarantees I am the only thread doing so, I cannot unlock it until after the call, but by then <code>synchronize_rcu()</code> is called at the end of that call. Which all seems to me like this API just cannot work with SpinLocks.</p>\n<p>Here's this part of the function with types inserted:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">GlobalGuard</span><span class=\"o\">&lt;</span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">policy_writer</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Rcu</span><span class=\"o\">&lt;</span><span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">Policy</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">alloc</span><span class=\"p\">::</span><span class=\"n\">allocator</span><span class=\"p\">::</span><span class=\"n\">Cmalloc</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">);</span>\n<span class=\"n\">policy_writer</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">read_copy_update</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">_</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">));</span>\n</code></pre></div>\n<p>As I said, I'll just always use Mutexes with RCU for now.</p>",
+        "id": 516438540,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746536368
+    },
+    {
+        "content": "<p>Most likely you can do </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">set_policy</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Policy</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// Defined before `guard` to drop after releasing spinlock.</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">old</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">policy</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">KBox</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY_WRITE_GUARD</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">policy_writer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">POLICY</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"n\">old</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">policy_writer</span><span class=\"p\">.</span><span class=\"n\">as_mut</span><span class=\"p\">().</span><span class=\"n\">replace</span><span class=\"p\">(</span><span class=\"n\">policy</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 516439745,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1746536672
+    },
+    {
+        "content": "<p>Interesting, I didn't think of that, I'll give it a try, thanks.</p>",
+        "id": 516439921,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746536725
+    },
+    {
+        "content": "<p>Yeah that solves it :)</p>",
+        "id": 516441543,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746537133
+    },
+    {
+        "content": "<p>Still seems like a pretty big gotcha for a supposed to be safe interface, but as this is not merged yet you can discuss the best options with it.</p>",
+        "id": 516441737,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746537184
+    },
+    {
+        "content": "<p>Cc <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span></p>",
+        "id": 516476805,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1746546040
+    },
+    {
+        "content": "<p>This should be something that klint catches IIRC</p>",
+        "id": 516476877,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1746546064
+    },
+    {
+        "content": "<p>Good to know, don't think I'm running that, at least I didn't set it up specifically.</p>",
+        "id": 516477020,
+        "sender_full_name": "Lukas Fischer",
+        "timestamp": 1746546104
+    },
+    {
+        "content": "<p>We haven't officially integrated it yet, but I feel like we could try to prioritize it more</p>",
+        "id": 516478394,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1746546466
+    },
+    {
+        "content": "<p>Yeah, so when dropping a <code>RcuOld</code>, <code>synchronize_rcu()</code> will be called.</p>",
+        "id": 516481692,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1746547338
+    },
+    {
+        "content": "<p>Can klint detect this case? drop rcu (call synchronize_rcu) under spinlock hold</p>",
+        "id": 516482344,
+        "sender_full_name": "JCKeep",
+        "timestamp": 1746547532
+    },
+    {
+        "content": "<p>I guess it's not different than a simple case like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">lock</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">SpinLock</span><span class=\"o\">&lt;</span><span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"n\">Foo</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">lock</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"n\">guard</span><span class=\"p\">.</span><span class=\"n\">take</span><span class=\"p\">();</span><span class=\"w\"> </span><span class=\"c1\">// will call Foo::drop(), and assume that might sleep.</span>\n</code></pre></div>",
+        "id": 516482372,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1746547539
+    }
+]

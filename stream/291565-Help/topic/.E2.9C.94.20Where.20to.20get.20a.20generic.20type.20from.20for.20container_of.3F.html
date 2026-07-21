@@ -1,0 +1,61 @@
+<html>
+<head><meta charset="utf-8"><title>✔ Where to get a generic type from for container_of? · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Where.20to.20get.20a.20generic.20type.20from.20for.20container_of.3F.html">✔ Where to get a generic type from for container_of?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="587755970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Where%20to%20get%20a%20generic%20type%20from%20for%20container_of%3F/near/587755970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Where.20to.20get.20a.20generic.20type.20from.20for.20container_of.3F.html#587755970">(Apr 20 2026 at 12:45)</a>:</h4>
+<p>I've got a supposedly rare issue here. With dma_fences, we have backend callbacks invoked by C. In our Rust code, we want to access Rust data, but the callbacks only get C data. You can access that data, if its in the same chunk of memory as the C type, since you can then do <code>container_of</code>.</p>
+<p>I've got <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v3-3/rust/kernel/sync/dma_fence.rs?ref_type=heads#L89">this</a> struct, on which you can <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v3-3/rust/kernel/sync/dma_fence.rs?ref_type=heads#L137">create</a> other structs which contain their own data with their own generic.</p>
+<p>Now what I would like to do is to get my <code>FenceCtx</code> struct</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">raw_fence_to_fctx</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">dma_fence</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">'</span><span class="na">a</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">opaque_fence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Opaque</span><span class="p">::</span><span class="n">cast_from</span><span class="p">(</span><span class="n">ptr</span><span class="p">);</span>
+
+<span class="w">            </span><span class="c1">// SAFETY: Safe due to the function's overall safety requirements.</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fence_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">crate</span><span class="p">::</span><span class="n">container_of</span><span class="o">!</span><span class="p">(</span><span class="n">opaque_fence</span><span class="p">,</span><span class="w"> </span><span class="n">Fence</span><span class="p">,</span><span class="w"> </span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fence_data_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">crate</span><span class="p">::</span><span class="n">container_of</span><span class="o">!</span><span class="p">(</span><span class="n">opaque_fence</span><span class="p">,</span><span class="w"> </span><span class="n">DriverFenceData</span><span class="o">&lt;</span><span class="n">F</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">inner</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fence_data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="o">*</span><span class="n">fence_data_ptr</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">            </span><span class="c1">// SAFETY: Safe due to the function's overall safety requirements.</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fctx</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="o">*</span><span class="n">fence_data</span><span class="p">.</span><span class="n">fctx</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">            </span><span class="n">fctx</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>What ultimately shall be done is:</p>
+<ol>
+<li>Cast / container_of  from a C <code>dma_fence</code> to a <code>Fence</code></li>
+<li>Cast / container_of from <code>Fence</code> to <code>DriverFenceData</code> – which depends on generic parameters</li>
+<li>Use the <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v3-3/rust/kernel/sync/dma_fence.rs?ref_type=heads#L271">rawptr</a> to access the FenceCtx, whose data I need</li>
+</ol>
+<p>IOW, I need access to the generic data type to do the cast.</p>
+<p>A <code>DmaFenceCtx</code> gets fully typed at creation. That works fine.</p>
+<p>The big question I now have is:<br>
+<strong>How can I obtain the data type from a C callback to do my cast / container_of?</strong></p>
+<p>It turns out it is strictly necessary to actually pass to each method the <code>self</code> parameter, which I ultimately cannot obtain from <code>extern "C" fn get_driver_name()</code></p>
+<p>How do I solve that problem idiomatically, where should I get the type information from?</p>
+
+
+
+<a name="587792945"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Where%20to%20get%20a%20generic%20type%20from%20for%20container_of%3F/near/587792945" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Where.20to.20get.20a.20generic.20type.20from.20for.20container_of.3F.html#587792945">(Apr 20 2026 at 15:13)</a>:</h4>
+<p>Mhhmm, forget about that, I think it actually <strong>does</strong> work as I intended and <code>Self</code> fully encodes the whole generic type; i.e., I wouldn't need a trait to generate generics</p>
+
+
+
+<a name="587792963"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20Where%20to%20get%20a%20generic%20type%20from%20for%20container_of%3F/near/587792963" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20Where.20to.20get.20a.20generic.20type.20from.20for.20container_of.3F.html#587792963">(Apr 20 2026 at 15:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,680 @@
+[
+    {
+        "content": "<p>Hi, I took <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span>'s branch <a href=\"https://github.com/wedsonaf/linux/tree/fs\">fs</a> and made an attempt to backport the file system abstractions on top of rust-next, <a href=\"https://github.com/ariel-miculas/linux/tree/rust-next-fs\">see rust-next-fs</a>. The idea was to see what the effort to integrate the filesystem abstractions would look like. The code works, although the commits are not as clean as they could have been (I started cherry picking some commits and then I switched to copying entire files, so it's a bit of a mix).<br>\nYou can see the differences <a href=\"https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:rust-next-fs\">here</a>. The missing pieces would be (sufficient for the <code>rust_fs.rs</code> sample, but not necessarily the minimal subset):</p>\n<ul>\n<li>the modules cred, delay, file, fs, fs/param, io_buffer, iov_iter, mm, pages, user_ptr</li>\n<li>macros: count_paren_items in <a href=\"http://driver.rs\">driver.rs</a>, from_kernel_result in <a href=\"http://error.rs\">error.rs</a>, offset_of/container_of in <a href=\"http://lib.rs\">lib.rs</a></li>\n<li>allocator_api in rust_allowed_features</li>\n<li>unstable features: associated_type_defaults, c_size_t, const_mut_refs, duration_constants</li>\n<li>some helper functions in rust/helpers.c</li>\n</ul>\n<p>Apart from changing PointerWrapper to ForeignOwnable I didn't encounter any notable challenge in backporting the code. Some parts of the code are still WIP, so probably it can't be backported as it is.</p>\n<p>My question is what would be the best approach to start integrating these missing modules into rust-next, with the long-term goal of having rust filesystem abstractions, and how could I contribute to this. Thanks</p>",
+        "id": 352349639,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1682359718
+    },
+    {
+        "content": "<p>Thanks for the hard work!</p>\n<p>I must defer the technical details to <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> , but a starting point to me would be creating a GitHub issue to tracking all the missing modules and clarifying the dependencies so that we know the order to upstream them. I'd assume some of them are trivial to just send out and some of them may need rework or redesign based on feedbacks, therefore tracking these is helpful.</p>\n<p>Take a quick look at your branch, there are a few places you may want to adopt the \"state-of-art coding guideline\"  ;-)</p>\n<ul>\n<li>Now since we have <code>uapi</code> crate, would it make sense to move these <a href=\"https://github.com/ariel-miculas/linux/blob/rust-next-fs/rust/kernel/file.rs#L26\">flags</a> to the <code>uapi</code> crate? There could be more needed to move.</li>\n<li>Compared to <code>UnsafeCell</code>, <code>Opaque</code> is preferred to wrap \"binding struct\" since the underlying data may be partially initialized by C side.</li>\n</ul>",
+        "id": 352361303,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1682363409
+    },
+    {
+        "content": "<p>Also it looks a good time to create a \"Filesystem\" channel, <span class=\"user-mention\" data-user-id=\"411490\">@Alex Gaynor</span> <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <span class=\"user-mention\" data-user-id=\"412316\">@bjorn3</span> ;-)</p>",
+        "id": 352361321,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1682363418
+    },
+    {
+        "content": "<p>This is very exciting. Your branch has a significant portion of the bindings that Rust binder depends on, so this would let us significantly reduce the length of the outstanding patch list for us.</p>",
+        "id": 352472590,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1682413300
+    },
+    {
+        "content": "<p>I've raised issue <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">1004</a></p>",
+        "id": 352577180,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1682437783
+    },
+    {
+        "content": "<p>Is there anything to contribute to this issue? I would appreciate a hint to get started.</p>",
+        "id": 356893312,
+        "sender_full_name": "Luca",
+        "timestamp": 1683617649
+    },
+    {
+        "content": "<p>Hey <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> , since there are people interested in helping out with this topic, does it make sense, as a starting point,  to begin upstreaming some of the modules that the filesystem abstractions depend on? Of course, taking into account the observations above from <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span>. Or do you have something else in mind?</p>",
+        "id": 357295443,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1683726094
+    },
+    {
+        "content": "<p>It depends on which modules they are (i.e. some of the bits in the original <code>rust</code> branch were not finished or polished enough), and we also try to have the original authors to submit the code they worked on if possible. Moreover, we can only upstream things that are expecting a user soon (though it does not need to be an immediate one), i.e. no dead code.</p>\n<p>Like <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> said, the best starting point is having a branch with the dependencies you need on top of the latest <code>rust-next</code> branch (ideally, with the proper attribution too, so that we can ping the relevant people).</p>\n<p>There is also the question of prioritization. When are you expecting/planning to upstream your filesystem?</p>",
+        "id": 357303462,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683727610
+    },
+    {
+        "content": "<p>I have already started a branch where I collect the missing dependencies, so it's not a blocker for me. <span class=\"user-mention\" data-user-id=\"615602\">@Luca</span> reached out to me asking if there's anything he can do to contribute to this issue and I pointed him to this zulip channel,  if there isn't anything at this moment, maybe someone can help him find something to work on.<br>\nRegarding an estimate for my filesystem, it's difficult to tell at this point since I'm still discovering missing pieces, but as soon as I have a proof-of-concept I'll post it here or on the mailing list.</p>",
+        "id": 357308203,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1683728326
+    },
+    {
+        "content": "<p>(the same applies to me, if there's anything I can do to contribute, I'm happy to help)</p>",
+        "id": 357308712,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1683728422
+    },
+    {
+        "content": "<p>Yeah, I looked at <code>rust-next-fs</code>, and it is a good start (modulo reorganizing things a bit, attribution, etc.).</p>\n<p>If you have time, it is likely a good idea to meet at some point to discuss upstreaming etc., like we do with Binder, the M1 GPU driver, the NVMe driver, etc.</p>",
+        "id": 357347550,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683735813
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"615602\">@Luca</span> Regarding contributing, we have some general ideas and guidelines at <a href=\"https://rust-for-linux.com/contributing\">https://rust-for-linux.com/contributing</a>.</p>",
+        "id": 357347815,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683735873
+    },
+    {
+        "content": "<p>are you referring to an in-person meeting? if so, are there any conferences that you're planning to attend where we could meet?</p>",
+        "id": 357405374,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1683753088
+    },
+    {
+        "content": "<p>I meant a remote call (though, of course, it would be great to meet in-person too at some point :)</p>",
+        "id": 357606462,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1683815414
+    },
+    {
+        "content": "<p>sounds good, I reckon I'll have something functional in a few weeks and we could schedule a call afterwards :)</p>",
+        "id": 357616130,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1683817208
+    },
+    {
+        "content": "<p>80 patches <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 365055208,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1686386877
+    },
+    {
+        "content": "<p>hey <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> , can we set up a meeting to discuss the next steps w.r.t. puzzlefs upstreaming?</p>",
+        "id": 365606278,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686584891
+    },
+    {
+        "content": "<p>what time (and day) will work for you?</p>",
+        "id": 365608469,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686585418
+    },
+    {
+        "content": "<p>from 7am to 4pm UTC, any day works</p>",
+        "id": 365609889,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686585713
+    },
+    {
+        "content": "<p>Probably later than 1pm then, so that people from the Americas may join?</p>",
+        "id": 365611042,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1686585908
+    },
+    {
+        "content": "<p>Yes, I think probably Wedson should join? Given his work on 9p</p>",
+        "id": 365611237,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686585953
+    },
+    {
+        "content": "<p>How about <time datetime=\"2023-06-14T13:00:00Z\">2023-06-14T06:00:00-07:00</time> ? <span class=\"user-group-mention\" data-user-group-id=\"436926\">@team</span></p>",
+        "id": 365612510,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686586193
+    },
+    {
+        "content": "<p>I think <a href=\"https://lore.kernel.org/rust-for-linux/20230609063118.24852-50-amiculas@cisco.com/\">this</a> patch is interesting from the filesystem abstraction point of view, highlighting where the current design needs to be improved (or maybe only my approach to it)</p>",
+        "id": 365617492,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686587312
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365612510\">said</a>:</p>\n<blockquote>\n<p>How about <time datetime=\"2023-06-14T13:00:00Z\">2023-06-14T06:00:00-07:00</time> ? <span class=\"user-group-mention silent\" data-user-group-id=\"436926\">team</span></p>\n</blockquote>\n<p>I’m tied up in an internal conference this week, but you guys should go ahead 👍</p>",
+        "id": 365638928,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1686592547
+    },
+    {
+        "content": "<p>We can delay it e.g. a week, there is no rush AFAIK.</p>",
+        "id": 365645799,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1686594295
+    },
+    {
+        "content": "<p>Yes, will that work for you <span class=\"user-mention\" data-user-id=\"607542\">@Ariel Miculas</span>? Say <time datetime=\"2023-06-21T13:00:00Z\">2023-06-21T06:00:00-07:00</time></p>",
+        "id": 365646403,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686594434
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365646403\">said</a>:</p>\n<blockquote>\n<p>Yes, will that work for you <span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span>? Say <time datetime=\"2023-06-21T13:00:00Z\">2023-06-21T06:00:00-07:00</time></p>\n</blockquote>\n<p>That works for me <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 365668060,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1686599402
+    },
+    {
+        "content": "<p>yes, it's fine</p>",
+        "id": 365761509,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686639854
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365761509\">said</a>:</p>\n<blockquote>\n<p>yes, it's fine</p>\n</blockquote>\n<p>Will you have an agenda for the meeting? Or less formal, just a list of things you would like to discuss.</p>",
+        "id": 365913494,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686671003
+    },
+    {
+        "content": "<p>FWIW, this is the hackmd group we use to share all the notes: <a href=\"https://hackmd.io/join/B1HCGFV7s\">https://hackmd.io/join/B1HCGFV7s</a></p>",
+        "id": 365914235,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686671147
+    },
+    {
+        "content": "<p>I would like to discuss: </p>\n<ul>\n<li>the plan to upstream the filesystem abstractions</li>\n<li>support for third-party crates in the kernel</li>\n<li>next steps towards upstreaming puzzlefs</li>\n</ul>",
+        "id": 365919047,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686672142
+    },
+    {
+        "content": "<p>Ah, you moved it to next week? In that case, I am also able to attend.</p>",
+        "id": 365919709,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1686672252
+    },
+    {
+        "content": "<p>I care about some of the filesystem abstractions too.</p>",
+        "id": 365919877,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1686672278
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/365919709\">said</a>:</p>\n<blockquote>\n<p>Ah, you moved it to next week? In that case, I am also able to attend.</p>\n</blockquote>\n<p>Yes, it's next week. Jun 21</p>",
+        "id": 365919927,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686672284
+    },
+    {
+        "content": "<p>maybe <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> could add some other topics, since he suggested the meeting; also, let me know if I should prepare something for this meeting, since I don't really know what to expect from it</p>",
+        "id": 365920082,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686672307
+    },
+    {
+        "content": "<p>So my original intention with the meeting was to discuss how to approach the RFC (perhaps doing an internal review first) and the upstreaming in general (e.g. what dependencies you needed). A fair amount of that is done already since the RFC is out, and the rest is basically the first/third points you listed above.</p>",
+        "id": 365923222,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1686672943
+    },
+    {
+        "content": "<p>We can also refine the issue: <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">https://github.com/Rust-for-Linux/linux/issues/1004</a> in the meeting.</p>",
+        "id": 365924572,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1686673237
+    },
+    {
+        "content": "<p>oh, I see, I skipped the internal review step, sorry about that</p>",
+        "id": 365926864,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1686673732
+    },
+    {
+        "content": "<p>No need to apologize! The step is optional, of course, and everyone is free to submit what they want. But it usually helps to iron out procedural details first, like the\"no Cc to fsdevel?\" point (which Christian was right to point out), as well as nit-cleanup and potentially other issues.</p>",
+        "id": 365941530,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1686677024
+    },
+    {
+        "content": "<p>It's still a good thing to have the meeting even though the RFC is out. Lots of things we can discuss, both technical and not.</p>",
+        "id": 366068354,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1686725767
+    },
+    {
+        "content": "<p>Definitely, I didn't mean to say otherwise. I meant that the topics I wanted to cover originally were already covered by Ariel's list, so I didn't have extra ones to add.</p>",
+        "id": 366086972,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1686730005
+    },
+    {
+        "content": "<p>Just a reminder: the meeting will be <time datetime=\"2023-06-21T13:00:00Z\">2023-06-21T06:00:00-07:00</time>.</p>",
+        "id": 367943032,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687270383
+    },
+    {
+        "content": "<p>do you have a link?</p>",
+        "id": 368228363,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1687352204
+    },
+    {
+        "content": "<p><a href=\"https://meet.jit.si/384382488443604\">Join video call.</a></p>",
+        "id": 368228408,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687352214
+    },
+    {
+        "content": "<p>Let's use this jitsi link ^</p>",
+        "id": 368228573,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687352244
+    },
+    {
+        "content": "<p>Hmm.. looks like hackmd has some fancy new feature? I cannot change the note titles. <span class=\"user-mention\" data-user-id=\"545090\">@Vincenzo Palazzo</span> do you happen to know why?</p>",
+        "id": 368228867,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687352305
+    },
+    {
+        "content": "<p><span class=\"user-group-mention\" data-user-group-id=\"436926\">@team</span> meeting time ;-)</p>",
+        "id": 368229500,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687352430
+    },
+    {
+        "content": "<p>Sorry, had to drop. Thanks for a good meeting <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 368253932,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1687357133
+    },
+    {
+        "content": "<p>is the chat from the meeting available or is it lost forever?</p>",
+        "id": 368290968,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1687363553
+    },
+    {
+        "content": "<p>jitsi doesn’t save the history</p>",
+        "id": 368301286,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687365755
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/368228867\">said</a>:</p>\n<blockquote>\n<p>Hmm.. looks like hackmd has some fancy new feature? I cannot change the note titles. <span class=\"user-mention silent\" data-user-id=\"545090\">Vincenzo Palazzo</span> do you happen to know why?</p>\n</blockquote>\n<p>no idea?</p>",
+        "id": 368315507,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1687368961
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"545090\">@Vincenzo Palazzo</span> We were wondering if it could be due to the permissions, i.e. does it allow you to change the titles? (since IIRC you were the admin)</p>",
+        "id": 368316863,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687369294
+    },
+    {
+        "content": "<p>let me check</p>",
+        "id": 368317259,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1687369381
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 368317362,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687369405
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/35136/JYX5MLAX3S3IXg5aweq1DWDM/Selection_010.png\">Selection_010.png</a></p>",
+        "id": 368317734,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1687369482
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/35136/bg4N5Z5C-9rEUO8LzTsyJ8Be/Selection_010.png\">Selection_010.png</a></p>",
+        "id": 368317778,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1687369496
+    },
+    {
+        "content": "<p>I also added you and <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> as admin</p>",
+        "id": 368318121,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1687369566
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 368318408,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1687369633
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 368318826,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1687369741
+    },
+    {
+        "content": "<p>I would like to send a v2 patch of the puzzlefs driver, let me know if you have any initial feedback: <a href=\"https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:puzzlefs_rfc\">https://github.com/Rust-for-Linux/linux/compare/rust-next...ariel-miculas:linux:puzzlefs_rfc</a><br>\nI've also created a branch with the required dependencies: <a href=\"https://github.com/ariel-miculas/linux/tree/puzzlefs_dependencies\">https://github.com/ariel-miculas/linux/tree/puzzlefs_dependencies</a> (which are also included in the previous branch), I will probably only send the commits between puzzlefs_dependencies..puzzlefs_rfc in the patch series</p>",
+        "id": 373241137,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1688742221
+    },
+    {
+        "content": "<p>Why does <a href=\"https://github.com/Rust-for-Linux/linux/commit/5f73e9d5c0e485438206bba4b0b22ba0ae084f5b\">this</a> still have \"WIP\" in its title? If some more work is required, please at least explain in the commit log.</p>",
+        "id": 373255644,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1688744818
+    },
+    {
+        "content": "<p>I just looked at a couple of commits from <a href=\"https://github.com/ariel-miculas/linux/compare/puzzlefs_dependencies...ariel-miculas:linux:puzzlefs_rfc\">https://github.com/ariel-miculas/linux/compare/puzzlefs_dependencies...ariel-miculas:linux:puzzlefs_rfc</a> and here are some notes:</p>\n<ul>\n<li>many <code>unsafe</code> blocks do not have a <code>SAFETY</code> comment.</li>\n<li>certain <code>unsafe</code> blocks are very big and contain multiple function calls making it unclear why all of them are OK and which are actually <code>unsafe</code>.</li>\n<li>some commits (e.g. <code>5fd466ec</code>) are very small and others are very big, I have no clue if it makes sense, since I am a novice when it comes to drivers, but it seems odd.</li>\n<li>certain things (for example the <code>Path</code> stuff) seems like it could use a better abstraction, since sometimes you use <code>&amp;CStr</code> instead, not sure if that is something we have to do.</li>\n</ul>\n<p>I think you can send it as an RFC, but it would be a good idea to state this in the cover letter.</p>",
+        "id": 373266156,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1688746610
+    },
+    {
+        "content": "<p>Yeah, I agree with <span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span>'s  and <span class=\"user-mention silent\" data-user-id=\"546447\">y86</span>, it may be a good idea to clean things a bit, especially around procedural matters.</p>",
+        "id": 373286507,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1688751360
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/373255644\">said</a>:</p>\n<blockquote>\n<p>Why does <a href=\"https://github.com/Rust-for-Linux/linux/commit/5f73e9d5c0e485438206bba4b0b22ba0ae084f5b\">this</a> still have \"WIP\" in its title? If some more work is required, please at least explain in the commit log.</p>\n</blockquote>\n<p>I just took it from Wedson and didn't want to modify it: <a href=\"https://github.com/wedsonaf/linux/commit/6633c50b345f388a07b4c551f752efe34c15c089\">https://github.com/wedsonaf/linux/commit/6633c50b345f388a07b4c551f752efe34c15c089</a><br>\nWhen I start upstreaming the dependencies I will write a commit message and try to get Wedson to add his signed-off-by</p>",
+        "id": 373859761,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1688975436
+    },
+    {
+        "content": "<p>I've reorganized the unsafe blocks to contain as little code as possible, added safety comments and also squashed my commits to avoid very small commits. I appreciate if anyone has some time to have another look.</p>",
+        "id": 374268329,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1689082285
+    },
+    {
+        "content": "<p>For wrapping a C type structure:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(transparent)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">INode</span><span class=\"p\">(</span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"n\">UnsafeCell</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span>::<span class=\"n\">inode</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>we now prefer to using <code>Opaque</code>, since the underlying C struct may not be fully initialized from Rust's viewpoint. </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(transparent)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">INode</span><span class=\"p\">(</span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"n\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span>::<span class=\"n\">inode</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 374663386,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1689176276
+    },
+    {
+        "content": "<p>thanks, I've changed this in <code>file.rs</code>, seems like I missed this in <code>fs.rs</code></p>",
+        "id": 374664285,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1689176426
+    },
+    {
+        "content": "<p>For <a href=\"https://github.com/Rust-for-Linux/linux/commit/7e100f72e645e847b4551010a36fc8d79afcc568#diff-aa8f23b9e398ceb0f7cf3a26a4a7a81bdd4b9f015e3471c84c067880ac2fa8c9R339\">this</a>, we now have <code>from_result</code> (in <code>rust/kernel/error.rs</code>) now. It's not a macro, so you will \"manually\" pass a closure to it.</p>",
+        "id": 374670920,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1689177659
+    },
+    {
+        "content": "<p>seems like I'm missing a default implementation for Opaque&lt;T&gt;</p>",
+        "id": 374677409,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1689178915
+    },
+    {
+        "content": "<p>thanks for the review <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> , I pushed a new version which addresses your comments</p>",
+        "id": 374929223,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1689254391
+    },
+    {
+        "content": "<p>Hey there,<br>\ntogether with @jonas.dittrich@student.hpi.de I am working on a fs driver. Therefore we are interested in PR <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">#1004</a>. We do currently use some abstractions and are therefore interested getting <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">#1004</a> merged. We are also working on some new or improoved abstractions for adresspaceoperations and operations and more. Any chance for upstreaming?</p>\n<p>Best<br>\nLuca</p>",
+        "id": 376299185,
+        "sender_full_name": "Luca",
+        "timestamp": 1689676794
+    },
+    {
+        "content": "<blockquote>\n<p>Any chance for upstreaming?</p>\n</blockquote>\n<p>If you mean for filesystems support in general, there are several parties that would like to have filesystem Rust abstractions in the kernel eventually, so we are trying to make the case for them. Thus it would be useful to know any details on your FS drivers / use case that you may be able to share.</p>",
+        "id": 376398146,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1689695499
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/376398146\">schrieb</a>:</p>\n<blockquote>\n<blockquote>\n<p>Any chance for upstreaming?</p>\n</blockquote>\n<p>If you mean for filesystems support in general, there are several parties that would like to have filesystem Rust abstractions in the kernel eventually, so we are trying to make the case for them. Thus it would be useful to know any details on your FS drivers / use case that you may be able to share.</p>\n</blockquote>\n<p>We are reimplementing ramfs in rust for educational purposes. Therefore we are interested in more vtable structures which are way more easy to understand than some c like black magic macros ;) in the following days we can provide some code if we were able to order it better.</p>",
+        "id": 376776217,
+        "sender_full_name": "Luca",
+        "timestamp": 1689796235
+    },
+    {
+        "content": "<p>Hi there,<br>\nI'm considering developing a virtual file system using Rust. In the first phase, I plan to create a simple wrapper for the VFS, similar to wrapfs, to assess the feasibility of using Rust for file system development. In the second phase, I plan to add more functionality.<br>\nWhile reviewing previous discussions, I noticed that <span class=\"user-mention\" data-user-id=\"607542\">@Ariel Miculas</span>  has significantly improved the abstraction of the VFS. Therefore, I would like to ask if I can begin development based on his branch now ？</p>",
+        "id": 376882319,
+        "sender_full_name": "Xie Minsheng",
+        "timestamp": 1689840602
+    },
+    {
+        "content": "<p>Most of the VFS abstractions come from Wedson's <a href=\"https://github.com/wedsonaf/linux/tree/fs\">branch</a> which I have just rebased on top of rust-next. There's <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">an open issue</a> regarding upstreaming these filesystem abstractions, but it's not clear yet how we will proceed, since the filesystem maintainers didn't express their opinion on this issue yet. I plan on sending a v2 patch series for puzzlefs next week, maybe this will restart the discussions.</p>",
+        "id": 376900739,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1689844342
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/376900739\">said</a>:</p>\n<blockquote>\n<p>Most of the VFS abstractions come from Wedson's <a href=\"https://github.com/wedsonaf/linux/tree/fs\">branch</a> which I have just rebased on top of rust-next. There's <a href=\"https://github.com/Rust-for-Linux/linux/issues/1004\">an open issue</a> regarding upstreaming these filesystem abstractions, but it's not clear yet how we will proceed, since the filesystem maintainers didn't express their opinion on this issue yet. I plan on sending a v2 patch series for puzzlefs next week, maybe this will restart the discussions.</p>\n</blockquote>\n<p>Cool !  I think it's enough for me to start working now. I will try to develop on the puzzlefs_dependencies branch that you just published. Thank you !</p>",
+        "id": 376904893,
+        "sender_full_name": "Xie Minsheng",
+        "timestamp": 1689845087
+    },
+    {
+        "content": "<p>I've added <a href=\"https://github.com/ariel-miculas/linux/commit/9efc2d4fffdd5b709aaf659e2949bed244e9b78f\">new functionality</a> to puzzlefs and the filesystem abstractions, now I'm able to implement the functionality required for iterating directories and looking up a directory entry (without inserting all the directory entries into the dcache when initializing the filesystem, as it was previously done). Feedback is welcome.</p>",
+        "id": 382713828,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1691429689
+    },
+    {
+        "content": "<p>Looks like <code>DirContext::advance_pos</code> should take a <code>&amp;mut self</code> instead of <code>&amp;self</code>?</p>",
+        "id": 382716057,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1691430275
+    },
+    {
+        "content": "<p>indeed, I've missed that, thanks</p>",
+        "id": 382717684,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1691430658
+    },
+    {
+        "content": "<p>A <a href=\"https://github.com/ariel-miculas/linux/tree/puzzlefs-ro-fs\">new version of puzzlefs</a> is available, based on the <a href=\"https://github.com/wedsonaf/linux/commits/ro-fs\">read-only filesystem abstraction branch</a> developed by Wedson. As always, feedback is welcome!</p>",
+        "id": 389163465,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1693911973
+    },
+    {
+        "content": "<p>serialization framework is so big, is it proper to upstream this code? Does kernel have a common serialization framework currently?</p>",
+        "id": 389810923,
+        "sender_full_name": "Baul (Jianguo Bao)",
+        "timestamp": 1694150042
+    },
+    {
+        "content": "<p>I'm not aware of any common serialization framework in the kernel. <code>capnproto</code> is only big because I've included the entire upstream code, but there's a lot of code which depends on <code>std</code>/<code>alloc</code> support which isn't used in the kernel (e.g. it's under <code>#[cfg(feature = \"alloc\")]</code>).<br>\nThere will be a discussion about third-party crate support (such as Cap'n Proto) at Kangrejos and then probably at Linux Plumbers Conference. Upstreaming depends on the maintainers of fs-devel, you can read the kernel threads <a href=\"https://lore.kernel.org/rust-for-linux/ZIO%2FOqxmFkTFzyDh@moria.home.lan/T/#t\">v1</a> and <a href=\"https://lore.kernel.org/all/20230726164535.230515-1-amiculas@cisco.com/\">v2</a> for context. I'm also tracking the puzzlefs driver development in <a href=\"https://github.com/project-machine/puzzlefs/issues/78\">this github issue</a>.</p>",
+        "id": 389828576,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1694159309
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/389828576\">said</a>:</p>\n<blockquote>\n<p>I'm not aware of any common serialization framework in the kernel. <code>capnproto</code> is only big because I've included the entire upstream code, but there's a lot of code which depends on <code>std</code>/<code>alloc</code> support which isn't used in the kernel (e.g. it's under <code>#[cfg(feature = \"alloc\")]</code>).<br>\nThere will be a discussion about third-party crate support (such as Cap'n Proto) at Kangrejos and then probably at Linux Plumbers Conference. Upstreaming depends on the maintainers of fs-devel, you can read the kernel threads <a href=\"https://lore.kernel.org/rust-for-linux/ZIO%2FOqxmFkTFzyDh@moria.home.lan/T/#t\">v1</a> and <a href=\"https://lore.kernel.org/all/20230726164535.230515-1-amiculas@cisco.com/\">v2</a> for context. I'm also tracking the puzzlefs driver development in <a href=\"https://github.com/project-machine/puzzlefs/issues/78\">this github issue</a>.</p>\n</blockquote>\n<p>is there still interest in this?  I see these posts are very old, but I would like to get into this area.</p>",
+        "id": 415977913,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1705481255
+    },
+    {
+        "content": "<p>The latest development wrt the filesystem abstractions is <a href=\"https://lwn.net/ml/linux-fsdevel/20231018122518.128049-1-wedsonaf@gmail.com/\">this patch series</a>. Or are you asking about PuzzleFS in particular?</p>",
+        "id": 415978664,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705481515
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/415978664\">said</a>:</p>\n<blockquote>\n<p>The latest development wrt the filesystem abstractions is <a href=\"https://lwn.net/ml/linux-fsdevel/20231018122518.128049-1-wedsonaf@gmail.com/\">this patch series</a>. Or are you asking about PuzzleFS in particular?</p>\n</blockquote>\n<p>No, but it seems like theres a lot more done than I expected. Is there a way to see if this got merged?</p>",
+        "id": 415979928,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1705481983
+    },
+    {
+        "content": "<p>most likely it wasn't merged, based on the recent discussions, e.g. <a href=\"https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/\">https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/</a></p>",
+        "id": 415980426,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1705482138
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607542\">Ariel Miculas</span> <a href=\"#narrow/stream/384413-Filesystems/topic/Filesystem.20abstractions/near/415980426\">said</a>:</p>\n<blockquote>\n<p>most likely it wasn't merged, based on the recent discussions, e.g. <a href=\"https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/\">https://lwn.net/ml/linux-fsdevel/ZZWhQGkl0xPiBD5/@casper.infradead.org/</a></p>\n</blockquote>\n<p>Maybe I should subscribe to the fs mailing list to, but it seems good progress is being made by <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span>.</p>",
+        "id": 416091588,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1705515308
+    },
+    {
+        "content": "<p>I have rebased <a href=\"https://github.com/ariel-miculas/linux/tree/puzzlefs\">puzzlefs</a> to use Wedson's <a href=\"https://github.com/wedsonaf/linux/tree/ext2fs\">latest filesystem abstractions</a>, I would like some feedback especially on <a href=\"https://github.com/ariel-miculas/linux/commit/17e6cb07679248f49c3ab2d1fe0e487a8f099774\">this commit</a> which implements the listing of extended attributes.<br>\n<span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> , what are your plans wrt upstreaming your latest version of abstractions?</p>",
+        "id": 423677638,
+        "sender_full_name": "Ariel Miculas",
+        "timestamp": 1709060851
+    },
+    {
+        "content": "<p>A few weeks ago at the RFL meeting I shared some Rust debugfs wrappers I started working on for bcachefs.<br>\nI wanted to ask about what I should expect for getting those ready to submit to the mailing lists.</p>\n<p>Currently the debugfs wrappers do not use the VFS abstractions, but use bindings::file_operations directly.<br>\nI was wondering if it is suitable to send these patches in that form or if using the VFS abstractions should<br>\nbe considered a requirement for submitting this debugfs code.</p>\n<p>A related question is where in the kernel tree to store this. I currently have it under rust/kernel/.<br>\nLong term I would think that once the debugfs abstractions are sufficiently general they will live under fs/debugfs,<br>\nbut they likely aren't there yet (in particular using the Rust VFS abstractions is likely a prerequisite for that).<br>\nKent also suggested submitting the debugfs Rust code under fs/bcachefs/ given that it is still a WIP interface.<br>\nWould this be suitable for staging purposes?</p>\n<p>Here is the link to the patches [1]. This is still a work in progress at this point but I hope to get them ready<br>\nfor submission soon based on the feedback to these questions. It hasn't yet been rebased on the latest rust-next (the alloc crate changes in particular) but that is on the to-do list.</p>\n<p>[1] <a href=\"https://github.com/bertschingert/bcachefs/commits/bcachefs-rust-debugfs-testing/\">https://github.com/bertschingert/bcachefs/commits/bcachefs-rust-debugfs-testing/</a></p>",
+        "id": 434869651,
+        "sender_full_name": "Thomas Bertschinger",
+        "timestamp": 1713829381
+    },
+    {
+        "content": "<p>Hey Thomas, sorry for the late reply. I talked about this briefly with <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> a few days ago.</p>\n<p>One quick note on the paths: <code>rust/kernel/</code> is the current place for abstractions, but eventually the code will be moved into each subsystem when we split the <code>kernel</code> crate. So whether it is in <code>rust/kernel/</code> or not is not really important (regarding the \"WIP\" status).</p>\n<p>Now, if you think upstreaming without the VFS abstractions is the only sensible way to bootstrap the effort, then as long as the code is properly marked as WIP/staging and Kent and other FS maintainers are happy with that approach, it should be fine. However, I would say it should be made very clear in the code/docs/... that the goal is to eventually use proper abstractions etc.</p>\n<p>One way to do that would be putting the \"staging\" marker directly in the path, like in <code>drivers/staging/</code>. Then essentially you have your staging area.</p>\n<p>So, in summary: it is not what we would recommend, but it may be fine if you can justify it, other FS maintainers agree, you commit to eventually use proper abstractions and you are happy tagging it as <code>fs/staging/</code> or similar meanwhile. In other words, what we are looking for is that subsystem maintainers are aware that the goal is to have the abstractions in place and used, but exceptions sometimes need to be made. :)</p>",
+        "id": 437167467,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1714947535
+    },
+    {
+        "content": "<p>Hi everyone, so i'm a kernel newcomer who plans to port the current C implementation of EROFS using Rust as my beginner project with my mentor. I've noticed that the former VFS patches V2 in May when i apply my project  and i haven't seen any updates since. Our current plan though is still to keep the rust code inside the fs/erofs directory and use the C binding since according to the most recent mailing list discussion it is rejected but my optimal and original plan is to use this vfs abstraction because it fits into the current C source code logic pretty well. Is the current patch-set in the mailing list up-to date or are there any more updates based on that for me to track on? Thanks.</p>",
+        "id": 451831408,
+        "sender_full_name": "Yiyang Wu",
+        "timestamp": 1721154533
+    },
+    {
+        "content": "<p>Hi, I'm new to kernel development and have been working with the abstractions as part of a university project [0]. I'm thinking about (re)submitting parts of the abstraction patches. If you're also interested in that and/or there are any new developments, I'd love to hear from you!<br>\n[0] <a href=\"https://github.com/fyrk/linux\">https://github.com/fyrk/linux</a></p>",
+        "id": 493632347,
+        "sender_full_name": "Flora R.",
+        "timestamp": 1736874871
+    },
+    {
+        "content": "<p>Hi all, I’m new to Kernel development (meaning I have zero experience) and same for development of a file system. However, I have an idea for a new file system that has Cybersecurity features built-in. The main Cybersecurity feature that I’m designing in is ransomware detection, process quarantining, and affected file rollbacks. It’s designed to be a Copy-on-Write system to help with the versioning to do the file rollbacks. I want it to me multi-threaded as well for efficiency. Check out the GitHub repo README: <a href=\"https://github.com/bhh32/cyber-fs\">https://github.com/bhh32/cyber-fs</a> for the main design features. I just need help getting started figuring out how to do the Kernel integrations.</p>",
+        "id": 506219902,
+        "sender_full_name": "Bryan",
+        "timestamp": 1742233023
+    },
+    {
+        "content": "<p>Has the development of VFS abstractions in Rust been abandoned since Wedson left or is there some branch where there is active development on the abstractions? I'm porting a simple fs to Rust for my master thesis and I would love to be working on the most up-to-date branch and even help with contributing to Rust VFS abstractions.</p>",
+        "id": 555699378,
+        "sender_full_name": "lsig",
+        "timestamp": 1763167103
+    },
+    {
+        "content": "<p>Cc <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> who I think wanted to eventually work in that space.</p>",
+        "id": 556633589,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1763239342
+    },
+    {
+        "content": "<p>As far as I know, the most recent stuff is what Wesson did with ext2. I am planning to pick that up but I was not able to yet. Let me know if you start rebasing on upstream, that would save me a ton of work :)</p>",
+        "id": 556634150,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1763239736
+    },
+    {
+        "content": "<p>I'm working of a fairly new rust-next branch kernel v6.18, and trying to port some of wedsons work  from the vfs-v2 branch. Do you know how wedson got around the orphan rule. I'm trying to define a module_fs! macro but since the Module trait is not defined in my toy fs crate it won't compile</p>",
+        "id": 556634910,
+        "sender_full_name": "lsig",
+        "timestamp": 1763240305
+    },
+    {
+        "content": "<p>I didn't look. Maybe he just put ext2 in the kernel crate and call it a day?</p>",
+        "id": 556635894,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1763241051
+    },
+    {
+        "content": "<p>I don't think so, because both ext2 and tarfs are defined under fs/{tarfs|rust-ext2} while the macro and fs module type are defined in rust/kernel/fs.rs. I'll figure it out. For rebasing upstream, whats the best way to go about it, I'm starting very slow, just getting the minimum amount of code to register the filesystem, then mount, read sb and first inode, and going from there.</p>",
+        "id": 556636659,
+        "sender_full_name": "lsig",
+        "timestamp": 1763241789
+    },
+    {
+        "content": "<p>That is probably a good way to properly understand the code. But it is maybe faster to just rebase all of it.</p>",
+        "id": 556636811,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1763241941
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> I'm almost finished building a simple write based file system with (mostly) wedsons VFS abstractions. Some abstractions might be missing, do you want me to open a PR or do you want to take a look first?</p>\n<p>the fs is located in fs/rustezfs</p>\n<p><a href=\"https://github.com/lsig/linux-rustfs\">https://github.com/lsig/linux-rustfs</a></p>",
+        "id": 563649812,
+        "sender_full_name": "lsig",
+        "timestamp": 1765664349
+    },
+    {
+        "content": "<p>A PR is good <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span> I'll take a look.</p>",
+        "id": 563651199,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765666073
+    },
+    {
+        "content": "<p>Are you familiar with how to use the mailing lists?</p>",
+        "id": 563651220,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765666102
+    },
+    {
+        "content": "<p>no, but i'm guessing there are some docs I can follow (if you have link that would be great), so I shouldn't open a PR on the Rust-for-linux github.</p>",
+        "id": 563651832,
+        "sender_full_name": "lsig",
+        "timestamp": 1765667099
+    },
+    {
+        "content": "<p>A PR is ok, if you want some feedback before sending to the list.</p>",
+        "id": 563652796,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765668582
+    },
+    {
+        "content": "<p><a href=\"https://docs.kernel.org/process/submitting-patches.html\">https://docs.kernel.org/process/submitting-patches.html</a></p>",
+        "id": 563652816,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765668624
+    },
+    {
+        "content": "<p>I can help if you have any questions</p>",
+        "id": 563652831,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1765668661
+    },
+    {
+        "content": "<p>I need to make CLIPPY happy (mostly safety comments) and then i'll submit a PR in the next couple of days to get your feedback, thanks for the help.</p>",
+        "id": 563653670,
+        "sender_full_name": "lsig",
+        "timestamp": 1765670132
+    },
+    {
+        "content": "<p>Did you queue the PR? Is it <a href=\"https://github.com/Rust-for-Linux/linux/pull/1214\">this one</a>?</p>",
+        "id": 566335699,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1767614122
+    },
+    {
+        "content": "<p>Hey, just came back from vacation and cleaned up most of the clippy warnings. Lined up the PR and cc'd you on github. <a href=\"https://github.com/Rust-for-Linux/linux/pull/1222\">https://github.com/Rust-for-Linux/linux/pull/1222</a>. There are some conflicts but hopefully nothing major.</p>",
+        "id": 572009871,
+        "sender_full_name": "lsig",
+        "timestamp": 1770239351
+    },
+    {
+        "content": "<p>Thanks, I'll take a look as soon as possible.</p>",
+        "id": 572221110,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770315873
+    },
+    {
+        "content": "<p>Hi, we are a small student team at a university and would like to work on the filesystem abstractions. Is there a concrete topic we could help you with? Otherwise, we would continue working on our filesystem abstractions and a fat driver. Do you have a recommendation?</p>",
+        "id": 598091036,
+        "sender_full_name": "Timo Neyer",
+        "timestamp": 1779889167
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/384413-Filesystems/topic/Filesystem.20abstractions/near/572221110\">said</a>:</p>\n<blockquote>\n<p>Thanks, I'll take a look as soon as possible.</p>\n</blockquote>\n<p>Hi, sorry I was not able to look into this. My work assignments has slightly shifted, and file systems are not currently on my radar for the immediate future.</p>",
+        "id": 598288804,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1779962391
+    }
+]

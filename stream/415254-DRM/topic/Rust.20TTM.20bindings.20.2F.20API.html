@@ -1,0 +1,53 @@
+<html>
+<head><meta charset="utf-8"><title>Rust TTM bindings / API · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Rust.20TTM.20bindings.20.2F.20API.html">Rust TTM bindings / API</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="577661629"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Rust%20TTM%20bindings%20/%20API/near/577661629" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eliot Courtney <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Rust.20TTM.20bindings.20.2F.20API.html#577661629">(Mar 06 2026 at 06:21)</a>:</h4>
+<p>I think we will want TTM rust bindings (and/or some higher level API) at some point, for one to use in nova. Has there been any discussion on this? I think Lyude is working on GEM bindings, wonder if there is work planned or if it hasn't been looked at yet. Thanks all~</p>
+
+
+
+<a name="578131022"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Rust%20TTM%20bindings%20/%20API/near/578131022" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Rust.20TTM.20bindings.20.2F.20API.html#578131022">(Mar 09 2026 at 11:23)</a>:</h4>
+<p>I don’t think anyone has looked into this yet</p>
+
+
+
+<a name="578540002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Rust%20TTM%20bindings%20/%20API/near/578540002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eliot Courtney <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Rust.20TTM.20bindings.20.2F.20API.html#578540002">(Mar 11 2026 at 03:49)</a>:</h4>
+<p>Alright, if no one is looking at this now, I will start looking at the TTM API and coming up with a design for rust bindings / API. Will update this thread when I have some design ideas.</p>
+
+
+
+<a name="591372105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Rust%20TTM%20bindings%20/%20API/near/591372105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eliot Courtney <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Rust.20TTM.20bindings.20.2F.20API.html#591372105">(Apr 28 2026 at 12:49)</a>:</h4>
+<p>I’ve had a little bit of time to look at this so I wanted to post what I have so far to make sure I’m not going down a bad path. I was looking at the GEM bindings and have mostly proceeded according to patterns established there - in particular, I looked a lot at the GEM shmem “backend” for GEM. What I have so far is some basic set of types for ttm_device, ttm_buffer_object, and ttm_tt. I’ve made a few simplifying assumptions, like: </p>
+<ul>
+<li>Assuming a 1:1 correspondence between TTM driver and DRM driver (implemented by same object)</li>
+<li>Must select one kind of GEM+TTM object as the user facing GEM object (must specify to DRM driver trait)</li>
+<li>Use one type of DriverBufferObject per driver, since we need to be able to recover the type in callbacks (either BufferObject&lt;T::BufferObject&gt; or a transfer buffer object - drivers would have to use an internal enum / inner sort of thing to have multiple BO types)</li>
+</ul>
+<p>I’m trying to keep the following things:</p>
+<ul>
+<li>Keep object lifecycle handled within framework code.</li>
+<li>Impossible to misuse from drivers</li>
+<li>Encode state of objects using the type system, e.g. try to represent reserved and pinned for buffer objects using the type system. There’s a bunch of methods that can only be called for reserved BOs and we should make it structurally impossible to call them for non-reserved BOs.</li>
+</ul>
+<p>You can see the (very rough) WIP code here: <a href="https://github.com/Edgeworth/linux/commits/ttm-prototype/">https://github.com/Edgeworth/linux/commits/ttm-prototype/</a> . I talk about this later, but I think there are some directional problems here that need drm::Device to have a lifetime to solve in a tractable way.</p>
+<p>Essentially it works similarly to the gem shmem bindings in that it defines a struct which embeds driver specific data and the gem+ttm object. There’s a “DriverTTM” trait which groups together the set of types a driver wants to use for ttm (e.g. the buffer object type, the tt type). There is some difficulty with the lifetimes and initialization states, as some C methods need cleanup if the initialization fail, and some don’t. So the bindings need to be very careful with e.g. putting deinit in Drop. Objects can also be used in a partially initialized state - I’ve tried to formalise this with “InitRef”.</p>
+<p>One other thing I noticed is there doesn’t appear to be anything preventing a gem::Object from outliving the drm::Device, and it has a public safe method to create a reference to its drm::Device, which seems unsound to me (see <code>gem_object_mints_device_ref_after_device_free</code> test demonstrating this). So I suppose for this kind of issue we either need to ref drm::Device via ARef, or hold a lifetime. ttm::BufferObject has to deal with this same issue.</p>
+<p>As an experiment, I added a <code>DeferredARef</code> of drm::Device in ttm::BufferObject for this reason, but it means we need to be careful about cycles (i.e. we can’t store an ARef to drm::Device inside ttm::Device, since the natural location that drivers could store ttm::Device in inside drm::Device::Data). It’s unsound with a regular ARef because ttm’s delayed BO release could cause drm::Device+ttm::Device to be freed while cleanup for them is already running. Instead, <code>DeferredARef</code> defers dropping an ARef until later using workqueues.</p>
+<p>If we have rust lifetime scoped drm::Devices using the ForLt stuff that Danilo and Gary worked on then we can avoid this mess and also fix gem::Object by making it not outlive the drm::Device lifetime. So we would have ttm::BufferObject carry a &amp;‘drm drm::Device, where that lifetime represents the actual lifetime of the drm Device (not hardware device), then we don’t need to worry about it outliving drm::Device or it causing drm::Device to be destroyed - we just need to ensure that the C side doesn’t hold onto those objects for longer than the ‘drm lifetime. I feel it’s going to be very complex without having a lifetime’d drm::Device. <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> are you looking at this already (w.r.t. extending ForLt stuff to drm::Device)?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,360 @@
+<html>
+<head><meta charset="utf-8"><title>Discussion on tyr issue #62 · Tyr · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/index.html">Tyr</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html">Discussion on tyr issue #62</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="571339266"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571339266" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571339266">(Feb 02 2026 at 03:23)</a>:</h4>
+<p><a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/62">https://gitlab.freedesktop.org/panfrost/linux/-/issues/62</a></p>
+<p>The reason glmark2 fails with "tyr: group_submit: invalid address space" when multiple groups share the same VM is:</p>
+<ul>
+<li>When one of those groups is unbound, unbind_vm is called and vm.address_space is set to None.</li>
+<li>When another group that shares the same VM later calls group_submit, sched.bind sees that the group is already bound and skips calling bind_group (and thus bind_vm). Later, when sched.submit runs, it reports "invalid address space" because the VM no longer has an address space assigned.</li>
+</ul>
+
+
+
+<a name="571339418"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571339418" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571339418">(Feb 02 2026 at 03:24)</a>:</h4>
+<p>I added logic in sched.bind: when the group is already bound but the VM’s address space is None, I call bind_vm again. With this change, glmark2 runs for a while (I can see the spinning horse), then exits abnormally. If I run glmark2 again, ioctl(group_submit) returns EBUSY.</p>
+<p>From debugging, it looks like the address space (AS) is being exhausted.</p>
+
+
+
+<a name="571339943"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571339943" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571339943">(Feb 02 2026 at 03:30)</a>:</h4>
+<p>I looked at panthor’s implementation: it has a VM LRU reclaim path. Tyr appears to have something similar—VM reclaim depends on the group being considered idle—but mark_group_idle is never actually called, so VM reclaim never runs. I’m unsure how to fix this properly. <span class="user-mention" data-user-id="582628">@Daniel Almeida</span></p>
+
+
+
+<a name="571709125"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571709125" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571709125">(Feb 03 2026 at 16:34)</a>:</h4>
+<p>I can't speak for the tyr-mini-demo branch, but this is a problem we knew we had for CSG slots (FW slots used to schedule GPU contexts, AKA groups). We're currently working on a generic solution to address the problem for both CSG and AS slots, but we're nowhere near to have this solution ported to the tyr-mini-demo branch, because there's a lot of other changes we've done along the way.</p>
+<p>If you're interested, those changes are being discussed here <a href="https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56</a></p>
+
+
+
+<a name="571709767"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571709767" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571709767">(Feb 03 2026 at 16:36)</a>:</h4>
+<p><span class="user-mention" data-user-id="1018855">@Alvin Sun</span> this is simply not implemented.</p>
+<p><span class="user-mention" data-user-id="891405">@Andrew Ballance</span> you recently pushed some software scheduler changes, can you sync with Alvin on whether you have solved this particular problem? He is trying to fix issues with glmark2 in general</p>
+
+
+
+<a name="571752162"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571752162" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andrew Ballance <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571752162">(Feb 03 2026 at 20:05)</a>:</h4>
+<p>I had a similar problem when testing with the panthor_sched igt tests which also has multiple groups share a single vm. I fixed it by adding a refcount to each vm. the refcount is incremented in bind_vm and decremented in unbind_vm. the vm is only actually bound/unbound when the refcount is 0. This should fix the issue but I am unable to test glmark2 because I am currently away from my dev board.</p>
+
+
+
+<a name="571826453"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571826453" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571826453">(Feb 04 2026 at 06:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="891405">Andrew Ballance</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571752162">said</a>:</p>
+<blockquote>
+<p>I had a similar problem when testing with the panthor_sched igt tests which also has multiple groups share a single vm. I fixed it by adding a refcount to each vm. the refcount is incremented in bind_vm and decremented in unbind_vm. the vm is only actually bound/unbound when the refcount is 0. This should fix the issue but I am unable to test glmark2 because I am currently away from my dev board.</p>
+</blockquote>
+<p>Without address-space reclaim, adding reference counting to Vm has let glmark run further, and glmark2 can now be run repeatedly. A new problem has appeared: with texture-filter=mipmap, the drm_panthor_tiler_heap_create ioctl returns EBUSY. I’ll keep looking into the cause.</p>
+
+
+
+<a name="571829966"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571829966" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571829966">(Feb 04 2026 at 07:03)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571709125">said</a>:</p>
+<blockquote>
+<p>I can't speak for the tyr-mini-demo branch, but this is a problem we knew we had for CSG slots (FW slots used to schedule GPU contexts, AKA groups). We're currently working on a generic solution to address the problem for both CSG and AS slots, but we're nowhere near to have this solution ported to the tyr-mini-demo branch, because there's a lot of other changes we've done along the way.</p>
+<p>If you're interested, those changes are being discussed here <a href="https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56">https://gitlab.freedesktop.org/panfrost/linux/-/merge_requests/56</a></p>
+</blockquote>
+<p>Thanks, I’ll go through those commits. One more thing: which branch should I work on—tyr-mini-demo or tyr-dev (the latter seems to be the latest)?</p>
+
+
+
+<a name="571837429"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571837429" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571837429">(Feb 04 2026 at 07:55)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1018855">Alvin Sun</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571826453">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="891405">Andrew Ballance</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571752162">said</a>:</p>
+<blockquote>
+<p>I had a similar problem when testing with the panthor_sched igt tests which also has multiple groups share a single vm. I fixed it by adding a refcount to each vm. the refcount is incremented in bind_vm and decremented in unbind_vm. the vm is only actually bound/unbound when the refcount is 0. This should fix the issue but I am unable to test glmark2 because I am currently away from my dev board.</p>
+</blockquote>
+<p>Without address-space reclaim, adding reference counting to Vm has let glmark run further, and glmark2 can now be run repeatedly. A new problem has appeared: with texture-filter=mipmap, the drm_panthor_tiler_heap_create ioctl returns EBUSY. I’ll keep looking into the cause.</p>
+</blockquote>
+<div class="codehilite" data-code-language="Bash Session"><pre><span></span><code><span class="go">[   85.388347] tyr: Binding kernel GEM object at VA range 0x80000f079000-0x80000f879000 (size: 0x800000) for VM 4</span>
+<span class="go">[   85.393472] tyr: mapping 8388608 bytes, iova: 0x80000f079000, prot 15</span>
+<span class="go">[   85.394783] tyr: Allocating heap chunk for context</span>
+<span class="go">[   85.395203] tyr: new_kernel_object: failed to allocate kernel range: EBUSY   // alloc_kernel_range return EBUSY</span>
+</code></pre></div>
+
+
+
+<a name="571848794"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571848794" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571848794">(Feb 04 2026 at 08:50)</a>:</h4>
+<p>Following the panthor C driver’s VA layout, when the VA range is larger than 4GB the user and kernel regions are each set to full_va_range/2. The glmark mipmap issue is fixed, and I’m now trying to run the full glmark test.</p>
+
+
+
+<a name="571850590"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571850590" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571850590">(Feb 04 2026 at 08:56)</a>:</h4>
+<blockquote>
+<p>One more thing: which branch should I work on—tyr-mini-demo or tyr-dev (the latter seems to be the latest)?</p>
+</blockquote>
+<p>I would say, tyr-for-upstream even. Long story short, we've moved our focus towards upstreaming since last December. This means tyr-mini-demo stays what the branch says it is: a demo to show that having a rust kernel driver for Mali GPUs is possible, but it also means it's a dead end in the long run. Our upstreaming effort is not just about picking bits and pieces from this branch, it also involves</p>
+<ul>
+<li>using generic abstractions provided by others (JobQueue to replace drm_sched, new version of GpuVm, ...)</li>
+<li>redesigning the components when it makes sense to overcome the limitations/issues seen while working on the demo</li>
+<li>revisiting the ownership model</li>
+<li>revisiting the locking (fine grained locking as opposed to big locks protecting entire components)</li>
+</ul>
+<p>We had a quick chat with <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> and <span class="user-mention" data-user-id="981233">@Deborah Brouwer</span> yesterday, and we think it'd be unfair to have you and <span class="user-mention" data-user-id="891405">@Andrew Ballance</span>  work on things that will either be dropped entirely or massively revisited during the upstreaming process. Of course, if you're okay with that, we don't object to you working on this downstream branch. But if you're interested in participating in the upstreaming effort, we can probably find tasks for you to pick. This comes with the downside that you want be able to test things immediately, as you would with the demo branch, because there's quite a few missing pieces still. It's up to you, really. I just thought I'd mention the ongoing process so things are clear from the start and there's no disappointment down the road.</p>
+
+
+
+<a name="571852094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571852094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571852094">(Feb 04 2026 at 09:02)</a>:</h4>
+<p>I know <span class="user-mention" data-user-id="891405">@Andrew Ballance</span> started fixing Group scheduling in the demo/downstream branch. I can push the skeleton I started (based on <span class="user-mention" data-user-id="981233">@Deborah Brouwer</span> branch) and we can discuss how we want to go from there, if you're interested. Note that it's very much just a stub implementation, with a bunch of TODOs, and quite a few unknowns. The goal is to mimic the group scheduling logic in Panthor (adjusted to Rust, of course), but there's a lot of work to get there.</p>
+
+
+
+<a name="571852661"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571852661" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571852661">(Feb 04 2026 at 09:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="1018855">@Alvin Sun</span> I know that <span class="user-mention" data-user-id="981233">@Deborah Brouwer</span> had a few ideas for things you could help us with. The plan is to have those tasks added to the <a href="https://gitlab.freedesktop.org/panfrost/linux/-/boards">Tyr workboard</a> (select Tyr in the drop-down list, otherwise you'll see Panthor tasks) so people can claim the one they care about and let others know it's being worked on.</p>
+
+
+
+<a name="571853747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571853747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571853747">(Feb 04 2026 at 09:08)</a>:</h4>
+<blockquote>
+<p>I can push the skeleton I started (based on @Deborah Brouwer branch) and we can discuss how we want to go from there, if you're interested.</p>
+</blockquote>
+<p><a href="https://gitlab.freedesktop.org/bbrezillon/linux/-/commits/group-sched-wip">https://gitlab.freedesktop.org/bbrezillon/linux/-/commits/group-sched-wip</a></p>
+
+
+
+<a name="571855292"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571855292" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571855292">(Feb 04 2026 at 09:14)</a>:</h4>
+<p>Thanks for the detailed introduction. I’d be happy to contribute to tyr development, both upstream and downstream.</p>
+<p>It would help a lot if there were a concrete list of work items so I can pick tasks that match my skills. I have dedicated test hardware (RK3588S, NanoPi R6C), I’m comfortable with Linux/C, and I’m actively learning DRM and Rust.</p>
+
+
+
+<a name="571856454"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571856454" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571856454">(Feb 04 2026 at 09:19)</a>:</h4>
+<p>I would be honoured to help you upstream the work that has already been done on tyr, and I think it would be very meaningful.</p>
+
+
+
+<a name="571858744"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571858744" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571858744">(Feb 04 2026 at 09:29)</a>:</h4>
+<p>We need to do a bit of cleanup because I see a bunch of tasks that were created for the demo and are now done. We'll get back to you once this is done.</p>
+
+
+
+<a name="571860409"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571860409" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571860409">(Feb 04 2026 at 09:36)</a>:</h4>
+<p>Okay. I’ll wait for your update.</p>
+
+
+
+<a name="571866421"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/571866421" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#571866421">(Feb 04 2026 at 10:04)</a>:</h4>
+<p>That one could be a good fit <a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/11">https://gitlab.freedesktop.org/panfrost/linux/-/issues/11</a>, but let's wait for <span class="user-mention" data-user-id="981233">@Deborah Brouwer</span> to confirm, because I think she had a list of short/easy upstreaming tasks in mind.</p>
+
+
+
+<a name="572052695"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572052695" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572052695">(Feb 05 2026 at 03:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571866421">said</a>:</p>
+<blockquote>
+<p>That one could be a good fit <a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/11">https://gitlab.freedesktop.org/panfrost/linux/-/issues/11</a></p>
+</blockquote>
+<p>Should it be implemented via the drm_driver’s debugfs_init callback, or by having Tyr call the debugfs API directly when it loads? I’m thinking about how to implement it.</p>
+
+
+
+<a name="572078805"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572078805" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572078805">(Feb 05 2026 at 07:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="891405">Andrew Ballance</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571752162">said</a>:</p>
+<blockquote>
+<p>I had a similar problem when testing with the panthor_sched igt tests which also has multiple groups share a single vm. I fixed it by adding a refcount to each vm. the refcount is incremented in bind_vm and decremented in unbind_vm. the vm is only actually bound/unbound when the refcount is 0. This should fix the issue but I am unable to test glmark2 because I am currently away from my dev board.</p>
+</blockquote>
+<p>Your approach is correct. After adding a refcount per VM and the IO VA space allocation similar to panthor/c, glmark now passes the full test run.</p>
+<p><span class="user-mention" data-user-id="891405">@Andrew Ballance</span>  You could consider submitting a refcount patch for tyr.</p>
+<p>This is the refcount I implemented following your approach:<br>
+<a href="/user_uploads/35136/W_bVVQt-CyP68kIQukvh4I4w/PastedText.txt">PastedText.txt</a></p>
+
+
+
+<a name="572080173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572080173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572080173">(Feb 05 2026 at 07:58)</a>:</h4>
+<blockquote>
+<p>Should it be implemented via the drm_driver’s debugfs_init callback, or by having Tyr call the debugfs API directly when it loads? I’m thinking about how to implement it.</p>
+</blockquote>
+<p>You can start with the raw debugfs rust bindings, and then see if exposing the drm_debugfs_ adds anything useful in term of ergonomics</p>
+
+
+
+<a name="572090716"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572090716" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572090716">(Feb 05 2026 at 08:54)</a>:</h4>
+<p>Thanks, I’m trying it now.</p>
+
+
+
+<a name="572585998"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572585998" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572585998">(Feb 08 2026 at 03:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571866421">said</a>:</p>
+<blockquote>
+<p>That one could be a good fit <a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/11">https://gitlab.freedesktop.org/panfrost/linux/-/issues/11</a></p>
+</blockquote>
+<p>Over the past few days I’ve been looking at the panthor C driver and the current Rust code, and I’ve come up with some ideas for implementing debugfs in Tyr. <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> , could you assign me to this issue?</p>
+
+
+
+<a name="572635896"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572635896" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572635896">(Feb 08 2026 at 17:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1018855">Alvin Sun</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/572585998">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571866421">said</a>:</p>
+<blockquote>
+<p>That one could be a good fit <a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/11">https://gitlab.freedesktop.org/panfrost/linux/-/issues/11</a></p>
+</blockquote>
+<p>Over the past few days I’ve been looking at the panthor C driver and the current Rust code, and I’ve come up with some ideas for implementing debugfs in Tyr. <span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> , could you assign me to this issue?</p>
+</blockquote>
+<p>Assigned</p>
+
+
+
+<a name="572758837"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572758837" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572758837">(Feb 09 2026 at 12:11)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<a name="572759501"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572759501" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572759501">(Feb 09 2026 at 12:13)</a>:</h4>
+<p>While implementing the Tyr equivalent of panthor’s <code>gpuvas</code> debugfs interface, I ran into a question. In panthor, the code walks the rb.list list on struct drm_gpuvm to dump GPU VA info, but in Rust there’s no API to iterate over a C list_head. So I’m unsure whether to:</p>
+<ol>
+<li>Use the existing drm_gpuvm’s rb.list from Rust.</li>
+<li>Add a new field in Tyr’s GpuVmData (or similar) to track GPU VAs and iterate over that from Rust.</li>
+</ol>
+<p>Which of these is a better fit, or is there another approach you’d recommend?</p>
+
+
+
+<a name="572760621"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572760621" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572760621">(Feb 09 2026 at 12:19)</a>:</h4>
+<p>The GpuVm abstractions could have an interface to iterate gpuva entries.</p>
+
+
+
+<a name="572761940"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572761940" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572761940">(Feb 09 2026 at 12:25)</a>:</h4>
+<p>Should we implement it by iterating over drm_gpuvm’s rb.list?</p>
+
+
+
+<a name="572762187"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572762187" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572762187">(Feb 09 2026 at 12:26)</a>:</h4>
+<p>Sure, that seems like a good implementation.</p>
+
+
+
+<a name="572762268"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572762268" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572762268">(Feb 09 2026 at 12:26)</a>:</h4>
+<p>Note that this touches the interval tree, so only the <code>GpuVmCore</code> has access to it.</p>
+
+
+
+<a name="572762279"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572762279" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572762279">(Feb 09 2026 at 12:26)</a>:</h4>
+<p>So it must be a method on the core.</p>
+
+
+
+<a name="572782520"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/572782520" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#572782520">(Feb 09 2026 at 13:45)</a>:</h4>
+<p>Okay. Thanks!</p>
+
+
+
+<a name="573210349"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573210349" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573210349">(Feb 11 2026 at 06:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571866421">said</a>:</p>
+<blockquote>
+<p>That one could be a good fit <a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/11">https://gitlab.freedesktop.org/panfrost/linux/-/issues/11</a>, but let's wait for <span class="user-mention silent" data-user-id="981233">Deborah Brouwer</span> to confirm, because I think she had a list of short/easy upstreaming tasks in mind.</p>
+</blockquote>
+<p>I've implemented the <code>gpuvas</code> output based on the <code>group-sched-wip</code> branch you shared.<br>
+The output looks like this:</p>
+<div class="codehilite" data-code-language="Bash Session"><pre><span></span><code><span class="gp">root@nanopi-r6s:/sys/kernel/debug/tyr-card0# </span>cat<span class="w"> </span>gpuvas
+<span class="go">DRM GPU VA space ("Tyr::GpuVm") [0x0000000000000000;0x0001000000000000]</span>
+<span class="go">Kernel reserved node [0x0000000000000000;0x0000000000000000]</span>
+<span class="go"> VAs | start              | range              | end                | object             | object offset</span>
+<span class="go">-------------------------------------------------------------------------------------------------------------</span>
+<span class="go">     | 0x0000000000000000 | 0x0000000000001000 | 0x0000000000001000 | 0xffff00010c5e9c00 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000000400000 | 0x0000000000001000 | 0x0000000000401000 | 0xffff00010c5e9400 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000000401000 | 0x0000000000002000 | 0x0000000000403000 | 0xffff00010c5e9800 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000000800000 | 0x0000000000020000 | 0x0000000000820000 | 0xffff00010c5ea000 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000001000000 | 0x0000000000040000 | 0x0000000001040000 | 0xffff00010c5ea800 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000002000000 | 0x0000000000040000 | 0x0000000002040000 | 0xffff00010c5ea400 | 0x0000000000000000</span>
+<span class="go">     | 0x0000000004000000 | 0x000000000000c000 | 0x000000000400c000 | 0xffff00010c5eac00 | 0x0000000000000000</span>
+</code></pre></div>
+
+
+
+<a name="573210459"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573210459" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573210459">(Feb 11 2026 at 06:52)</a>:</h4>
+<p>The <code>tyr-for-upstream</code> branch and the upstream code do not contain <code>tyr/vm.rs</code> or any gpuvm-related code, so it doesn’t seem possible to send the code through the mailing list. How can I share my code for review?</p>
+
+
+
+<a name="573210483"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573210483" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573210483">(Feb 11 2026 at 06:52)</a>:</h4>
+<p>Should I create an MR at <a href="https://gitlab.freedesktop.org/panfrost/linux">https://gitlab.freedesktop.org/panfrost/linux</a> ? When I tried to fork Panfrost/linux, I got "You cannot create projects in your personal namespace".</p>
+
+
+
+<a name="573210492"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573210492" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573210492">(Feb 11 2026 at 06:52)</a>:</h4>
+<p>Is <code>0xffff00010c5e9c00</code> a kernel address? I'm not sure we want to expose kernel addresses to userspace. It can be an ASLR bypass.</p>
+
+
+
+<a name="573211930"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573211930" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573211930">(Feb 11 2026 at 07:07)</a>:</h4>
+<p>Yes. That’s a kernel address, and we can change it later to output the hash produced by "%p" instead.</p>
+
+
+
+<a name="573280414"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573280414" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573280414">(Feb 11 2026 at 13:05)</a>:</h4>
+<p>Two more tasks to look at that should be relatively easy, in case anyone is interested</p>
+<p><a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/68">https://gitlab.freedesktop.org/panfrost/linux/-/issues/68</a><br>
+<a href="https://gitlab.freedesktop.org/panfrost/linux/-/issues/69">https://gitlab.freedesktop.org/panfrost/linux/-/issues/69</a></p>
+
+
+
+<a name="573305681"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/573305681" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alvin Sun <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#573305681">(Feb 11 2026 at 14:45)</a>:</h4>
+<p>I can take issue <code>68</code> first. If nobody else wants them, you can assign both <code>issues/68</code> and <code>issues/69</code> to me—I’m already working on bo- and vm-related debugfs interfaces.</p>
+
+
+
+<a name="575144176"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/529528-Tyr/topic/Discussion%20on%20tyr%20issue%20%2362/near/575144176" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362.html#575144176">(Feb 22 2026 at 07:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="929978">Boris Brezillon</span> <a href="#narrow/channel/529528-Tyr/topic/Discussion.20on.20tyr.20issue.20.2362/near/571850590">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>One more thing: which branch should I work on—tyr-mini-demo or tyr-dev (the latter seems to be the latest)?</p>
+</blockquote>
+<p>I would say, tyr-for-upstream even. Long story short, we've moved our focus towards upstreaming since last December.</p>
+</blockquote>
+<p>fwiw tyr-for-upstream builds and rustfmt is currently failing since the last commit.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

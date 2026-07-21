@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>Hello,</p>\n<p>If I want to use a C function from rust how do I go about telling the kbuild linker where to find it? I understand that when building using cargo you can explicitly tell it to link the C object file as in this <a href=\"https://liufuyang.github.io/2020/02/02/call-c-in-rust.html\">blog post</a>. However I am not sure how I would go about doing this in the kbuild system.</p>\n<p>If anyone has any examples/resources I would appreciate it.</p>",
+        "id": 243710435,
+        "sender_full_name": "Jose Teuttli",
+        "timestamp": 1624481171
+    },
+    {
+        "content": "<p>In general C symbols from the kernel can be accessed via the <code>bindings</code> module. Does that not cover your use case?</p>",
+        "id": 243710620,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1624481261
+    },
+    {
+        "content": "<p>My understanding was that if I wanted to use foo() which is a C function. I would put </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">foo</span><span class=\"p\">()</span><span class=\"w\"> </span>-&gt; <span class=\"p\">();</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<p>in my rust file. This would then allow me to call the function foo, however when doing this using cargo you would call \"rustc <a href=\"http://main.rs\">main.rs</a> -l foo.o -L .\" and this would link foo.o (which is an object file built from foo.c that has the function foo) to my rust code. However since the kbuild system is used, I am not sure how to do this linking step</p>",
+        "id": 243711597,
+        "sender_full_name": "Jose Teuttli",
+        "timestamp": 1624481655
+    },
+    {
+        "content": "<p>Can you provide some more context on what you're trying to do -- our kbuild integration means that in general you shouldn't need to do anything special for linking, all the kernel symbols are available.</p>",
+        "id": 243712823,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1624482296
+    },
+    {
+        "content": "<p>Here in <a href=\"https://github.com/JoseTeuttli/linux/blob/rust-working/drivers/hv/hv_fcopy_rust.rs\">hv_fcopy_rust.rs</a> I am trying to use the functions hv_fcopy_cancel_work and hvutil_transport_destroy from <a href=\"https://github.com/JoseTeuttli/linux/blob/rust-working/drivers/hv/hv_fcopy.c\">hv_fcopy.c</a>. However I get a linker error \"unspecified reference to hv_fcopy_cancel_work during build</p>\n<p>I am not sure how to tell the build system to look for the functions in hv_fcopy.o</p>",
+        "id": 243714160,
+        "sender_full_name": "Jose Teuttli",
+        "timestamp": 1624483050
+    },
+    {
+        "content": "<p>There are several issues:</p>\n<ul>\n<li><code>hv_fcopy_cancel_work</code> is a static function, i.e. it is not exported, so nobody outside <code>hv_fcopy.c</code> can use it, not even other C files (translation units).</li>\n<li>The function is not designed to be used by other files: it manipulates static global variables -- if you make the function non-static, then you will be manipulating the internals of the other kernel module!</li>\n<li>Rust drivers should only use abstractions from the <code>kernel</code> crate, not access arbitrary C functions. The abstraction in <code>rust/kernel/</code> is the one that has access to the bindings, which are generated from the headers in <code>rust/kernel/bindings_helper.h</code>.</li>\n</ul>",
+        "id": 243729390,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1624493823
+    },
+    {
+        "content": "<p>So it all depends on what you are trying to accomplish. If you are attempting a rewrite of <code>hv_fcopy.c</code> in Rust, then you should first add the abstractions that you need (e.g. a work queue) in <code>rust/kernel/</code>. These abstractions call the usual kernel APIs. Then, write <code>hv_fcopy_rust.rs</code> to use those abstractions.</p>",
+        "id": 243730123,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1624494726
+    },
+    {
+        "content": "<p>However, if what you are attempting is to write a kernel module partially in C and partially in Rust and have C functions call Rust ones and viceversa within the same kernel module, then we do not really support that. It is technically possible, e.g. you can \"hack it\" by declaring the C functions in the Rust file and so on (like you are attempting to do in <code>hv_fcopy_rust.rs</code>), but please do not do so. The reason is that we want to develop Rust abstractions over time which are as safe as possible, and have drivers only depend on that API.</p>",
+        "id": 243730125,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1624494744
+    }
+]

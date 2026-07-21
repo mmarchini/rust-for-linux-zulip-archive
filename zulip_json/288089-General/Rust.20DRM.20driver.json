@@ -1,0 +1,248 @@
+[
+    {
+        "content": "<p>Hi! I'm interested in writing a GPU DRM driver in Rust (some of you probably also saw the list post...). I have a <a href=\"https://lore.kernel.org/rust-for-linux/70657af9-90bb-ee9e-4877-df4b14c134a5@asahilina.net/t/#m4fc9a0f09659b9322ff341ffa49275336839c600\">thread</a> with <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> there, but I'd also love to get some feedback from other people!</p>\n<p>It's a pretty big challenge, and there's lots of APIs to interact with, so I'm not sure if I can do it in 100% Rust from the get go... but I really want to write the core that talks to the GPU firmware in Rust, since that's the most complicated part. Would anyone be interested in helping out with this? I have already prototyped a proc macro to try to handle a multi-versioning issue we have, but I also need to work out how to safely represent the idea of GPU shared memory objects in Rust...</p>",
+        "id": 293232050,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660372334
+    },
+    {
+        "content": "<p>It should be possible to do something like</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">GpuRef</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuRefMut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"></span>\n\n<span class=\"k\">struct</span> <span class=\"nc\">GpuSlice</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a [T] equivalent</span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuSliceMut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a mut [T] equivalent</span>\n</code></pre></div>\n<p>to represent references to gpu owned objects. I'm not familiar with the requirements of gpu drivers, so if you could elaborate a bit on how memory management for gpu's works and what is necessary, that did probably help.</p>\n<p>(I know a decent amount about Rust, especially regarding it's implementation, but I am very much a newbie to Linux kernel development, so you probably know more about that side than me.)</p>",
+        "id": 293270236,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660393613
+    },
+    {
+        "content": "<blockquote>\n<p>I'm not familiar with the requirements of gpu drivers</p>\n</blockquote>\n<p>For example do you need to know the physical or cpu virtual address for gpu only buffers? Or is only the gpu virtual address relevant? How do you know when the gpu no longer needs a buffer and the cpu can regain control of it? ...</p>",
+        "id": 293270579,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660393817
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span></p>",
+        "id": 293270598,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660393831
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"412316\">@bjorn3</span>  Thanks for the reply! Here's roughly how it works (at least for this GPU). GPU kernel objects are always allocated and initialized by the kernel, from regular (pinned) memory pages. They have a CPU VA and a GPU VA (the physical page addresses don't really matter after allocation/mapping). After an object is initialized and mapped to the GPU, its GPU VA is passed to the GPU in some way (usually via some existing object, and the root is the InitData object, which has its GPU VA sent via the firmware mailbox).</p>\n<p>Once the object is shared, its usage can vary. Some objects are managed locally by the GPU (CPU does not touch them), some are written by the GPU and potentially read by the CPU, some are written by the CPU and read by the GPU, and some are write-write shared. For those, usually each side is in charge of some fields (e.g. ring buffer state objects where one side writes the rptr and the other the wptr). Sometimes the owner could change at different points in the object's lifetime.</p>\n<p>There is no explicit lifecycle management in the interface, so the rules for who owns what at any given point and when it's safe to access or dealloc an object that the GPU was previously using are ad-hoc and part of the firmware ABI. For example, objects related to a render job can be reused or freed once the GPU signals completion of that job, and objects related to a command queue can be freed when the queue doesn't have any pending work, but an explicit context destroy command also has to be sent to the firmware (I think).</p>\n<p>The mapping mode can also vary, on both GPU and CPU side (this is set by the kernel in the page tables). For objects that are internally used by the GPU, and sometimes for CPU-w GPU-r objects, they are usually mapped as non-coherent on the GPU side (in the latter case it would do manual cache management as required). For objects that are shared, they get mapped coherently.</p>\n<p>The objects are mostly fixed-layout structures, but some can be arrays of structures or of pointers (usually ring buffers).</p>\n<p>Usually, GPU objects would be managed by some kind of CPU-side object/manager (the CPU will never put CPU pointers in GPU objects or anything like that). For example, ring buffers would need a CPU manager type/impl that keeps shadow pointers, knows how to copy the data in/out of the buffer, etc. Also, it's generally useful to be able to associate objects with things like names and types at runtime, at least in debug builds (e.g. if the GPU crashes, we can try to map the fault address to what object it was trying to access). So I think there should be some kind of GPUObject abstraction that takes care of encapsulating the shared allocation, knowing its GPU VA as well as having a CPU reference, and probably keeping track of which side supposedly owns it at any given point. Then a type that manages one or more GPU objects would own references to those GPUObjects.</p>\n<p>For some patterns, like where the CPU initializes something and never touches it after that, or the CPU initializes it and then only reads after that, that could probably be enforced at the API layer (e.g. the caller can only get a GPU VA for the object after giving up ownership of the internal data, and can only get immutable references or none at all after that). Object destruction to some extent relies on correct firmware interaction too, but at least I definitely want to enforce correctness when it comes to persistent object-to-object pointers (which is not all of them, e.g. an object reference sent out via a ring buffer is effectively gone, if not immediately, then soon as the GPU advances the rptr, but complex pointer trees of objects are common and those should never have dangling internal references).</p>",
+        "id": 293298604,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660410068
+    },
+    {
+        "content": "<p>At a minimum I think you did need</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">GpuBox</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Box&lt;T&gt; equivalent</span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuRef</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a T equivalent</span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuRefMut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a mut T equivalent</span>\n\n<span class=\"k\">struct</span> <span class=\"nc\">GpuVec</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// Box&lt;[T]&gt; equivalent</span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuSlice</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a [T] equivalent</span>\n<span class=\"k\">struct</span> <span class=\"nc\">GpuSliceMut</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">PhantomData</span><span class=\"o\">&lt;&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// &amp;'a mut [T] equivalent</span>\n</code></pre></div>\n<p>As for how to handle migrating between cpu and gpu owned. For converting from cpu to gpu owned, you can probably have a safe method converting Box&lt;T&gt; to GpuBox&lt;T&gt; and Box&lt;[T]&gt; to GpuBox&lt;[T]&gt; which maps the memory to the gpu and returns the gpu address. As for going the other way, I think the core interface will have to be unsafe (as you have to prove that the gpu isn't accessing it), but it should be possible to have safe methods for specific cases, like consuming already processed ring buffer elements.</p>",
+        "id": 293299378,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660410521
+    },
+    {
+        "content": "<p>Although if all methods making a gpu buffer being used by the gpu consume the GpuBox, then GpuBox could have the invariant that the gpu isn't currently using it and as such it should be safe to convert a GpuBox back to a cpu owned Box.</p>",
+        "id": 293299874,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660410792
+    },
+    {
+        "content": "<p>There's also the question of what exactly is unsafe. In principle, for safety, we'd want to consider anything mapped to the GPU as untrusted (and since the objects come from DMA pools and are not mapped at the object level, that means every GPU object, for its entire lifetime). Is there some way of telling the compiler \"this data structure may be written to by other threads at any time and you should not make assumptions/optimizations that would violate safety guarantees if it changes out from under you\"? If there's some way of doing that (without a big performance cost, and it only has to work for simple primitive types/structs), that would effectively make the \"take ownership back from the GPU\" operation safe, since the CPU isn't making assumptions that it worked. Worst case you crash the GPU, not the driver.</p>",
+        "id": 293300201,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660410986
+    },
+    {
+        "content": "<p>I did imagine converting GpuBox to Box would unmap it from the gpu.</p>",
+        "id": 293300265,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411033
+    },
+    {
+        "content": "<p>That's not really practical in production builds, since mapping/unmapping is relatively expensive and you usually want to just alloc/free objects from a DMA pool. Plus objects are much smaller than pages usually, so that would be a lot of wasted memory. For the prototype driver I wrote in Python I do put objects in separate pages for debugging, but I don't think we can afford that for a real driver.</p>",
+        "id": 293300417,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411119
+    },
+    {
+        "content": "<p>If we have the invariant that a GpuBox is also mapped on the cpu, it should be possible to expose volatile loads and stores on it.</p>",
+        "id": 293300426,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411126
+    },
+    {
+        "content": "<p>Yes, every GPU object is still mapped to the CPU, for the same reason.</p>",
+        "id": 293300470,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411170
+    },
+    {
+        "content": "<p>So it's really more about tracking ownership for driver correctness purposes, but ideally it shouldn't affect safety if we get that wrong. It's just useful to encode as much of this as possible in the type system since it makes bugs less likely.</p>",
+        "id": 293300609,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411244
+    },
+    {
+        "content": "<blockquote>\n<p>Plus objects are much smaller than pages usually</p>\n</blockquote>\n<p>In that case converting between Box and GpuBox won't work I think. Maybe just have GpuBox + volatile operations exposed on it?</p>",
+        "id": 293300616,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411253
+    },
+    {
+        "content": "<p>And then for helping with correctness have all operations causing the gpu to use the buffer consume the GpuBox.</p>",
+        "id": 293300700,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411321
+    },
+    {
+        "content": "<p>Would that work?</p>",
+        "id": 293300749,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411329
+    },
+    {
+        "content": "<p>I wonder if we really want volatile though... it's tricky because that is a pretty big hammer. E.g. we don't care if the compiler merges or reorders writes, the only thing we care about is that it doesn't assume that a read after a write will return the same value (and that it not doing so could make the program unsound).</p>",
+        "id": 293300818,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411387
+    },
+    {
+        "content": "<p>But yes, I think having some type that gets consumed when the buffer is handed over to the GPU makes sense, and it could be returned back when ownership is explicitly requested back.</p>",
+        "id": 293300873,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411440
+    },
+    {
+        "content": "<p>Yeah, volatile is a big hammer. What you want is probably the unordered memory ordering for atomics of LLVM, which rustc doesn't expose. As I understand it, it makes data races not UB, but doesn't imply any synchronization. It was introduced for Java. I believe the reason rustc doesn't have it is because the exact operational semantics of unordered are not clear. Also it is LLVM only AFAIK.</p>",
+        "id": 293301142,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411596
+    },
+    {
+        "content": "<p><a href=\"https://llvm.org/docs/LangRef.html#atomic-memory-ordering-constraints\">https://llvm.org/docs/LangRef.html#atomic-memory-ordering-constraints</a></p>\n<blockquote>\n<p>unordered<br>\nThe set of values that can be read is governed by the happens-before partial order. A value cannot be read unless some operation wrote it. This is intended to provide a guarantee strong enough to model Java’s non-volatile shared variables. This ordering cannot be specified for read-modify-write operations; it is not strong enough to make them atomic in any interesting way.</p>\n</blockquote>",
+        "id": 293301229,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411669
+    },
+    {
+        "content": "<p>See also <a href=\"https://llvm.org/docs/Atomics.html#unordered\">https://llvm.org/docs/Atomics.html#unordered</a></p>",
+        "id": 293301306,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411717
+    },
+    {
+        "content": "<blockquote>\n<p>Unordered is the lowest level of atomicity. It essentially guarantees that races produce somewhat sane results instead of having undefined behavior.</p>\n</blockquote>",
+        "id": 293301320,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411732
+    },
+    {
+        "content": "<blockquote>\n<p>This cannot be used for synchronization, but is useful for Java and other “safe” languages which need to guarantee that the generated code never exhibits undefined behavior.</p>\n</blockquote>",
+        "id": 293301358,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411762
+    },
+    {
+        "content": "<p>Interesting. Yeah, that sounds like what I'd want, it's a shame it's not exposed. I guess we'll probably have to file this one under \"the GPU could probably find some corner cases to make things unsound if it really wanted to\" (which, considering it can write to its own page tables and map arbitrary memory, isn't <em>that</em> big of a security downgrade right now).</p>",
+        "id": 293301525,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660411857
+    },
+    {
+        "content": "<p><a href=\"https://internals.rust-lang.org/t/unordered-as-a-solution-to-bit-wise-reasoning-for-atomic-accesses/11079\">https://internals.rust-lang.org/t/unordered-as-a-solution-to-bit-wise-reasoning-for-atomic-accesses/11079</a> is a thread about unordered for rust.</p>",
+        "id": 293301543,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411874
+    },
+    {
+        "content": "<p>In particular <a href=\"https://internals.rust-lang.org/t/unordered-as-a-solution-to-bit-wise-reasoning-for-atomic-accesses/11079/6\">https://internals.rust-lang.org/t/unordered-as-a-solution-to-bit-wise-reasoning-for-atomic-accesses/11079/6</a></p>",
+        "id": 293301650,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660411949
+    },
+    {
+        "content": "<p>I'll take a look! It's getting late here so I should sleep, but thanks for the help so far!</p>",
+        "id": 293302099,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660412121
+    },
+    {
+        "content": "<p>You're welcome.</p>",
+        "id": 293302114,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660412136
+    },
+    {
+        "content": "<p>FYI I'm based in Europe in case you want to know when I'm awake.</p>",
+        "id": 293302242,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660412191
+    },
+    {
+        "content": "<p>You can also see everyone's local time in their profile.</p>",
+        "id": 293302273,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1660412213
+    },
+    {
+        "content": "<p>That's handy! Thank you!</p>",
+        "id": 293304318,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660412429
+    },
+    {
+        "content": "<p>Ah, also this: <a href=\"https://github.com/rust-lang/unsafe-code-guidelines/issues/152\">https://github.com/rust-lang/unsafe-code-guidelines/issues/152</a></p>",
+        "id": 293304471,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660412528
+    },
+    {
+        "content": "<p>Just skimmed over the mails/this thread. <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> did you see that I began to rewrite the RTKit stuff in rust? wrote a bit about that with marcan/sven in the IRC. But currently on hold, as I have my exam phase.</p>",
+        "id": 293314514,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1660418843
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Finn Behrens</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20DRM.20driver/near/293314514\">said</a>:</p>\n<blockquote>\n<p>Just skimmed over the mails/this thread. <span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> did you see that I began to rewrite the RTKit stuff in rust? wrote a bit about that with marcan/sven in the IRC. But currently on hold, as I have my exam phase.</p>\n</blockquote>\n<p>Oh, I hadn't seen that! Do you have a link? I'd love to take a look!</p>\n<p>If it's not quite done yet I'll probably still bind the existing code, since getting RTKit up is practically the first thing I need to do to move forward, but it would be cool to replace it with a Rust version eventually!</p>",
+        "id": 293336842,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660443439
+    },
+    {
+        "content": "<p>Not really a link yet. Mostly at the stage of trying to understand mailbox/rtkit</p>",
+        "id": 293431332,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1660502528
+    },
+    {
+        "content": "<p>Looks like the DRM maintainers are interested/cautious but not opposed (respectively) to a Rust DRM driver and the relevant abstractions, that sounds good enough that I can start working on this tomorrow!</p>",
+        "id": 293720030,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660657137
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Finn Behrens</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20DRM.20driver/near/293431332\">said</a>:</p>\n<blockquote>\n<p>Not really a link yet. Mostly at the stage of trying to understand mailbox/rtkit</p>\n</blockquote>\n<p>In that case I'll let you work on that at your own pace and just abstract the existing RTKit code for now, since it should be pretty easy. We can always swap it out later!</p>",
+        "id": 293723615,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660658391
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20DRM.20driver/near/293720030\">said</a>:</p>\n<blockquote>\n<p>Looks like the DRM maintainers are interested/cautious but not opposed (respectively) to a Rust DRM driver and the relevant abstractions, that sounds good enough that I can start working on this tomorrow!</p>\n</blockquote>\n<p>That sounds like a positive response, and if we got the same one from all maintainers in the kernel, I would be more than glad! :)</p>\n<p>I think if you lead the way, and the code looks understandable from their point of view, they will like it and others will want to start using Rust for other DRM things.</p>",
+        "id": 293846444,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1660720559
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/Rust.20DRM.20driver/near/293846444\">said</a>:</p>\n<blockquote>\n<p>I think if you lead the way, and the code looks understandable from their point of view, they will like it and others will want to start using Rust for other DRM things.</p>\n</blockquote>\n<p>I hope so! I spent the day starting to figure things out, and managed to get the firmware up and running and the MMU working (though the MMU code is written in C, since it's using a bunch of existing kernel APIs and it's fairly self-contained). Most of the Rust work was wrapping my head around what Rust drivers look like and writing an RTKit abstraction. Next up I'll see if I can come up with some kind of nice GPUObject abstraction to actually manage the allocations.</p>\n<p>Here's the tree if anyone wants to follow along: <a href=\"https://github.com/AsahiLinux/linux/tree/gpu/rust-wip\">https://github.com/AsahiLinux/linux/tree/gpu/rust-wip</a> (comments welcome!)</p>",
+        "id": 293945807,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660758398
+    },
+    {
+        "content": "<p>Tomorrow (19th) at 6:00 UTC I'll start working on the GPU object abstraction (I stream my development on <a href=\"https://t.co/7UjngnJRCK\">YouTube</a>), so if anyone with more experience wants to drop by to help design it that would be lovely ^^</p>\n<p>(I usually go on for hours, so later is fine too!)</p>",
+        "id": 294055310,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660821322
+    },
+    {
+        "content": "<p>Here's the GPUObject design I ended up with! It's just a dummy userspace implementation right now, but it should work in the kernel (just replacing the <code>Box&lt;&gt;</code> with a real GPU shared memory allocator, and using the real GPUVAs).</p>\n<p><a href=\"https://github.com/asahilina/gpu-rust-playground/blob/main/playground/src/main.rs\">https://github.com/asahilina/gpu-rust-playground/blob/main/playground/src/main.rs</a></p>\n<p>I had a lot of people help me out design it (and I still don't quite understand some of the really deep details), but I think what we ended up with ends up being reasonably ergonomic to work with and quite safe. It encodes the concept of GPU objects owning other objects (so they all get dropped together) and being able to contain references to those objects, with compiler-enforced lifetimes. There are also weak pointers for things like circular references or other cases where lifetimes don't really apply (I think it's okay to not try to encode absolutely everything in the type system, since the goal of this is to make it easier to write a correct GPU driver, and it's not possible to enforce everything at compile time anyway since the correct semantics depend on the GPU firmware ABI anyway). I also ended up with a cute macro to get GPU pointer references to inner fields of an object, with pointer/field type safety (based on the kernel's <code>offset_of!()</code> but with some clever type inference so it works directly on a <code>GPUObject</code> value).</p>\n<p>There's no explicit concept of object GPU vs CPU ownership state right now, but what I do have is that GPUObjects can only be accessed via callbacks right now after construction, and they take an immutable ref, so the idea is that any CPU-mutable fields should be atomics (which is what we'd want for shared mutable data anyway). The GPUArray type doesn't enforce this right now, but I might add an immutable variant just to keep things more kosher.</p>",
+        "id": 294263073,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1660915094
+    }
+]

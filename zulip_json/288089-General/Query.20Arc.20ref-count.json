@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>I am caching ref-counted objects in a lookup tree. When dropping ref-counts I generally do not want to lock the lookup-tree. However, when possibly dropping the last ref-count, I want to lock the tree and try again. I currently don't see a way to do this with <code>Arc</code>.</p>\n<p>On standard Rust I would put <code>Weak</code>-refs into the lookup tree, but cannot do that with <code>Arc</code>. So I am looking for <code>Arc::drop_if_more_than(self, n: usize) -&gt; Option&lt;Self&gt;</code>, which drops a reference if the number of references is higher than <code>n</code>. This would allow me to drop references without taking the lock, but retrying with the lock whenever it _might_ be the second to last. Inside of the lock I drop the reference, and if it then drops to 1 I can release the lookup entry as well.</p>\n<p>I think this is semi-common with <code>refcount_t</code>, but was wondering whether you have better ideas with <code>Arc</code>, or if this would be ok to add?</p>",
+        "id": 578437224,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773158665
+    },
+    {
+        "content": "<p>There is a method to handle <code>1-&gt;0</code> refcount drop specially. For <code>n &gt; 1</code> there is no method for it.</p>",
+        "id": 578437660,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773158754
+    },
+    {
+        "content": "<p>why do you need it for second-to-last instead of just the last refcount?</p>",
+        "id": 578437837,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773158786
+    },
+    {
+        "content": "<p>The lookup tree owns a reference</p>",
+        "id": 578437945,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773158814
+    },
+    {
+        "content": "<p>I mean, I could just re-use the reference the lookup-tree owns, but it is kinda awkward when this spans multiple APIs or modules.</p>",
+        "id": 578438524,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773158939
+    },
+    {
+        "content": "<p>Emulating weak refs with <code>drop_if_more_than</code> is not a good idea IMO</p>",
+        "id": 578440438,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773159333
+    },
+    {
+        "content": "<p>I am not emulating weak refs. I am dropping a shared ref, if all unique refs were dropped. But even if you call it \"emulating weak refs\", I would appreciate if you elaborate \"is not a good idea IMO\". Not sure what to do with that.</p>\n<p>Speaking of <code>into_unique_or_drop()</code>: How is this meant to work in this case? Lets say I make the lookup-tree not own a ref, so I link objects when creating them, and unlink when destroying them. When I call <code>into_unique_or_drop()</code> and get a <code>UniqueArc</code>, I still have to take the lock and then unlink the object. If another thread races this and gets the lock before, they might acquire a ref through lookup even though the original thread holds a <code>UniqueArc</code>. That is not safe.</p>",
+        "id": 578445777,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773160547
+    },
+    {
+        "content": "<p>I can make it work with <code>drop_unless_last()</code>. So very much like <code>into_unique_or_drop()</code>, but returning an <code>Arc</code> instead of <code>UniqueArc</code>.</p>",
+        "id": 578446243,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773160660
+    },
+    {
+        "content": "<p>ok, I can see how <code>drop_if_more_than(2)</code> does actually solve your problem, though weak refs also would solve it.</p>",
+        "id": 578453973,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1773162573
+    },
+    {
+        "content": "<p>Btw., I came up with the following patch. This basically mirrors what <code>kref_put_mutex()</code> is doing.</p>\n<p>Due to the design of the lookup tree, it means I still have to create a fake <code>Arc</code> and store it in the lookup tree, even though I do not increase the ref-count. I hide the <code>Arc</code> from public access, but still kinda awkward, since it would technically break existing calls on <code>Arc</code> like <code>into_unique_or_drop()</code>.</p>\n<p>I can also send it to the ML if that is preferred.</p>\n<div class=\"codehilite\" data-code-language=\"patch\"><pre><span></span><code>From 4b2ed52226cd88a4ee09101bc5735988f4037989 Mon Sep 17 00:00:00 2001\nFrom: David Rheinsberg &lt;david@readahead.eu&gt;\nDate: Thu, 12 Mar 2026 14:03:54 +0100\nSubject: [PATCH] rust/sync: add Arc::drop_unless_unique()\n\nIntroduce `Arc::drop_unless_unique()`, a rust version of\n`refcount_dec_not_one()`.\n\nIt is very common to store an object with `struct kref` (or\n`refcount_t`) in a locked lookup-tree, but without the tree actually\nowning a reference. Instead, whenever the object is destroyed, it\nshould be removed from the lookup tree.\n\nThe problem is, this requires taking the lock whenever releasing a\nreference. Otherwise, a racing lookup might see a ref-count of 0. But\nthis is needlessly expensive.\n\nOne solution provided by `struct kref` is `kref_put_mutex()`. This drops\na reference, unless it is the last reference. In that case it takes a\nmutex and tries again. If it no longer is the last reference, it simply\nunlocks and returns. But if it dropped the last reference, it calls the\ndestructor with the lock held.\n\nThis entire technique is built around `refcount_dec_not_one()`. Expose\nthis exact feature in Rust, so it can be used to get the same effect as\n`kref_put_mutex()`.\n\nSigned-off-by: David Rheinsberg &lt;david@readahead.eu&gt;\n---\n rust/kernel/sync/arc.rs      | 21 +++++++++++++++++++++\n rust/kernel/sync/refcount.rs | 16 ++++++++++++++++\n 2 files changed, 37 insertions(+)\n\ndiff --git a/rust/kernel/sync/arc.rs b/rust/kernel/sync/arc.rs\nindex 921e19333b89..ead021a0dd5d 100644\n--- a/rust/kernel/sync/arc.rs\n+++ b/rust/kernel/sync/arc.rs\n@@ -368,6 +368,27 @@ pub fn into_unique_or_drop(this: Self) -&gt; Option&lt;Pin&lt;UniqueArc&lt;T&gt;&gt;&gt; {\n             None\n         }\n     }\n+\n+    /// Drop this [`Arc`] unless it is the last reference.\n+    ///\n+    /// When this is the last reference to the `Arc`, it is returned as `Some`\n+    /// unmodified. Otherwise, the `Arc` is dropped and [`None`] is returned.\n+    ///\n+    /// This function will never release the last reference to the object, and\n+    /// as such never call its destructor.\n+    pub fn drop_unless_unique(this: Self) -&gt; Option&lt;Self&gt; {\n+        let this = ManuallyDrop::new(this);\n+\n+        // SAFETY: We own a refcount, so the pointer is still valid.\n+        if unsafe { this.ptr.as_ref() }.refcount.dec_not_one() {\n+            // A single ref-count was dropped, but it was not the last. We\n+            // manually drop `this` without invoking `Drop`.\n+            None\n+        } else {\n+            // This was a no-op, return the reference to the caller.\n+            Some(ManuallyDrop::into_inner(this))\n+        }\n+    }\n }\n\n // SAFETY: The pointer returned by `into_foreign` was originally allocated as an\ndiff --git a/rust/kernel/sync/refcount.rs b/rust/kernel/sync/refcount.rs\nindex 6c7ae8b05a0b..2a65b3e3f961 100644\n--- a/rust/kernel/sync/refcount.rs\n+++ b/rust/kernel/sync/refcount.rs\n@@ -105,6 +105,22 @@ pub fn dec_and_test(&amp;self) -&gt; bool {\n         // SAFETY: `self.as_ptr()` is valid.\n         unsafe { bindings::refcount_dec_and_test(self.as_ptr()) }\n     }\n+\n+    /// Decrement a refcount if it is not 1.\n+    ///\n+    /// It will `WARN` on underflow and fail to decrement when saturated.\n+    ///\n+    /// Provides release memory ordering when succeeding in decrementing the\n+    /// refcount.\n+    ///\n+    /// Returns true if the decrement operation succeeded, false if the\n+    /// decrement operation was skipped as the refcount is 1.\n+    #[inline]\n+    #[must_use = \"refcount release is conditional and must be checked\"]\n+    pub fn dec_not_one(&amp;self) -&gt; bool {\n+        // SAFETY: `self.as_ptr()` is valid.\n+        unsafe { bindings::refcount_dec_not_one(self.as_ptr()) }\n+    }\n }\n\n // SAFETY: `refcount_t` is thread-safe.\n--\n2.53.0\n</code></pre></div>",
+        "id": 578918371,
+        "sender_full_name": "David Rheinsberg",
+        "timestamp": 1773321277
+    }
+]

@@ -1,0 +1,271 @@
+<html>
+<head><meta charset="utf-8"><title>Ergonomic WARN() for Rust · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html">Ergonomic WARN() for Rust</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="355142203"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355142203" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355142203">(May 02 2023 at 12:57)</a>:</h4>
+<p>Right now Rust can ergonomically propagate errors silently (<code>?</code> operator), or noisily oops (<code>.unwrap()</code>, <code>.expect()</code>). However, in the kernel, we often have situations where certain conditions indicate a bug, but we don't want to oops since that would guarantee a crash. That's what the C <code>WARN()</code> macro is for, but it's not abstracted yet.</p>
+<p>Since Rust has excellent error handling, we want to propagate as much as possible, but we also want to be noisy when "impossible" things happen. Right now there is no ergonomic way to do that. At most you can use <code>if is_err() { warn(...) }</code> or <code>map_err(|_| warn(...))</code> but those aren't great...</p>
+<p>How about adding a WARN equivalent to <code>expect()</code>? It could be implemented both as a trait and as a macro:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">require</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="cp">$($i</span>:<span class="nc">tt</span><span class="p">)</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="p">(</span><span class="cp">$($i</span><span class="p">)</span><span class="o">*</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="fm">println!</span><span class="p">(</span><span class="s">"WARNING! {}:{}"</span><span class="p">,</span><span class="w"> </span><span class="fm">file!</span><span class="p">(),</span><span class="w"> </span><span class="fm">line!</span><span class="p">());</span><span class="w"> </span><span class="c1">// Would be bindings::warn_slowpath_fmt() or whatever</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Require</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">require</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span>: <span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">is_err</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="fm">println!</span><span class="p">(</span><span class="s">"WARNING! {}"</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span><span class="p">);</span><span class="w"> </span><span class="c1">// Would be bindings::warn_slowpath_fmt() or whatever</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">trait</span><span class="w"> </span><span class="n">Require</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">require</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span>: <span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">fn</span> <span class="nf">bar</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">foo</span><span class="p">().</span><span class="n">require</span><span class="p">(</span><span class="s">"expected something"</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">require</span><span class="o">!</span><span class="p">(</span><span class="n">foo</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The trait option looks more ergonomic and directly mirrors <code>expect()</code>, which is nice. The downside is that since it's not a macro, it can't capture file and line information (which in principle the C backend for <code>WARN</code> wants, though we could just let that default to something). The macro option can capture file and line information, so it's more suitable for cases without a message where the file and line information is the only thing leading you directly to the line of code it came from. Personally I would kind of want to have both (method version with a custom message and no file:line, and macro version with no message but automatic file:line)...</p>
+<p>Any thoughts on the idea and the name?</p>
+
+
+
+<a name="355145295"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355145295" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355145295">(May 02 2023 at 13:08)</a>:</h4>
+<p>Actually, looking into it more, it seems the file/line info stuff is done via arch-specific section tricks, so we'd probably need arch-specific code to implement it similarly in Rust...</p>
+
+
+
+<a name="355147936"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355147936" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355147936">(May 02 2023 at 13:17)</a>:</h4>
+<blockquote>
+<p>Any thoughts on the idea and the name?</p>
+</blockquote>
+<p>Quick note about naming: when we had similar cases (e.g. <code>pr_*</code> macros), and we wanted to improve a bit on some APIs/names/... before the initial merge, we were told to use the original C names if it made sense / as much as possible.</p>
+
+
+
+<a name="355150083"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355150083" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355150083">(May 02 2023 at 13:25)</a>:</h4>
+<p>Right, but in this case it's different since these operate on <code>Result&lt;&gt;</code> types which is not something C has (and the C-side <code>WARN</code> etc don't operate on C int errnos either), so I think it makes sense to use a different name. We can still have plain <code>WARN()</code> or <code>WARN_ON()</code> functions or macros that do what the C ones do of course, but what I'm trying to solve here is a more specific Rust ergonomics thing ^^</p>
+
+
+
+<a name="355150337"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355150337" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355150337">(May 02 2023 at 13:26)</a>:</h4>
+<p>I actually thought of using <code>.warn()</code> as the trait function before, but it feels a bit weird since it's only conditionally warning?</p>
+
+
+
+<a name="355150532"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355150532" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355150532">(May 02 2023 at 13:27)</a>:</h4>
+<p>Re the asm, I think we need <code>feature(asm_const)</code> to implement the file/line stuff in Rust properly, but it should be possible with that.</p>
+
+
+
+<a name="355156746"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355156746" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355156746">(May 02 2023 at 13:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355150337">said</a>:</p>
+<blockquote>
+<p>I actually thought of using <code>.warn()</code> as the trait function before, but it feels a bit weird since it's only conditionally warning?</p>
+</blockquote>
+<p>Yeah, it is, though given <code>WARN</code> also does it conditionally, I guess it could make sense in that way.</p>
+
+
+
+<a name="355157012"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355157012" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355157012">(May 02 2023 at 13:48)</a>:</h4>
+<p>I guess we would want Rust postfix macros here.</p>
+
+
+
+<a name="355158335"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355158335" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355158335">(May 02 2023 at 13:52)</a>:</h4>
+<p>Yeah, postfix macros would be ideal... but it looks like that isn't even unstable yet ^^;;</p>
+
+
+
+<a name="355158747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355158747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355158747">(May 02 2023 at 13:54)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355156746">said</a>:</p>
+<blockquote>
+<p>Yeah, it is, though given <code>WARN</code> also does it conditionally, I guess it could make sense in that way.</p>
+</blockquote>
+<p>Yeah, it does kind of make sense. The main difference is warning on a condition vs. an <code>Err</code>...</p>
+<p><code>warn</code> is shorter anyway, so if people prefer it I'm fine with that!</p>
+
+
+
+<a name="355176642"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355176642" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355176642">(May 02 2023 at 14:54)</a>:</h4>
+<p>warn_on_err() maybe?</p>
+
+
+
+<a name="355178434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355178434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355178434">(May 02 2023 at 15:00)</a>:</h4>
+<p>I think that's a bit too long... since this is about encouraging people to always do proper error handling, and ideally it is used pervasively, I think we want something that is a single world ideally.</p>
+
+
+
+<a name="355181073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355181073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355181073">(May 02 2023 at 15:08)</a>:</h4>
+<p>it should only be used in places where err is unexpected but can still be handled, right? In places where we know a err may happen and we handle it, we don’t want to use it?</p>
+
+
+
+<a name="355181287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355181287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355181287">(May 02 2023 at 15:09)</a>:</h4>
+<p>Yeah, the idea is that it would replace all usage of expect() or unwrap() in codepaths where error handling is possible and safe. So it would be for cases where invariants have been violated (indicating a bug), but upholding those invariants is not safety critical. I have a lot of those...</p>
+
+
+
+<a name="355181661"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355181661" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355181661">(May 02 2023 at 15:10)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355176642">said</a>:</p>
+<blockquote>
+<p>warn_on_err() maybe?</p>
+</blockquote>
+<p>We may need a poll again :)</p>
+<p>By the way, that name sounds good to me (though long, yeah) if I didn't know about <code>ẀARN_ON</code>, but <code>WARN_ON</code> doesn't take a message.</p>
+
+
+
+<a name="355223439"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355223439" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355223439">(May 02 2023 at 17:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355145295">said</a>:</p>
+<blockquote>
+<p>Actually, looking into it more, it seems the file/line info stuff is done via arch-specific section tricks, so we'd probably need arch-specific code to implement it similarly in Rust...</p>
+</blockquote>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/355150532">said</a>:</p>
+<blockquote>
+<p>Re the asm, I think we need <code>feature(asm_const)</code> to implement the file/line stuff in Rust properly, but it should be possible with that.</p>
+</blockquote>
+<p>I cannot follow why we need this, cant we just use <code>file!</code> and <code>line!</code>?</p>
+
+
+
+<a name="355233659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355233659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355233659">(May 02 2023 at 18:22)</a>:</h4>
+<p>or are you talking about the trait impl? because then it makes sense.</p>
+
+
+
+<a name="355314835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355314835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355314835">(May 03 2023 at 04:32)</a>:</h4>
+<p>The WARN implementation on most architectures uses assembly to build up a data structure in a special section, and then reference it from the warn location. That data structure needs a pointer to the file string (which can be done with asm <code>sym</code>), and a literal line number which needs asm <code>const</code>.</p>
+
+
+
+<a name="355314941"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355314941" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355314941">(May 03 2023 at 04:33)</a>:</h4>
+<p>You'd use <code>file!()</code> to create a static string with the filename, and then reference it via asm <code>sym</code>, and then use <code>line!()</code> as an argument to asm <code>const</code>.</p>
+
+
+
+<a name="355320110"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355320110" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355320110">(May 03 2023 at 05:14)</a>:</h4>
+<p>I think Lina's point is most archs implement WARN()/BUG() as some sort of trapping (e.g. on ARM64 is <code>brk</code> instruction), and in order to pass the pointer to <code>file!()</code> string literal, an asm section is used per WARN()/BUG() "callsite", since that's how to pass parameters to trapping.</p>
+
+
+
+<a name="355565094"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355565094" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355565094">(May 03 2023 at 17:32)</a>:</h4>
+<p>You could use concat! to create have the static defined inside the asm.</p>
+
+
+
+<a name="355685215"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355685215" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355685215">(May 04 2023 at 07:31)</a>:</h4>
+<p>I'm kind of surprised concat!() works with asm!() but it looks like it does, so it looks like we can avoid the feature that way ^^</p>
+
+
+
+<a name="355696293"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/355696293" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#355696293">(May 04 2023 at 08:18)</a>:</h4>
+<p>You don't even need <code>concat!()</code>. <code>asm!()</code> accepts multiple string literals separated by commas. Any of them can also be a macro invocation expanding to a string literal. <code>asm!()</code> will internally concat all given string literals. This was done to help with macro expansed <code>asm!()</code>.</p>
+
+
+
+<a name="356095945"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356095945" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356095945">(May 05 2023 at 15:29)</a>:</h4>
+<p>But <code>line!()</code> is not a string literal, it's a number, so you still need <code>concat!()</code> for stringification right?</p>
+
+
+
+<a name="356150836"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356150836" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> bjorn3 <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356150836">(May 05 2023 at 19:35)</a>:</h4>
+<p>That is possible. I didn't check.</p>
+
+
+
+<a name="356222842"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356222842" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356222842">(May 06 2023 at 06:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522295">Asahi Lina</span> <a href="#narrow/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust/near/356095945">said</a>:</p>
+<blockquote>
+<p>But <code>line!()</code> is not a string literal, it's a number, so you still need <code>concat!()</code> for stringification right?</p>
+</blockquote>
+<p>yeah <code>line!</code> return a not string value, you should conver it in a strin gin some way. Ideally here we can use a macro like </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[macro_export]</span>
+<span class="fm">macro_rules!</span><span class="w"> </span><span class="n">warn</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="cp">$when</span>: <span class="nc">expr</span><span class="p">,</span><span class="w"> </span><span class="cp">$tok</span>: <span class="nc">expr</span><span class="p">,</span><span class="w"> </span><span class="cp">$($msg</span>:<span class="nc">tt</span><span class="p">)</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="cp">$when</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">use</span><span class="w"> </span><span class="cp">$crate</span>::<span class="n">kdiagnostic</span>::<span class="n">KDiagnInfo</span><span class="p">;</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">msg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span><span class="cp">$($msg</span><span class="p">)</span><span class="o">*</span><span class="p">);</span>
+<span class="w">            </span><span class="n">KDiagnInfo</span>::<span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">msg</span><span class="p">,</span><span class="w"> </span><span class="cp">$tok</span><span class="p">,</span><span class="w"> </span><span class="fm">line!</span><span class="p">().</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="fm">file!</span><span class="p">().</span><span class="n">to_string</span><span class="p">()).</span><span class="n">warn</span><span class="p">().</span><span class="n">emit</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>this is how I implement the diagnostic in <code>kproc_macro</code> that sone I will make a 0.0.1 version</p>
+
+
+
+<a name="356222953"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356222953" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356222953">(May 06 2023 at 06:47)</a>:</h4>
+<p>I guess in you case you need just </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[macro_export]</span>
+<span class="fm">macro_rules!</span><span class="w"> </span><span class="n">warn</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="cp">$tok</span>: <span class="nc">expr</span><span class="p">,</span><span class="w"> </span><span class="cp">$($msg</span>:<span class="nc">tt</span><span class="p">)</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="cp">$tok</span><span class="p">.</span><span class="n">is_err</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">use</span><span class="w"> </span><span class="cp">$crate</span>::<span class="n">kdiagnostic</span>::<span class="n">KDiagnInfo</span><span class="p">;</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">msg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span><span class="cp">$($msg</span><span class="p">)</span><span class="o">*</span><span class="p">);</span>
+<span class="w">            </span><span class="o">....</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="356228487"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356228487" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356228487">(May 06 2023 at 07:29)</a>:</h4>
+<p>That doesn't work with <code>asm!()</code> since you can't have actual expressions... and <code>stringify!()</code> doesn't work either because it seems to stringify its argument without further macro resolution, plus discrete strings passed to <code>asm!()</code> become separate statements, they aren't just concatenated together. Only <code>concat!()</code> works... <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=5163da80dc020d6f56ace61ad57164a9">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=5163da80dc020d6f56ace61ad57164a9</a></p>
+
+
+
+<a name="356254114"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Ergonomic%20WARN%28%29%20for%20Rust/near/356254114" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Vincenzo Palazzo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Ergonomic.20WARN.28.29.20for.20Rust.html#356254114">(May 06 2023 at 09:46)</a>:</h4>
+<p>mh that it is interesting</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

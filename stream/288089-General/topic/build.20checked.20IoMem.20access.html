@@ -1,0 +1,184 @@
+<html>
+<head><meta charset="utf-8"><title>build checked IoMem access · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html">build checked IoMem access</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="501675170"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501675170" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501675170">(Feb 24 2025 at 23:39)</a>:</h4>
+<p>Hej,<br>
+I'm currently integrating <span class="user-mention" data-user-id="582628">@Daniel Almeida</span>'s v6 <a href="https://lore.kernel.org/rust-for-linux/20250130220529.665896-1-daniel.almeida@collabora.com/">rust: platform: add Io support</a> into the asahi tree and I believe I see spurious build time asserts with reads from sized IoMem. Following code</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">SGX_SIZE</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x1000000</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="n">ID_VERSION</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0xd04000</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="n">ID_UNK08</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0xd04008</span><span class="p">;</span>
+
+<span class="k">const</span><span class="w"> </span><span class="n">CORE_MASK_0</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0xd01500</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sgx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">ioremap_resource_sized</span><span class="p">::</span><span class="o">&lt;</span><span class="n">SGX_SIZE</span><span class="o">&gt;</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">sgx_read32</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">off</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">u32</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">io</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sgx</span><span class="p">.</span><span class="n">try_access</span><span class="p">().</span><span class="n">unwrap</span><span class="p">()</span>
+<span class="w">    </span><span class="n">io</span><span class="p">.</span><span class="n">readq_relaxed</span><span class="p">(</span><span class="n">off</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">id_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sgx_read32</span><span class="p">(</span><span class="n">ID_VERSION</span><span class="p">);</span><span class="w"> </span><span class="c1">// no build assert</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">id_unk08</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sgx_read32</span><span class="p">(</span><span class="n">ID_UNK08</span><span class="p">);</span><span class="w"> </span><span class="c1">// triggers build assert</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">core_mask_0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sgx_read32</span><span class="p">(</span><span class="n">CORE_MASK_0</span><span class="p">);</span><span class="w"> </span><span class="c1">// triggers build assert</span>
+</code></pre></div>
+<p>results in following link error:</p>
+<blockquote>
+<p>ld: Unexpected GOT/PLT entries detected!<br>
+ld: Unexpected run-time procedure linkages detected!<br>
+ld: drivers/gpu/drm/asahi/asahi.o: in function <code>&lt;kernel::io::Io&lt;16777216&gt;&gt;::io_addr_assert::&lt;u32&gt;':
+/home/janne/src/linux-asahi-6.13/rust/kernel/build_assert.rs:78:(.text+0x87bbc): undefined reference to </code>rust_build_erro<br>
+r'<br>
+make[3]: *** [../scripts/Makefile.vmlinux:77: vmlinux] Error 1</p>
+</blockquote>
+<p>I don't see why the build_assert in <code>io_addr_assert</code>would trigger for these offsets and MMIO size. Previously a say the same with 64-bit reads but that is no gone for the offsets that failed.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">const</span><span class="w"> </span><span class="n">FAULT_INFO</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x17030</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="n">FAULT_INFO_G14X</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0xd8c0</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="n">FAULT_ADDR_G14X</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0xd8c8</span><span class="p">;</span>
+
+<span class="bp">self</span><span class="p">.</span><span class="n">sgx_read64</span><span class="p">(</span><span class="n">FAULT_INFO</span><span class="p">);</span><span class="w"> </span><span class="c1">// no build assert</span>
+<span class="bp">self</span><span class="p">.</span><span class="n">sgx_read64</span><span class="p">(</span><span class="n">FAULT_INFO_G14X</span><span class="p">);</span><span class="w"> </span><span class="c1">// triggers build assert</span>
+<span class="bp">self</span><span class="p">.</span><span class="n">sgx_read64</span><span class="p">(</span><span class="n">FAULT_ADDR_G14X</span><span class="p">);</span><span class="w"> </span><span class="c1">// no build assert</span>
+</code></pre></div>
+<p>I'll post the failing tree tomorrow.</p>
+
+
+
+<a name="501676001"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501676001" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501676001">(Feb 24 2025 at 23:44)</a>:</h4>
+<p><span class="user-mention" data-user-id="671509">@Janne Grunau</span> note that I have a newer version</p>
+
+
+
+<a name="501677029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501677029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501677029">(Feb 24 2025 at 23:52)</a>:</h4>
+<p>there will probably also change quite a bit. upstream is currently still missing pio support. currently working on that</p>
+
+
+
+<a name="501677080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501677080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501677080">(Feb 24 2025 at 23:52)</a>:</h4>
+<p>also readq_relaxed is in driver-core-next  already <code>read64_relaxed</code> for future proving with my pio work</p>
+
+
+
+<a name="501677849"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501677849" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501677849">(Feb 24 2025 at 23:58)</a>:</h4>
+<p>but I'd assume the newer version is not really expected to change anything here as it's more the existing <code>Io</code> code than the new IoMem.<br>
+I'm aware that this will not be the final rebase. I have to start somewhere and I'd like to have checkpoints as I can't simply test in my rebase branch.</p>
+
+
+
+<a name="501678047"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501678047" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fiona Behrens <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501678047">(Feb 25 2025 at 00:00)</a>:</h4>
+<p>still trying out different version on how to do it, and not yet fully set one one aproach with libiomap and all those. but will try to make the transition as reasonable as possible</p>
+
+
+
+<a name="501734746"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501734746" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501734746">(Feb 25 2025 at 08:01)</a>:</h4>
+<p>Try marking <code>sgx_read32</code> inline or making the offset into a const generic.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">sgx_read32</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">OFF</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">u32</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">io</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">sgx</span><span class="p">.</span><span class="n">try_access</span><span class="p">().</span><span class="n">unwrap</span><span class="p">()</span>
+<span class="w">    </span><span class="n">io</span><span class="p">.</span><span class="n">readq_relaxed</span><span class="p">(</span><span class="n">OFF</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I wonder if the <code>build_assert!</code> is too fragile to use in practice.</p>
+
+
+
+<a name="501745689"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501745689" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501745689">(Feb 25 2025 at 09:04)</a>:</h4>
+<p>both  inline and const generics avoid the issue.</p>
+<p>My main complaint against <code>build_assert!</code> is against the ergonomics. Failing at link time takes ~26 seconds for single change in the asahi driver trying to fix the <code>build_assert!</code>. The reporting of the issue is very vague. When compiling the driver as module only the missing <code>rust_build_error</code> symbol is reported (gcc). Built-in at least the function referencing the symbol is reported but if it is a leaf function like <code>kernel::io::Io&lt;16777216&gt;&gt;::io_addr_assert::&lt;u32&gt;</code> it's not very helpful. <code>&lt;asahi::regs::Resources&gt;::sgx_read32</code> which I've seen as well is not much better. Depending on compiler optimizations for how to report build time assert is not user friendly.</p>
+
+
+
+<a name="501746228"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501746228" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501746228">(Feb 25 2025 at 09:07)</a>:</h4>
+<p>It might make sense to make the offset into a const generic and never perform the build-time checks with the methods that don't take a non-const-generic.</p>
+
+
+
+<a name="501792635"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501792635" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501792635">(Feb 25 2025 at 12:22)</a>:</h4>
+<blockquote>
+<p>Failing at link time takes ~26 seconds for single change in the asahi driver trying to fix the <code>build_assert!</code>.</p>
+</blockquote>
+<p>That sounds like a lot -- is it a reduced config?</p>
+<p>I think we will always need a tool like <code>build_assert!</code>or something similar -- if someone can come up with a better implementation, either less finicky or with better error messages, yeah, it would be great. Even if it requires compiler support, it would be worth it.</p>
+
+
+
+<a name="501844516"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501844516" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501844516">(Feb 25 2025 at 16:02)</a>:</h4>
+<p>Can the compile-time check functions be disabled when CONFIG_RUST_BUILD_ASSERT_ALLOW=n?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="o">---</span>
+<span class="w"> </span><span class="n">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">io</span><span class="p">.</span><span class="n">rs</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">++</span>
+<span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">changed</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="n">insertions</span><span class="p">(</span><span class="o">+</span><span class="p">)</span>
+
+<span class="n">diff</span><span class="w"> </span><span class="o">--</span><span class="n">git</span><span class="w"> </span><span class="n">a</span><span class="o">/</span><span class="n">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">io</span><span class="p">.</span><span class="n">rs</span><span class="w"> </span><span class="n">b</span><span class="o">/</span><span class="n">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">io</span><span class="p">.</span><span class="n">rs</span>
+<span class="n">index</span><span class="w"> </span><span class="mi">9</span><span class="n">ce3482b5e</span><span class="o">..</span><span class="n">c4aa2ab8e2</span><span class="w"> </span><span class="mi">100644</span>
+<span class="o">---</span><span class="w"> </span><span class="n">a</span><span class="o">/</span><span class="n">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">io</span><span class="p">.</span><span class="n">rs</span>
+<span class="o">+++</span><span class="w"> </span><span class="n">b</span><span class="o">/</span><span class="n">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">io</span><span class="p">.</span><span class="n">rs</span>
+<span class="o">@@</span><span class="w"> </span><span class="o">-</span><span class="mi">118</span><span class="p">,</span><span class="mi">6</span><span class="w"> </span><span class="o">+</span><span class="mi">118</span><span class="p">,</span><span class="mi">7</span><span class="w"> </span><span class="o">@@</span><span class="w"> </span><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">define_read</span><span class="w"> </span><span class="p">{</span>
+<span class="w">         </span><span class="sd">/// time, the build will fail.</span>
+<span class="w">         </span><span class="cp">$(#[$attr]</span><span class="p">)</span><span class="o">*</span>
+<span class="w">         </span><span class="cp">#[inline]</span>
+<span class="o">+</span><span class="w">        </span><span class="cp">#[cfg(CONFIG_RUST_BUILD_ASSERT_ALLOW)]</span>
+<span class="w">         </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="cp">$name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">offset</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="cp">$type_name</span><span class="w"> </span><span class="p">{</span>
+<span class="w">             </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">io_addr_assert</span><span class="p">::</span><span class="o">&lt;</span><span class="cp">$type_name</span><span class="o">&gt;</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+<span class="o">@@</span><span class="w"> </span><span class="o">-</span><span class="mi">147</span><span class="p">,</span><span class="mi">6</span><span class="w"> </span><span class="o">+</span><span class="mi">148</span><span class="p">,</span><span class="mi">7</span><span class="w"> </span><span class="o">@@</span><span class="w"> </span><span class="fm">macro_rules!</span><span class="w"> </span><span class="n">define_write</span><span class="w"> </span><span class="p">{</span>
+<span class="w">         </span><span class="sd">/// time, the build will fail.</span>
+<span class="w">         </span><span class="cp">$(#[$attr]</span><span class="p">)</span><span class="o">*</span>
+<span class="w">         </span><span class="cp">#[inline]</span>
+<span class="o">+</span><span class="w">        </span><span class="cp">#[cfg(CONFIG_RUST_BUILD_ASSERT_ALLOW)]</span>
+<span class="w">         </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="cp">$name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="cp">$type_name</span><span class="p">,</span><span class="w"> </span><span class="n">offset</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">             </span><span class="kd">let</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">io_addr_assert</span><span class="p">::</span><span class="o">&lt;</span><span class="cp">$type_name</span><span class="o">&gt;</span><span class="p">(</span><span class="n">offset</span><span class="p">);</span>
+
+<span class="o">--</span>
+<span class="mf">2.34.1</span>
+</code></pre></div>
+
+
+
+<a name="501845019"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501845019" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501845019">(Feb 25 2025 at 16:04)</a>:</h4>
+<p><span class="user-mention" data-user-id="556237">@JCKeep</span> That's the same as using runtime-checks. Using something called "build_assert" for runtime checks only seems wrong.</p>
+
+
+
+<a name="501877705"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/501877705" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Janne Grunau <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#501877705">(Feb 25 2025 at 17:59)</a>:</h4>
+<p>It's a stripped down Fedora config with full debug info so on the larger side of things but the majority of that is compiling/linking <code>asahi.ko</code>. That takes almost 20 seconds (measured with the module build). 16.5K lines of code of which a large part is compiled 5 times (currently).</p>
+
+
+
+<a name="502041668"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/502041668" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#502041668">(Feb 26 2025 at 13:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/288089-General/topic/build.20checked.20IoMem.20access/near/501792635">said</a>:</p>
+<blockquote>
+<p>I think we will always need a tool like <code>build_assert!</code>or something similar -- if someone can come up with a better implementation, either less finicky or with better error messages, yeah, it would be great. Even if it requires compiler support, it would be worth it.</p>
+</blockquote>
+<p>One option is to extract debug information (if compiled with that, that is) and to find the call-site</p>
+
+
+
+<a name="502058084"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/build%20checked%20IoMem%20access/near/502058084" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/build.20checked.20IoMem.20access.html#502058084">(Feb 26 2025 at 14:18)</a>:</h4>
+<p>+1, I noted it in the issue and also added a couple links from the last days on this: <a href="https://github.com/Rust-for-Linux/linux/issues/354">https://github.com/Rust-for-Linux/linux/issues/354</a>.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

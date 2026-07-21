@@ -1,0 +1,158 @@
+<html>
+<head><meta charset="utf-8"><title>Consolidate `PollCondVarBox` into `Rcu*Box` · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html">Consolidate `PollCondVarBox` into `Rcu*Box`</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="598726724"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/598726724" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#598726724">(May 30 2026 at 15:25)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> regarding the <a href="https://lore.kernel.org/rust-for-linux/20260523-upgrade-poll-v4-0-f5b4c747eac2@google.com/"><code>PollCondVarBox</code></a>, let's say we have <code>RcuBox</code>, could we then add a <code>RcuFreeBox&lt;T: RcuFreeSafe, A&gt;</code> type similar to <code>RcuBox</code> (and reuse the <code>RcuBoxInner</code> definition) that</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">RcuFreeSafe</span><span class="p">,</span><span class="w"> </span><span class="n">A</span><span class="p">:</span><span class="w"> </span><span class="nc">Allocator</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Drop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">RcuFreeBox</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">A</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">T</span><span class="p">::</span><span class="n">drop_in_place_before_gp</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="mf">0.</span><span class="n">as_ptr</span><span class="p">());</span>
+<span class="w">        </span><span class="n">kvfree_call_rcu</span><span class="p">(</span><span class="o">..</span><span class="p">.);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>?</p>
+<p>And <code>RcuFreeSafe</code> type being:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// # Safety</span>
+<span class="sd">/// Implementing this trait means it's safe to call `drop_in_place_before_gp()` on</span>
+<span class="sd">/// the object and wait for one grace period to free it.</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">RcuFreeSafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop_in_place_before_gp</span><span class="p">(</span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>and </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="w"> </span><span class="n">RcuFreeSafe</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PollCondVar</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">drop_in_place_before_gp</span><span class="p">(</span><span class="n">ptr</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="bp">Self</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">__wake_up_pollfree</span><span class="p">((</span><span class="o">*</span><span class="n">ptr</span><span class="p">).</span><span class="n">inner</span><span class="p">.</span><span class="n">wait_queue_head</span><span class="p">.</span><span class="n">get</span><span class="p">())</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>you can reuse the above function in <code>PollCondVar::drop()</code> as well.</p>
+
+
+
+<a name="598727108"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/598727108" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#598727108">(May 30 2026 at 15:30)</a>:</h4>
+<p>Seems sensible</p>
+
+
+
+<a name="598727199"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/598727199" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#598727199">(May 30 2026 at 15:31)</a>:</h4>
+<p>Do you want to submit a follow-up patch?</p>
+
+
+
+<a name="598727229"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/598727229" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#598727229">(May 30 2026 at 15:32)</a>:</h4>
+<p>Yes, I do plan to work on it this weekend.</p>
+
+
+
+<a name="599129591"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599129591" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599129591">(Jun 01 2026 at 11:11)</a>:</h4>
+<p>The fence private data trait in the dma fence series seems like it should just be <code>RcuFreeSafe</code></p>
+
+
+
+<a name="599160409"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599160409" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599160409">(Jun 01 2026 at 13:33)</a>:</h4>
+<p>The safety requirement probably is quite complicated, given possibility that the contents are accessed after <code>drop_in_place_before_gp</code></p>
+
+
+
+<a name="599163695"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599163695" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599163695">(Jun 01 2026 at 13:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60/near/599129591">said</a>:</p>
+<blockquote>
+<p>The fence private data trait in the dma fence series seems like it should just be <code>RcuFreeSafe</code></p>
+</blockquote>
+<p>Yeah, I had the same feeling when peeking the code. Glad that you took a good look ;)</p>
+
+
+
+<a name="599164302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599164302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599164302">(Jun 01 2026 at 13:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="413824">Gary Guo</span> <a href="#narrow/channel/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60/near/599160409">said</a>:</p>
+<blockquote>
+<p>The safety requirement probably is quite complicated, given possibility that the contents are accessed after <code>drop_in_place_before_gp</code></p>
+</blockquote>
+<p>Maybe, but I feel this is the right abstraction, i.e. if a type can "pre-drop" itself into a sane state then it'll be good having RCU readers racing with <code>kfree_rcu()</code>.</p>
+
+
+
+<a name="599164393"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599164393" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599164393">(Jun 01 2026 at 13:49)</a>:</h4>
+<p>Actually, the fence thing is not the same thing as <code>RcuFreeSafe</code></p>
+
+
+
+<a name="599164625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599164625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599164625">(Jun 01 2026 at 13:50)</a>:</h4>
+<p>It's perfectly safe to free the memory holding an RcuBox after less than one grace period after calling drop.</p>
+
+
+
+<a name="599164949"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599164949" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599164949">(Jun 01 2026 at 13:52)</a>:</h4>
+<p>by "holding an RcuBox" you mean holding the pointer or?</p>
+
+
+
+<a name="599165279"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599165279" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599165279">(Jun 01 2026 at 13:53)</a>:</h4>
+<p>i.e.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">Foo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="nc">RcuBox</span><span class="o">&lt;..&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>Foo</code> can be freed without waiting for RCU grace period?</p>
+
+
+
+<a name="599165304"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599165304" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599165304">(Jun 01 2026 at 13:53)</a>:</h4>
+<p>Yes</p>
+
+
+
+<a name="599165381"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599165381" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599165381">(Jun 01 2026 at 13:53)</a>:</h4>
+<p>The point is, you can invalidate Foo by invoking kfree_rcu(), and then it's still valid to read it for one grace period.</p>
+
+
+
+<a name="599166103"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599166103" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599166103">(Jun 01 2026 at 13:56)</a>:</h4>
+<p>But only if the reader owns a refcount on the memory (or otherwise keeps the memory alive).</p>
+
+
+
+<a name="599168625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599168625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599168625">(Jun 01 2026 at 14:06)</a>:</h4>
+<p>Ah, I see. So <code>RcuBox</code> is good enough here, we just need to make sure the user use an <code>RcuBox</code> here.</p>
+
+
+
+<a name="599169232"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Consolidate%20%60PollCondVarBox%60%20into%20%60Rcu%2ABox%60/near/599169232" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Consolidate.20.60PollCondVarBox.60.20into.20.60Rcu.2ABox.60.html#599169232">(Jun 01 2026 at 14:09)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// The underlying object will stay alive for one RCU grace period,</span>
+<span class="sd">/// so it's safe that an RCU reader exists when `drop()`.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">RcuDrop</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">A</span><span class="o">&gt;</span><span class="w"> </span><span class="n">RcuDrop</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">RcuBox</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">A</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

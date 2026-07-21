@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>I have a way to unify <code>Arc</code> and <code>ARef</code> but it requires <code>min_specialization</code>.</p>\n<p>Currently Rust ref-counted objects are <code>Arc&lt;T&gt;</code> and C (always) ref-counted objects are <code>ARef&lt;T&gt;</code> (e.g., <code>ARef&lt;Task&gt;</code>). With <code>min_specialization</code> we can make them both <code>Arc&lt;T&gt;</code>, which I think is a nice unification of the concepts. This is also something that <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> has been asking for for a long time.</p>\n<p>How do you all feel about this? Is it worth taking a new unstable feature?</p>",
+        "id": 327466674,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1676264782
+    },
+    {
+        "content": "<p>I'm not sure even min_specialization is sound. Full specialization definitively isn't. In any case I don't expect it to be stabilized in it's current form and would honestly love for specialization to be demoted to optimization-only. As such please don't use specialization.</p>",
+        "id": 327478320,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676271847
+    },
+    {
+        "content": "<p>How did you intend to use specialization to unify them by the way?</p>",
+        "id": 327478369,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676271868
+    },
+    {
+        "content": "<p>Because <code>Arc::drop</code> needs to be specialized? Also <code>clone</code></p>",
+        "id": 327481671,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1676273537
+    },
+    {
+        "content": "<p>Would it work to have a <code>WithRef</code> type containing reference counters and data and implementing <code>AlwaysRefCounted</code> and then make <code>Arc&lt;T&gt;</code> an alias for <code>ARef&lt;WithRef&lt;T&gt;&gt;</code>?</p>",
+        "id": 327490687,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676277114
+    },
+    {
+        "content": "<p>That's what I suggested in the last meeting</p>",
+        "id": 327510570,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1676283449
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/.60Arc.60.20and.20.60ARef.60/near/327510570\">said</a>:</p>\n<blockquote>\n<p>That's what I suggested in the last meeting</p>\n</blockquote>\n<p>Indeed, but I don't think this is ergonomic because we go from <code>Arc&lt;T&gt;</code> to <code>Arc&lt;WithRef&lt;T&gt;&gt;</code> for Rust types.</p>\n<p>My approach with min_specialization is to have a <code>RefCounted</code> trait with unsafe <code>inc_ref</code>and <code>dec_ref</code> that require callers to ensure that that instance of <code>Self</code> is ref-counted. There would be a default implementation for all types that assumes that the object was allocated as an <code>ArcInner</code> (or <code>WithRef</code>, however we decide to call it). The C wrappers that are always refcounted specialize <code>RefCounted</code> to call the appropriate C functions (e.g., <code>get_task_struct</code>/<code>put_task_struct</code> for <code>Task</code>).</p>\n<p>Then <code>Arc&lt;T&gt;</code> requires <code>T: RefCounted</code> and its constructors always allocate with <code>ArcInner</code> (as it is today), so it's safe to call <code>inc_ref</code>/<code>dec_ref</code> because the object was either allocated with <code>ArcInner</code> and uses the default impl of <code>RefCounted</code>, or it came from C and has a specialized <code>RefCounted</code>.</p>",
+        "id": 327571008,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1676300695
+    },
+    {
+        "content": "<p>I don't think that work well with unsizing.</p>",
+        "id": 327578662,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1676302450
+    },
+    {
+        "content": "<p>You can't unsize a <code>ARef&lt;Inode&gt;</code> to <code>Arc&lt;dyn Any&gt;</code></p>",
+        "id": 327578866,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1676302507
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"531558\">Wedson Almeida Filho</span> <a href=\"#narrow/stream/288089-General/topic/.60Arc.60.20and.20.60ARef.60/near/327466674\">said</a>:</p>\n<blockquote>\n<p>I have a way to unify <code>Arc</code> and <code>ARef</code> but it requires <code>min_specialization</code>.</p>\n</blockquote>\n<p>It seems to me it might be a bit early to adopt <code>min_specialization</code>. It looks like it's not functional yet?</p>",
+        "id": 327714813,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1676362949
+    },
+    {
+        "content": "<p>As far as I understand, the feature works at least to the extent the standard library uses it (which is <code>min_specialization</code> plus a couple extensions). If we end up using it, we would need to ensure it is sound for our use case, similar to the situation with other features <code>Arc</code> uses (e.g. <code>CoerceUnsized</code> is unsound).</p>",
+        "id": 327768487,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676379390
+    },
+    {
+        "content": "<p>Even libstd managed to mess up specialization implementations to cause unsoundness in several occasions.</p>",
+        "id": 327796367,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676386690
+    },
+    {
+        "content": "<ul>\n<li><a href=\"https://github.com/rust-lang/rust/issues/85873\">https://github.com/rust-lang/rust/issues/85873</a> \"TrustedRandomAccess optimization for Zip containing vec::IntoIter is unsound with how specialization currently behaves around HRTB fn pointers\"</li>\n<li><a href=\"https://github.com/rust-lang/rust/issues/85863\">https://github.com/rust-lang/rust/issues/85863</a> \"iter::Fuse is unsound with how specialization currently behaves around HRTB fn pointers\"</li>\n<li><a href=\"https://github.com/rust-lang/rust/issues/85322\">https://github.com/rust-lang/rust/issues/85322</a> \"The implementation of InPlaceIterable for Peekable is unsound\"</li>\n<li><a href=\"https://github.com/rust-lang/rust/issues/81740\">https://github.com/rust-lang/rust/issues/81740</a> \"Soundness issue in Zip::next() specialization\"</li>\n</ul>\n<p>Even just enabling <code>min_specialization</code> without actually using it is currently unsound:</p>\n<ul>\n<li><a href=\"https://github.com/rust-lang/rust/issues/79457\">https://github.com/rust-lang/rust/issues/79457</a> \"With min_specialization enabled, an incomplete impl for a non-static type will delegate method calls to a less-specific impl with a 'static bound\" (not yet fixed)</li>\n</ul>",
+        "id": 327812195,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676390430
+    },
+    {
+        "content": "<p>As usual, thanks a lot <span class=\"user-mention\" data-user-id=\"412316\">@bjorn3</span> for all the references, very useful. I will add them in a new entry to keep track of them.</p>",
+        "id": 327818306,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676391980
+    },
+    {
+        "content": "<p>Apart from the last one all of them are resolved. My point is that even rustc devs mess up with min_specialization.</p>",
+        "id": 327818531,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676392033
+    },
+    {
+        "content": "<p>Yeah, well, that is why we have some experts around ;) Jokes aside, I think Wedson's idea is to only use it for the <code>Arc</code> particular case, rather than allow everyone to use it within the <code>kernel</code> crate (enforcing this will be easier when the crate is split). Would that be reasonable? We could also speak with upstream Rust to see what they think. Since we are anyhow in a special situation with <code>Arc</code>, it may make sense to put all together and give <code>Arc</code> (and only <code>Arc</code>) those special powers.</p>",
+        "id": 327819441,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676392248
+    },
+    {
+        "content": "<p>Personally I prefer no specialization to be used, but I won't stop you.</p>",
+        "id": 327821012,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676392663
+    },
+    {
+        "content": "<p>By the way how is specialization intended to help here? Who will specialize what trait?</p>",
+        "id": 327821160,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676392695
+    },
+    {
+        "content": "<p>It might not be clear to someone reading the code how this feature works without going deep, so it would make this code more difficult to review and maintain. If, in addition, the feature is difficult to apply without messing up, even more reason not to do it.</p>",
+        "id": 327823881,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1676393429
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"412316\">@bjorn3</span> Noted at <a href=\"https://github.com/Rust-for-Linux/linux/issues/354\">https://github.com/Rust-for-Linux/linux/issues/354</a>, please let me know if that sounds about right to you.</p>",
+        "id": 327824863,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676393710
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 327833219,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676395961
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412316\">bjorn3</span> <a href=\"#narrow/stream/288089-General/topic/.60Arc.60.20and.20.60ARef.60/near/327821160\">said</a>:</p>\n<blockquote>\n<p>By the way how is specialization intended to help here? Who will specialize what trait?</p>\n</blockquote>\n<p>From a previous message:<br>\nMy approach with min_specialization is to have a <code>RefCounted</code> trait with unsafe <code>inc_ref</code>and <code>dec_ref</code> that require callers to ensure that that instance of <code>Self</code> is ref-counted. There would be a default implementation for all types that assumes that the object was allocated as an <code>ArcInner</code> (or <code>WithRef</code>, however we decide to call it). The C wrappers that are always refcounted specialize <code>RefCounted</code> to call the appropriate C functions (e.g., <code>get_task_struct</code>/<code>put_task_struct</code> for <code>Task</code>).</p>\n<p>Then <code>Arc&lt;T&gt;</code> requires <code>T: RefCounted</code> and its constructors always allocate with <code>ArcInner</code> (as it is today), so it's safe to call <code>inc_ref</code>/<code>dec_ref</code> because the object was either allocated with <code>ArcInner</code> and uses the default impl of <code>RefCounted</code>, or it came from C and has a specialized <code>RefCounted</code>.</p>",
+        "id": 327840351,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1676397919
+    },
+    {
+        "content": "<p>Having specializing impls for C structs means you have to enable min_specialization for every crate that implements RefCounted. Also each RefCounted impl has to be either in the crate defining RefCounted or in the bindings crate defining the C struct.</p>",
+        "id": 327850600,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676400898
+    },
+    {
+        "content": "<p>It's still unclear how unsized types would be handled.</p>",
+        "id": 327939292,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1676446244
+    }
+]

@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p>Linus' <a href=\"https://lore.kernel.org/lkml/CAHk-=wgO7S_FZUSBbngG5vtejWOpzDfTTBkVvP3_yjJmFddbzA@mail.gmail.com/T/#me533a148abe97c29e0e7150508c42345b2a64e13\">email</a> complaining about rustfmt's handling of import statements caught some attention online.</p>\n<p>I also experienced this issue (on many different projects) and tried to find out what could be done about it. As Miguel mentioned, the relevant rustfmt configuration is sadly unstable. However, rustfmt actually just preserves the style that already exists. Which means, if new import statements are added in a merge-friendly style, rustfmt will be happy to keep that.</p>\n<p>I always add import statements via rust-analyzer, which defaults to merging import statements at the \"crate\" granularity. I imagine most Rust developers do the same. rust-analyzer can be configured to put every item on a separate line, which would be much more merge-friendly. I was just informed that this configuration can be done in a <strong>editor independent way</strong>, which is obviously important for big projects like the Linux kernel. This is not (yet) documented in rust-analyzer's manual, so not many people know about it.</p>\n<p>Now, that approach doesn't completely <em>enforce</em> this style yet. But, if there are people not using rust-analyzer and adding import statements manually, they would probably copy the style that already exists in a file. Also, one item per line is actually easier to type manually than managing the nested curly braces.</p>\n<p>So, I think this could be an interesting option for the kernel. The configuration is made by adding a <code>rust-analyzer.toml</code> file in the root of the project, with the following content:</p>\n<div class=\"codehilite\" data-code-language=\"TOML\"><pre><span></span><code><span class=\"n\">imports</span><span class=\"p\">.</span><span class=\"n\">granularity</span><span class=\"p\">.</span><span class=\"n\">group</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s2\">\"item\"</span>\n</code></pre></div>\n<p>This style is more verbose, but it leads to much more straight-forward merge conflicts. I have enabled it unconditionally in my own user config.</p>",
+        "id": 543154413,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759662139
+    },
+    {
+        "content": "<p>I personally use the module granularity. It is not as verbose as item granularity while being less conflict prone than crate granularity.</p>",
+        "id": 543165905,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1759674059
+    },
+    {
+        "content": "<p>why couldn't we just have an option that preserves newlines after braces? So if I write</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::{</span>\n<span class=\"w\">   </span><span class=\"n\">foo</span><span class=\"p\">,</span>\n<span class=\"w\">   </span><span class=\"n\">bar</span><span class=\"p\">,</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>Then that's well-formatted?</p>",
+        "id": 543166079,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759674250
+    },
+    {
+        "content": "<p>That's not rust-analyzer's job, so it cannot be configured that way. It is a rustfmt config option, namely <code>imports_layout = \"Vertical\"</code><br>\n<a href=\"https://rust-lang.github.io/rustfmt/?version=v1.8.0&amp;search=#imports_layout\">https://rust-lang.github.io/rustfmt/?version=v1.8.0&amp;search=#imports_layout</a><br>\n(unstable)</p>\n<p>I don't see the benefit of that though. Your example uses 4 lines. Item granularity would use two. So that's actually more verbose than item granularity.</p>",
+        "id": 543166363,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759674512
+    },
+    {
+        "content": "<p>it's not about the number of lines, it's about visual clarity. let's say we expand the example above over time with <code>baz</code> and <code>buzz</code>, now it looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::{</span>\n<span class=\"w\">   </span><span class=\"n\">foo</span><span class=\"p\">,</span>\n<span class=\"w\">   </span><span class=\"n\">bar</span><span class=\"p\">,</span>\n<span class=\"w\">   </span><span class=\"n\">baz</span>\n<span class=\"w\">   </span><span class=\"n\">buzz</span><span class=\"p\">,</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>whereas item granularity looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">foo</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">bar</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">baz</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">buzz</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>That's a lot more visual clutter IMO and totally unnecessary repetition.</p>\n<p>Let's go to a more realistic example, where we don't import items from the top-level and where the names aren't as short as 3/4 characters:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::{</span>\n<span class=\"w\">    </span><span class=\"n\">FwNode</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">FwNodeReferenceArgs</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">Property</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">PropertyGuard</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">PropertyInt</span><span class=\"p\">,</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>vs</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::</span><span class=\"n\">FwNode</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::</span><span class=\"n\">FwNodeReferenceArgs</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::</span><span class=\"n\">Property</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::</span><span class=\"n\">PropertyGuard</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">property</span><span class=\"p\">::</span><span class=\"n\">PropertyInt</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 543166747,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759674868
+    },
+    {
+        "content": "<p>if there are huge issues with the extra lines that the braces sit on, then I'd understand why we'd go for item-granularity, but especially if we have imports from multiple submodules that have a common starting path, I think we should use braces</p>",
+        "id": 543166836,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759674942
+    },
+    {
+        "content": "<p>Yeah, I see your point. And it should address Linus' concern equally well. Too bad the rustfmt config option isn't stable.</p>",
+        "id": 543167041,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759675149
+    },
+    {
+        "content": "<p>I don't think there is an <code>imports_layout</code> option that has that behavior?<br>\nI want both</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">::{</span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">};</span>\n</code></pre></div>\n<p>and</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">::{</span>\n<span class=\"w\">    </span><span class=\"n\">x</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">y</span><span class=\"p\">,</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>to be well-formatted</p>",
+        "id": 543167219,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759675340
+    },
+    {
+        "content": "<p>Hmm, I see. But if the one line overflows, it would be auto-formatted to multiline? You just mean compared to the status quo, a multi-line group should never be collapsed to one line?</p>",
+        "id": 543167581,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759675720
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"747136\">Remo Senekowitsch</span> <a href=\"#narrow/channel/288089-General/topic/Formatting.20of.20import.20statements/near/543167581\">said</a>:</p>\n<blockquote>\n<p>But if the one line overflows, it would be auto-formatted to multiline?</p>\n</blockquote>\n<p>yeah that should be convenient IMO</p>\n<p><span class=\"user-mention silent\" data-user-id=\"747136\">Remo Senekowitsch</span> <a href=\"#narrow/channel/288089-General/topic/Formatting.20of.20import.20statements/near/543167581\">said</a>:</p>\n<blockquote>\n<p>You just mean compared to the status quo, a multi-line group should never be collapsed to one line?</p>\n</blockquote>\n<p>Yes, if I know that there will be lots more imports from a (sub)module, then I should be able to make it multi-line from the get go.</p>",
+        "id": 543167650,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759675791
+    },
+    {
+        "content": "<p>What about only one item? Should this be considered well-formatted?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">::{</span>\n<span class=\"w\">    </span><span class=\"n\">x</span><span class=\"p\">,</span>\n<span class=\"p\">};</span>\n</code></pre></div>",
+        "id": 543167713,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759675862
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 543167721,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759675866
+    },
+    {
+        "content": "<p>rust-analyzer could have a code-action to change the layout from horizontal to vertical</p>",
+        "id": 543167796,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1759675949
+    },
+    {
+        "content": "<p>Some formatters for other languages use the last comma as authoritative. add the last comma -&gt; formatter will do multi-line. remove the last comma -&gt; formatter will do single-line (unless it's too big). I really like that approach, but I'm not aware of rustfmt having that option.</p>",
+        "id": 543168148,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759676289
+    },
+    {
+        "content": "<p>So the problem is Linus cannot merge the imports if they are on the same line, but it is easy if every word is on a separate line?</p>",
+        "id": 543273443,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1759746407
+    },
+    {
+        "content": "<p>Kinda. If items are in a group, e.g. <code>use foo::{bar, qux};</code>then it's hard to guess if rustfmt will put it on one line or multiple. That's the immediate problem he's complaining about. But also the fact that rustfmt putting a few items on one line leads to more merge conflicts. Take this example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">::{</span><span class=\"n\">b</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">c</span><span class=\"p\">};</span><span class=\"w\"> </span><span class=\"c1\">// one line</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">::{</span>\n<span class=\"w\">    </span><span class=\"n\">b</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">c</span><span class=\"p\">,</span>\n<span class=\"p\">};</span><span class=\"w\"> </span><span class=\"c1\">// same import, multiple lines</span>\n</code></pre></div>\n<p>Now, if someone imports <code>foo::a</code> and someone else imports <code>foo::d</code>, the one-line version will generate an annoying conflict while the multi-line version will not. Additionally, if Linus manually fixes the conflict with <code>use foo::{a, b, c, d};</code>, rustfmt might then decide that now is the time to break it onto four lines and annoy him again.</p>",
+        "id": 543313120,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759756909
+    },
+    {
+        "content": "<p>Miguel said in his reply to Linus:</p>\n<blockquote>\n<p>So if the conflicts are already too frequent and/or painful to deal<br>\nwith, then I would say we should already start writing the imports in<br>\na way that reduces the conflict potential, yet making it pass<br>\n<code>rustfmt</code>. It may be uglier than what some may like (depending on who<br>\none asks), but it keeps the <code>rustfmt</code>-clean property and eventually we<br>\nmay be able to get <code>rustfmt</code> to give us the formatting we want and<br>\nmigrate to that.</p>\n</blockquote>\n<p>I think imports granularity \"item\" is exactly that. It's not the prettiest, but we can do it right now. With a one-time manual migration (<code>cargo +nightly fmt</code>) and a <code>rust-analyzer.toml</code> file committed to the repo. Once they are stable, the config options granularity \"module\" and layout \"vertical\" might be preferred, as it's prettier and equally merge-friendly.</p>",
+        "id": 543314473,
+        "sender_full_name": "Remo Senekowitsch",
+        "timestamp": 1759757182
+    }
+]

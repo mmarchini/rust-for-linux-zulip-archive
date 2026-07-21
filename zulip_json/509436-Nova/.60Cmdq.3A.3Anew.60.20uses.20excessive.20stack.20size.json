@@ -1,0 +1,194 @@
+[
+    {
+        "content": "<p>Klint reports this warning when I'm trying to integrate it into upstream:</p>\n<div class=\"codehilite\" data-code-language=\"plain\"><pre><span></span><code>warning: stack size of `gsp::cmdq::Cmdq::new` is 8216 bytes, exceeds the 2048-byte limit\n   --&gt; drivers/gpu/nova-core/gsp/cmdq.rs:453:5\n    |\n453 |     pub(crate) fn new(dev: &amp;device::Device&lt;device::Bound&gt;) -&gt; Result&lt;Cmdq&gt; {\n    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |\n    = note: the stack size is inferred from instruction `sub $0x2018,%rsp` at .text+32778\n</code></pre></div>",
+        "id": 570375549,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769533540
+    },
+    {
+        "content": "<p>It looks to me that using <code>dma_write!</code> on the PTE array is causing the issue.</p>",
+        "id": 570375814,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769533604
+    },
+    {
+        "content": "<p>Yes, the <code>PteArray</code> is temporarily created on the stack to be written. I guess we can fix this by converting its constructor to return an in-place initializer, but that might require unsafe code to access the coherent memory.</p>",
+        "id": 570454187,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769564999
+    },
+    {
+        "content": "<p>Can the PTE be defined as an array of atomic integers?</p>",
+        "id": 570454267,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769565053
+    },
+    {
+        "content": "<p>Yes, that's what it is actually, but having the structure helps contain the code</p>",
+        "id": 570454437,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769565196
+    },
+    {
+        "content": "<p>Mmm maybe we could change <code>dma_write!</code> to accept an <code>Init</code> instead of a value? Values implement <code>Init</code> so the existing code should not break IIUC</p>",
+        "id": 570454475,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769565247
+    },
+    {
+        "content": "<p>Init does not perform write using volatile.</p>",
+        "id": 570454513,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769565295
+    },
+    {
+        "content": "<p>The current code defines an array of integer and then use dma_write macro. I am asking if this can be array of atomic integers so you can perform relaxed store instead for initialization.</p>",
+        "id": 570454564,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769565330
+    },
+    {
+        "content": "<p>But that alone would not remove the stack object, would it?</p>",
+        "id": 570454670,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769565412
+    },
+    {
+        "content": "<p>We can provide a special zeroing initializer</p>",
+        "id": 570454740,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769565473
+    },
+    {
+        "content": "<p>Another idea: perhaps we can add an dma allocation API that takes init. As the init is executed before a dma object is returned, there's no issue of race at all and can use normal init.</p>",
+        "id": 570456463,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769566895
+    },
+    {
+        "content": "<p>That would probably be best - the question then becomes how to deal with the fact that <code>CoherentAllocation</code>s are arrays of objects</p>",
+        "id": 570458777,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769568069
+    },
+    {
+        "content": "<p>An Fn that returns an Init?</p>",
+        "id": 570459020,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769568236
+    },
+    {
+        "content": "<p>I'd be happy to send a patch for this!<br>\nI already have a draft here if you're interested: <a href=\"https://github.com/a1phyr/linux/tree/cmdq_init\">https://github.com/a1phyr/linux/tree/cmdq_init</a></p>",
+        "id": 570844981,
+        "sender_full_name": "Alphyr",
+        "timestamp": 1769705105
+    },
+    {
+        "content": "<p>I prototyped something similar, however I am worried that once <code>DmaAddress</code> is given to the user, they might send this to device, even if <code>CoherentAllocation</code> is yet private.</p>",
+        "id": 570845641,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769705257
+    },
+    {
+        "content": "<p>(I would call the fn <code>new_coherent</code> by the way)</p>",
+        "id": 570845805,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769705298
+    },
+    {
+        "content": "<p>Mmm yeah I wouldn't pass the <code>DmaAddress</code> to the initializer. I guess in the case of Nova we should just initialize the pages one by one using <code>dma_write!</code> since we need that information.</p>",
+        "id": 570922032,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769734369
+    },
+    {
+        "content": "<p>This <code>PteArray</code> thing was probably a bit of overengineering on my end</p>",
+        "id": 570922093,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1769734415
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/509436-Nova/topic/.60Cmdq.3A.3Anew.60.20uses.20excessive.20stack.20size/near/570845641\">said</a>:</p>\n<blockquote>\n<p>I prototyped something similar, however I am worried that once <code>DmaAddress</code> is given to the user, they might send this to device, even if <code>CoherentAllocation</code> is yet private.</p>\n</blockquote>\n<p>Is it actually possible with safe code? <code>DmaAdress</code> is a type alias to <code>dma_addr_t</code> (which is basically an integer), so that would mean that safe code would be able to send any address (valid or not) to the device. This seems weird to me.</p>",
+        "id": 571438728,
+        "sender_full_name": "Alphyr",
+        "timestamp": 1770040788
+    },
+    {
+        "content": "<p>There is currently nothing preventing you from giving any address to the device to do DMA</p>",
+        "id": 571441351,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770041401
+    },
+    {
+        "content": "<p>(Perhaps this would mean that the <code>register!</code> macro needs to be <code>unsafe</code>?)</p>",
+        "id": 571441414,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770041418
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span> I think I'm done with the implementing part, just left to run the tests. Once that is done, I'll have to figure out the whole git send-email stuff (it's my first time :) )</p>\n<p>As for the impelementation, does this look right? </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">device</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Bound</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MSGQ_SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">num</span><span class=\"p\">::</span><span class=\"n\">usize_into_u32</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">Msgq</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">RX_HDR_OFF</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">num</span><span class=\"p\">::</span><span class=\"n\">usize_into_u32</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">Msgq</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">rx</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">gsp_mem</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">            </span><span class=\"n\">CoherentAllocation</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">GspMem</span><span class=\"o\">&gt;</span><span class=\"p\">::</span><span class=\"n\">alloc_coherent</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">GFP_KERNEL</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">__GFP_ZERO</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">NUM_PAGES</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">GSP_PAGE_SIZE</span><span class=\"w\"> </span><span class=\"o\">/</span><span class=\"w\"> </span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// One by one GSP Page write to the memory to avoid stack overflow when allocating</span>\n<span class=\"w\">        </span><span class=\"c1\">// the whole array at once.</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">item</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">gsp_mem</span><span class=\"p\">.</span><span class=\"n\">item_from_index</span><span class=\"p\">(</span><span class=\"mi\">0</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"o\">..</span><span class=\"n\">NUM_PAGES</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pte_value</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">gsp_mem</span>\n<span class=\"w\">                    </span><span class=\"p\">.</span><span class=\"n\">dma_handle</span><span class=\"p\">()</span>\n<span class=\"w\">                    </span><span class=\"p\">.</span><span class=\"n\">checked_add</span><span class=\"p\">(</span><span class=\"n\">num</span><span class=\"p\">::</span><span class=\"n\">usize_as_u64</span><span class=\"p\">(</span><span class=\"n\">i</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&lt;&lt;</span><span class=\"w\"> </span><span class=\"n\">GSP_PAGE_SHIFT</span><span class=\"p\">)</span>\n<span class=\"w\">                    </span><span class=\"p\">.</span><span class=\"n\">ok_or</span><span class=\"p\">(</span><span class=\"n\">EOVERFLOW</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">            </span><span class=\"c1\">// SAFETY: `item_from_index` ensures that `item` is always a valid pointer and can be</span>\n<span class=\"w\">            </span><span class=\"c1\">// dereferenced. The compiler also further validates the expression on whether `field`</span>\n<span class=\"w\">            </span><span class=\"c1\">// is a member of `item` when expanded by the macro.</span>\n<span class=\"w\">            </span><span class=\"c1\">//</span>\n<span class=\"w\">            </span><span class=\"c1\">// Further, this is dma_write! macro expanded and modified to allow for individual</span>\n<span class=\"w\">            </span><span class=\"c1\">// page write.</span>\n<span class=\"w\">            </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ptr_field</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">ptr</span><span class=\"p\">::</span><span class=\"n\">addr_of_mut</span><span class=\"o\">!</span><span class=\"p\">((</span><span class=\"o\">*</span><span class=\"n\">item</span><span class=\"p\">).</span><span class=\"n\">ptes</span><span class=\"p\">[</span><span class=\"n\">i</span><span class=\"p\">]);</span>\n<span class=\"w\">                </span><span class=\"n\">gsp_mem</span><span class=\"p\">.</span><span class=\"n\">field_write</span><span class=\"p\">(</span><span class=\"n\">ptr_field</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">pte_value</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n\n<span class=\"w\">        </span><span class=\"n\">dma_write</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">gsp_mem</span><span class=\"p\">[</span><span class=\"mi\">0</span><span class=\"p\">].</span><span class=\"n\">cpuq</span><span class=\"p\">.</span><span class=\"n\">tx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">MsgqTxHeader</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">MSGQ_SIZE</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">RX_HDR_OFF</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">MSGQ_NUM_PAGES</span><span class=\"p\">))</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"n\">dma_write</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">gsp_mem</span><span class=\"p\">[</span><span class=\"mi\">0</span><span class=\"p\">].</span><span class=\"n\">cpuq</span><span class=\"p\">.</span><span class=\"n\">rx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">MsgqRxHeader</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">())</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"bp\">Self</span><span class=\"p\">(</span><span class=\"n\">gsp_mem</span><span class=\"p\">))</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>I also changed the LogBuffer::new() in a similar manner as it was also using the <code>PteArray</code> struct.</p>\n<p>Also, for the testing part, I just need to run the unit tests or something else?</p>",
+        "id": 572627089,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1770562861
+    },
+    {
+        "content": "<p>something like that, but you want to use <code>dma_write</code> instead of <code>field_write</code>.</p>",
+        "id": 572733080,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770632546
+    },
+    {
+        "content": "<p>for testing, if you have a working GPU you can check that the driver still loads, but that's not mandatory - I will test it anyway. More importantly, make sure to follow <a href=\"https://rust-for-linux.com/contributing#submit-checklist-addendum\">https://rust-for-linux.com/contributing#submit-checklist-addendum</a></p>",
+        "id": 572733377,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770632621
+    },
+    {
+        "content": "<p>also I suggest you use <a href=\"https://b4.docs.kernel.org/en/latest/index.html\">b4</a> for sending your series. It makes it very difficult to NOT do things correctly. :) If it makes you less nervous, feel free to do a test-drive with my email address only, and I will let you know if it looks good!</p>",
+        "id": 572733737,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770632710
+    },
+    {
+        "content": "<p>For the <code>dma_write</code>, I wanted to write it like that but the macro does not support more than one set of brackets. This is ok <code>gsp_mem[0].ptes =</code> but not this <code>gsp_mem[0].ptes[0] =</code>. I could also be wrong but then I'm not sure. </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">error</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">no</span><span class=\"w\"> </span><span class=\"n\">rules</span><span class=\"w\"> </span><span class=\"n\">expected</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"p\">[</span><span class=\"err\">`</span>\n<span class=\"w\">   </span><span class=\"o\">-</span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">drivers</span><span class=\"o\">/</span><span class=\"n\">gpu</span><span class=\"o\">/</span><span class=\"n\">nova</span><span class=\"o\">-</span><span class=\"n\">core</span><span class=\"o\">/</span><span class=\"n\">gsp</span><span class=\"o\">/</span><span class=\"n\">cmdq</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"p\">:</span><span class=\"mi\">224</span><span class=\"p\">:</span><span class=\"mi\">39</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">224</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">             </span><span class=\"n\">dma_write</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">gsp_mem</span><span class=\"p\">[</span><span class=\"mi\">0</span><span class=\"p\">].</span><span class=\"n\">ptes</span><span class=\"p\">[</span><span class=\"n\">i</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pte_value</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                                       </span><span class=\"o\">^</span><span class=\"w\"> </span><span class=\"n\">no</span><span class=\"w\"> </span><span class=\"n\">rules</span><span class=\"w\"> </span><span class=\"n\">expected</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">token</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"kr\">macro</span><span class=\"w\"> </span><span class=\"n\">call</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"n\">note</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">while</span><span class=\"w\"> </span><span class=\"n\">trying</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"o\">=</span><span class=\"err\">`</span>\n</code></pre></div>\n<p>That's why I basically unwrapped the macro. Should I modify the <code>dma_write</code> macro? Or that's a too important/central of a change?</p>",
+        "id": 572772435,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1770642493
+    },
+    {
+        "content": "<p>And I'll resume on this in a few days, as I have a busy start of the week. Also thank you for being so welcome and making it easy for someone new :)</p>\n<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/509436-Nova/topic/.60Cmdq.3A.3Anew.60.20uses.20excessive.20stack.20size/near/572733737\">said</a>:</p>\n<blockquote>\n<p>also I suggest you use <a href=\"https://b4.docs.kernel.org/en/latest/index.html\">b4</a> for sending your series. It makes it very difficult to NOT do things correctly. :) If it makes you less nervous, feel free to do a test-drive with my email address only, and I will let you know if it looks good!</p>\n</blockquote>",
+        "id": 572773482,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1770642725
+    },
+    {
+        "content": "<p>Ah, I see. There is some rework going on with <code>dma_write</code> anyway, so maybe we can improve things afterwards. <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> for visibility.</p>\n<p>Don't hesitate to send your first patch without overthinking it too much, getting feedback is part of the process. And of course take your time - appreciate your willingness to spend the time to look into this!</p>",
+        "id": 572773962,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770642846
+    },
+    {
+        "content": "<p>Just to confirm, should I leave it as is then or add another case to <code>dma_write</code>. I can at least add a todo and reference the rework. And I'll be sending it soon then!</p>",
+        "id": 572774590,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1770643010
+    },
+    {
+        "content": "<p>Leave it as-is for now, <code>dma_write</code> is a moving target so we will see whether the pending changes cover this use-case as well.</p>",
+        "id": 572784091,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770645044
+    },
+    {
+        "content": "<p>Index projection on DMA write will be supported in the upcoming IO projection rework (in fact it is already in my POC tree). Please leave it as it like Alex suggested, if your patch land first I'll convert it</p>",
+        "id": 572893350,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770673629
+    },
+    {
+        "content": "<p>Related: <a href=\"https://lore.kernel.org/rust-for-linux/CANiq72mAQxbRJZDnik3Qmd4phvFwPA01O2jwaaXRh_T+2=L-qA@mail.gmail.com/\">https://lore.kernel.org/rust-for-linux/CANiq72mAQxbRJZDnik3Qmd4phvFwPA01O2jwaaXRh_T+2=L-qA@mail.gmail.com/</a></p>",
+        "id": 578266592,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1773095980
+    }
+]

@@ -1,0 +1,83 @@
+<html>
+<head><meta charset="utf-8"><title>It&#x27;s now impossible to impl WorkItem for drm::Device::data · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html">It&#x27;s now impossible to impl WorkItem for drm::Device::data</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="525730715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525730715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525730715">(Jun 25 2025 at 14:50)</a>:</h4>
+<p>This field is no longer reference counted, so it cannot be used as <code>WorkItem::Pointer</code>.  The trait cannot be implemented for <code>drm::device::Device&lt;T&gt;</code> or <code>ARef&lt;drm::device::Device&lt;T&gt;&gt;</code> either, because of the orphan rule. This leads to two issues:</p>
+<p>a) We now have to build an extra indirection just to make this work, i.e.: we have to place inner members of <code>drm::device::Device::data</code> behind an <code>Arc&lt;T&gt;</code> just to share them with the worker, even though <code>ARef&lt;drm::device::Device&lt;T&gt;&gt;</code> is already ref-counted.</p>
+<p>b) We now have to group fields into the same struct to place them in said <code>Arc</code>. This is just so that they can be accessed by the worker, even though they may be unrelated otherwise, i.e.:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">DriverData</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// this is clunky and unnecessary</span>
+<span class="w">  </span><span class="n">shared_worker_fields</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">SharedDriverData</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">  </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>c) different workers may need to access different fields, so eventually lots of things will end up in the <code>SharedDriverData</code> struct of the previous example</p>
+<p>This looks like a regression (feature-wise) from what we had before.</p>
+<p>cc <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="519727">@Alice Ryhl</span></p>
+
+
+
+<a name="525732461"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525732461" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525732461">(Jun 25 2025 at 14:58)</a>:</h4>
+<p>hmm, I guess I was too eager to comment here, I now see there is nothing forbidding callers from setting Device&lt;T&gt;::data to an Arc&lt;T&gt;, which would yield the same behavior as before apparently</p>
+
+
+
+<a name="525732557"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525732557" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525732557">(Jun 25 2025 at 14:58)</a>:</h4>
+<p>I don't see how this is different than before, if you really want <code>drm::Device::data</code> to be reference counted you can do that:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">drm</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="k">type</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">MyData</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">   </span><span class="p">[</span><span class="o">..</span><span class="p">.]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="525732778"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525732778" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525732778">(Jun 25 2025 at 14:59)</a>:</h4>
+<p>However, this seems like a workaround. Usually, you want your data to live exactly as long as the <code>drm::Device</code>, hence no need for a separate allocation.</p>
+
+
+
+<a name="525732824"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525732824" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525732824">(Jun 25 2025 at 14:59)</a>:</h4>
+<p>Maybe workqueue should work slightly different and take a <code>ForeignOwnable</code> instead.</p>
+
+
+
+<a name="525733205"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525733205" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525733205">(Jun 25 2025 at 15:01)</a>:</h4>
+<p>yeah, we now have two refcounts for something that should have the same lifetime, true</p>
+
+
+
+<a name="525733501"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525733501" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525733501">(Jun 25 2025 at 15:02)</a>:</h4>
+<p>I'm trying to see your point here with the <code>ForeignOwnable</code> by the way</p>
+
+
+
+<a name="525734052"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525734052" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525734052">(Jun 25 2025 at 15:05)</a>:</h4>
+<p>I don't know exactly how the workqueue stuff works (would need to take a look), but it seemed that you were implying that you can only implement it on your own type,  hence wouldn't <code>struct WqData(ARef&lt;drm::Device&gt;)</code> work?</p>
+
+
+
+<a name="525734092"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/It%27s%20now%20impossible%20to%20impl%20WorkItem%20for%20drm%3A%3ADevice%3A%3Adata/near/525734092" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/It.27s.20now.20impossible.20to.20impl.20WorkItem.20for.20drm.3A.3ADevice.3A.3Adata.html#525734092">(Jun 25 2025 at 15:05)</a>:</h4>
+<p>I think we can just implement it for Device and have it dispatch to the inner T</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

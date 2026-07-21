@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Hello,</p>\n<p>For a personal project, I have ported the rnvme driver (from [1]) to Linux v6.19-rc8. I was wondering if my changes/patches would be helpful to the main rnvme branch? If so, I would be happy to share them.</p>\n<p>[1] <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/a.hindborg/linux.git/log/?h=rnvme\">https://git.kernel.org/pub/scm/linux/kernel/git/a.hindborg/linux.git/log/?h=rnvme</a></p>",
+        "id": 572185360,
+        "sender_full_name": "SeungJong Ha",
+        "timestamp": 1770306517
+    },
+    {
+        "content": "<p>Thanks. I also rebase it regularly. I'm a little behind though.</p>",
+        "id": 572215889,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770314193
+    },
+    {
+        "content": "<p>I think v6.15-rc5 is the last one I did.</p>",
+        "id": 572219017,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770315227
+    },
+    {
+        "content": "<p>I am curious what kind of project your are doing?</p>",
+        "id": 572219140,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770315265
+    },
+    {
+        "content": "<p>I'm currently researching device driver isolation. I needed a realistic sample to measure the overhead of isolating a driver using a lightweight runtime.</p>\n<p>Technically, I started with your <code>rnull</code> branch (v6.18-rc5), updated the kernel crates (including <code>block</code>) to v6.19, and then ported <code>rnvme</code> on top of that.</p>\n<p>However, since this was for a quick experiment, I did a \"brute-force\" port (manual copy-paste) rather than a clean git rebase, so the commit history is currently broken/messy. I am working on cleaning it up so I can share a proper branch with you!</p>",
+        "id": 572285686,
+        "sender_full_name": "SeungJong Ha",
+        "timestamp": 1770346868
+    },
+    {
+        "content": "<p>I plan to do a rebase soon, but I have a bit much on my plate right now. <code>rnull</code> is feature complete downstream, and I am trying to get it ready for upstreaming by LSFMM deadline.</p>",
+        "id": 572354314,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770377797
+    },
+    {
+        "content": "<p>Hi Andreas,</p>\n<p>I've finished cleaning up the rebase. Here is a summary of the two branches:</p>\n<h1>1. rnull-v6.19-rc8</h1>\n<ul>\n<li>Base: rust-fixes (v6.19-rc8)</li>\n<li>\n<p>branch: <a href=\"https://github.com/Engineer-HaMa/linux/tree/rnull-v6.19-rc8\">https://github.com/Engineer-HaMa/linux/tree/rnull-v6.19-rc8</a></p>\n</li>\n<li>\n<p>Ownable/Owned v14: Updated <code>queue_rq</code> signature to use <code>Owned&lt;IdleRequest&lt;T&gt;&gt;</code> and the new request lifecycle (<code>IdleRequest</code> → <code>Request</code>).</p>\n</li>\n<li>DMA API: Adapted to <code>CoherentAllocation::alloc_coherent</code> (removed generic type param, now takes <code>&amp;Device&lt;Bound&gt;</code>).</li>\n<li>TagSet: <code>TagSet::new</code> now takes 6 args (added <code>flags: Flags</code>), and <code>GenDiskBuilder::build</code> returns <code>Result&lt;Arc&lt;GenDisk&lt;T&gt;&gt;&gt;</code>.</li>\n<li>Module macro: Updated <code>authors</code> to take a plural array (<code>[\"Name\"]</code>).</li>\n<li>Block ops: Adapted to current <code>BlkResult</code>, <code>new_request_data()</code>, etc.</li>\n</ul>\n<h1>2. rnvme-v6.19-rc8</h1>\n<ul>\n<li>Base: <code>rnull-v6.19-rc8</code></li>\n<li>branch: <a href=\"https://github.com/Engineer-HaMa/linux/tree/rnvme-v6.19-rc8\">https://github.com/Engineer-HaMa/linux/tree/rnvme-v6.19-rc8</a></li>\n</ul>\n<p>This branch adds 13 commits on top of <code>rnull-v6.19-rc8</code>, ported from your <code>rnvme-v6.15</code> branch. Key changes beyond a straight rebase:</p>\n<ul>\n<li>IRQ vectors: Changed to allocate all vectors upfront in <code>probe()</code> instead of re-allocating in <code>setup_io_queues()</code>. This fixes an issue where <code>pci_alloc_irq_vectors</code> fails to re-allocate when MSI-X is already enabled.</li>\n<li><code>map_queues</code> fix: Changed <code>ForeignOwnable::from_foreign()</code> (which takes ownership) to <code>ForeignOwnable::borrow()</code> for <code>driver_data</code> access. This prevents a use-after-free of the tag set data.</li>\n<li><code>TagSetDataHandle&lt;T&gt;</code>: Introduced a wrapper type to pass tag-set data to <code>Operations::new_request_data()</code> safely. This avoids exposing raw <code>*mut c_void</code> to drivers while working around Rust 1.83's lack of <code>use&lt;&gt;</code> precise capturing in trait methods (needed because <code>ForeignBorrowed&lt;'_, T&gt;</code> with <code>impl PinInit</code> return causes E0195).</li>\n<li>PCI IRQ helpers: Added <code>irq_by_index()</code> / <code>request_irq_by_index()</code> for indexed IRQ vector registration.</li>\n<li>Request queue refactoring: Split <code>RequestQueue</code> into <code>RequestQueueRef</code> (borrowed) and <code>RequestQueue</code> (owning), and moved <code>SyncRequest</code> to <code>request_queue.rs</code>.</li>\n</ul>\n<p>Both branches were ported with the help of AI tools (Claude) and verified in a QEMU VM (virtme-ng) with a virtual NVMe device. I verified <code>rnull</code> insmod/rmmod and <code>rnvme</code> basic I/O (ext4 mount/read/umount).<br>\nI have applied some final adjustments using <code>git commit --amend</code> to polish the implementation. While this summary covers the key architectural changes, please treat the code in the repository as the source of truth if there are any slight discrepancies.</p>\n<p>I hope this saves you some time when you get back to <code>rnvme</code>!</p>",
+        "id": 572365325,
+        "sender_full_name": "SeungJong Ha",
+        "timestamp": 1770381312
+    },
+    {
+        "content": "<p>Thanks, I appreciate it!</p>",
+        "id": 572367387,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770381903
+    },
+    {
+        "content": "<p>Hi Andreas,<br>\nI've rebased both branches from <code>rust-fixes</code> (v6.19-rc8) to <code>rust</code> (v6.19). The commit history and content are the same — just a base change.</p>\n<ul>\n<li>rnull-v6.19: <a href=\"https://github.com/Engineer-HaMa/linux/tree/rnull-v6.19\">https://github.com/Engineer-HaMa/linux/tree/rnull-v6.19</a></li>\n<li>rnvme-v6.19: <a href=\"https://github.com/Engineer-HaMa/linux/tree/rnvme-v6.19\">https://github.com/Engineer-HaMa/linux/tree/rnvme-v6.19</a></li>\n</ul>",
+        "id": 572707468,
+        "sender_full_name": "SeungJong Ha",
+        "timestamp": 1770626176
+    },
+    {
+        "content": "<p>Quick update — I've rebased rnull and rnvme to v7.0-rc3:</p>\n<ul>\n<li><code>rnull-v7.0-rc3</code>: 130 patches on v7.0-rc3</li>\n<li><code>rnvme-v7.0-rc3</code>: +13 patches on top of rnull</li>\n</ul>\n<p>Only one conflict in <code>blk_mq_prealloc_tag_set_tags</code> (renamed from <code>realloc</code> + return type change in rc3). Everything else applied cleanly.<br>\nBranches: <a href=\"https://github.com/Engineer-HaMa/linux/tree/rnull-v7.0-rc3\">https://github.com/Engineer-HaMa/linux/tree/rnull-v7.0-rc3</a> / rnvme-v7.0-rc3</p>",
+        "id": 578329501,
+        "sender_full_name": "SeungJong Ha",
+        "timestamp": 1773130595
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1011893\">SeungJong Ha</span> has marked this topic as resolved.</p>",
+        "id": 578374840,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1773143806
+    }
+]

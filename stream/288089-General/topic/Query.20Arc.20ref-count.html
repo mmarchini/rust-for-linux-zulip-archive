@@ -1,0 +1,173 @@
+<html>
+<head><meta charset="utf-8"><title>Query Arc ref-count · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html">Query Arc ref-count</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="578437224"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578437224" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578437224">(Mar 10 2026 at 16:04)</a>:</h4>
+<p>I am caching ref-counted objects in a lookup tree. When dropping ref-counts I generally do not want to lock the lookup-tree. However, when possibly dropping the last ref-count, I want to lock the tree and try again. I currently don't see a way to do this with <code>Arc</code>.</p>
+<p>On standard Rust I would put <code>Weak</code>-refs into the lookup tree, but cannot do that with <code>Arc</code>. So I am looking for <code>Arc::drop_if_more_than(self, n: usize) -&gt; Option&lt;Self&gt;</code>, which drops a reference if the number of references is higher than <code>n</code>. This would allow me to drop references without taking the lock, but retrying with the lock whenever it _might_ be the second to last. Inside of the lock I drop the reference, and if it then drops to 1 I can release the lookup entry as well.</p>
+<p>I think this is semi-common with <code>refcount_t</code>, but was wondering whether you have better ideas with <code>Arc</code>, or if this would be ok to add?</p>
+
+
+
+<a name="578437660"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578437660" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578437660">(Mar 10 2026 at 16:05)</a>:</h4>
+<p>There is a method to handle <code>1-&gt;0</code> refcount drop specially. For <code>n &gt; 1</code> there is no method for it.</p>
+
+
+
+<a name="578437837"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578437837" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578437837">(Mar 10 2026 at 16:06)</a>:</h4>
+<p>why do you need it for second-to-last instead of just the last refcount?</p>
+
+
+
+<a name="578437945"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578437945" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578437945">(Mar 10 2026 at 16:06)</a>:</h4>
+<p>The lookup tree owns a reference</p>
+
+
+
+<a name="578438524"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578438524" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578438524">(Mar 10 2026 at 16:08)</a>:</h4>
+<p>I mean, I could just re-use the reference the lookup-tree owns, but it is kinda awkward when this spans multiple APIs or modules.</p>
+
+
+
+<a name="578440438"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578440438" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578440438">(Mar 10 2026 at 16:15)</a>:</h4>
+<p>Emulating weak refs with <code>drop_if_more_than</code> is not a good idea IMO</p>
+
+
+
+<a name="578445777"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578445777" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578445777">(Mar 10 2026 at 16:35)</a>:</h4>
+<p>I am not emulating weak refs. I am dropping a shared ref, if all unique refs were dropped. But even if you call it "emulating weak refs", I would appreciate if you elaborate "is not a good idea IMO". Not sure what to do with that.</p>
+<p>Speaking of <code>into_unique_or_drop()</code>: How is this meant to work in this case? Lets say I make the lookup-tree not own a ref, so I link objects when creating them, and unlink when destroying them. When I call <code>into_unique_or_drop()</code> and get a <code>UniqueArc</code>, I still have to take the lock and then unlink the object. If another thread races this and gets the lock before, they might acquire a ref through lookup even though the original thread holds a <code>UniqueArc</code>. That is not safe.</p>
+
+
+
+<a name="578446243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578446243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578446243">(Mar 10 2026 at 16:37)</a>:</h4>
+<p>I can make it work with <code>drop_unless_last()</code>. So very much like <code>into_unique_or_drop()</code>, but returning an <code>Arc</code> instead of <code>UniqueArc</code>.</p>
+
+
+
+<a name="578453973"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578453973" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578453973">(Mar 10 2026 at 17:09)</a>:</h4>
+<p>ok, I can see how <code>drop_if_more_than(2)</code> does actually solve your problem, though weak refs also would solve it.</p>
+
+
+
+<a name="578918371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Query%20Arc%20ref-count/near/578918371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Query.20Arc.20ref-count.html#578918371">(Mar 12 2026 at 13:14)</a>:</h4>
+<p>Btw., I came up with the following patch. This basically mirrors what <code>kref_put_mutex()</code> is doing.</p>
+<p>Due to the design of the lookup tree, it means I still have to create a fake <code>Arc</code> and store it in the lookup tree, even though I do not increase the ref-count. I hide the <code>Arc</code> from public access, but still kinda awkward, since it would technically break existing calls on <code>Arc</code> like <code>into_unique_or_drop()</code>.</p>
+<p>I can also send it to the ML if that is preferred.</p>
+<div class="codehilite" data-code-language="patch"><pre><span></span><code>From 4b2ed52226cd88a4ee09101bc5735988f4037989 Mon Sep 17 00:00:00 2001
+From: David Rheinsberg &lt;david@readahead.eu&gt;
+Date: Thu, 12 Mar 2026 14:03:54 +0100
+Subject: [PATCH] rust/sync: add Arc::drop_unless_unique()
+
+Introduce `Arc::drop_unless_unique()`, a rust version of
+`refcount_dec_not_one()`.
+
+It is very common to store an object with `struct kref` (or
+`refcount_t`) in a locked lookup-tree, but without the tree actually
+owning a reference. Instead, whenever the object is destroyed, it
+should be removed from the lookup tree.
+
+The problem is, this requires taking the lock whenever releasing a
+reference. Otherwise, a racing lookup might see a ref-count of 0. But
+this is needlessly expensive.
+
+One solution provided by `struct kref` is `kref_put_mutex()`. This drops
+a reference, unless it is the last reference. In that case it takes a
+mutex and tries again. If it no longer is the last reference, it simply
+unlocks and returns. But if it dropped the last reference, it calls the
+destructor with the lock held.
+
+This entire technique is built around `refcount_dec_not_one()`. Expose
+this exact feature in Rust, so it can be used to get the same effect as
+`kref_put_mutex()`.
+
+Signed-off-by: David Rheinsberg &lt;david@readahead.eu&gt;
+---
+ rust/kernel/sync/arc.rs      | 21 +++++++++++++++++++++
+ rust/kernel/sync/refcount.rs | 16 ++++++++++++++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/rust/kernel/sync/arc.rs b/rust/kernel/sync/arc.rs
+index 921e19333b89..ead021a0dd5d 100644
+--- a/rust/kernel/sync/arc.rs
++++ b/rust/kernel/sync/arc.rs
+@@ -368,6 +368,27 @@ pub fn into_unique_or_drop(this: Self) -&gt; Option&lt;Pin&lt;UniqueArc&lt;T&gt;&gt;&gt; {
+             None
+         }
+     }
++
++    /// Drop this [`Arc`] unless it is the last reference.
++    ///
++    /// When this is the last reference to the `Arc`, it is returned as `Some`
++    /// unmodified. Otherwise, the `Arc` is dropped and [`None`] is returned.
++    ///
++    /// This function will never release the last reference to the object, and
++    /// as such never call its destructor.
++    pub fn drop_unless_unique(this: Self) -&gt; Option&lt;Self&gt; {
++        let this = ManuallyDrop::new(this);
++
++        // SAFETY: We own a refcount, so the pointer is still valid.
++        if unsafe { this.ptr.as_ref() }.refcount.dec_not_one() {
++            // A single ref-count was dropped, but it was not the last. We
++            // manually drop `this` without invoking `Drop`.
++            None
++        } else {
++            // This was a no-op, return the reference to the caller.
++            Some(ManuallyDrop::into_inner(this))
++        }
++    }
+ }
+
+ // SAFETY: The pointer returned by `into_foreign` was originally allocated as an
+diff --git a/rust/kernel/sync/refcount.rs b/rust/kernel/sync/refcount.rs
+index 6c7ae8b05a0b..2a65b3e3f961 100644
+--- a/rust/kernel/sync/refcount.rs
++++ b/rust/kernel/sync/refcount.rs
+@@ -105,6 +105,22 @@ pub fn dec_and_test(&amp;self) -&gt; bool {
+         // SAFETY: `self.as_ptr()` is valid.
+         unsafe { bindings::refcount_dec_and_test(self.as_ptr()) }
+     }
++
++    /// Decrement a refcount if it is not 1.
++    ///
++    /// It will `WARN` on underflow and fail to decrement when saturated.
++    ///
++    /// Provides release memory ordering when succeeding in decrementing the
++    /// refcount.
++    ///
++    /// Returns true if the decrement operation succeeded, false if the
++    /// decrement operation was skipped as the refcount is 1.
++    #[inline]
++    #[must_use = "refcount release is conditional and must be checked"]
++    pub fn dec_not_one(&amp;self) -&gt; bool {
++        // SAFETY: `self.as_ptr()` is valid.
++        unsafe { bindings::refcount_dec_not_one(self.as_ptr()) }
++    }
+ }
+
+ // SAFETY: `refcount_t` is thread-safe.
+--
+2.53.0
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

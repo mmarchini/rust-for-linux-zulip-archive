@@ -1,0 +1,332 @@
+[
+    {
+        "content": "<p>Hello! I wanted to start work on zero-cost CStrings, however I wanted to use a ThinBox to hold the pointer. However since you guys have a smaller alloc crate it's missing. Currently it's a sad blank module, before i just copy and paste a giant blob for thinbox I wanted to ask why.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[cfg(not(no_thin))]</span>\n<span class=\"cp\">#[unstable(feature = </span><span class=\"s\">\"thin_box\"</span><span class=\"cp\">, issue = </span><span class=\"s\">\"92791\"</span><span class=\"cp\">)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">thin</span>::<span class=\"n\">ThinBox</span><span class=\"p\">;</span>\n\n<span class=\"cp\">#[cfg(not(no_thin))]</span>\n<span class=\"k\">mod</span> <span class=\"nn\">thin</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 419375731,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706843294
+    },
+    {
+        "content": "<p>It's empty because thin boxes were not required at the time when <code>alloc</code> was submitted to the kernel source.</p>",
+        "id": 419377005,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1706844229
+    },
+    {
+        "content": "<p>Now then, if you want them to be added then you have to make sure that you have a consumer for it (in this case those zero-cost <code>CString</code>s) and that if it does allocations those have to be fallible, i.e. they must be <code>try_*</code> methods.</p>",
+        "id": 419377193,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1706844377
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"485103\">Martin Rodriguez Reboredo</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419377193\">said</a>:</p>\n<blockquote>\n<p>Now then, if you want them to be added then you have to make sure that you have a consumer for it (in this case those zero-cost <code>CString</code>s) and that if it does allocations those have to be fallible, i.e. they must be <code>try_*</code> methods.</p>\n</blockquote>\n<p>what do you mean try methods?</p>",
+        "id": 419377349,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706844489
+    },
+    {
+        "content": "<p>Things like <code>Box::try_new</code>, <code>Vec::try_resize</code>, etc. All of those methods return a <code>Result</code> that has <code>Error</code> set to an allocation error.</p>",
+        "id": 419377522,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1706844588
+    },
+    {
+        "content": "<p>This is essential because all of the allocations done by the kernel must be fallible.</p>",
+        "id": 419377594,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1706844620
+    },
+    {
+        "content": "<p>That is to cover cases where allocs can fail, most commonly by running out of memory. It's expected for the kernel to handle those situations as gracefully as possible, so if it could propagate the alloc error it's the best option out there.</p>",
+        "id": 419377951,
+        "sender_full_name": "Martin Rodriguez Reboredo",
+        "timestamp": 1706844854
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"485103\">Martin Rodriguez Reboredo</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419377951\">said</a>:</p>\n<blockquote>\n<p>That is to cover cases where allocs can fail, most commonly by running out of memory. It's expected for the kernel to handle those situations as gracefully as possible, so if it could propagate the alloc error it's the best option out there.</p>\n</blockquote>\n<p>wow this is more complex than I thought, how would you suggest adding them?</p>",
+        "id": 419381901,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706847644
+    },
+    {
+        "content": "<p>FYI, ThinBox in std is almost definitely going to see some significant API rework. Its current design is still very useful for us as-is, but just be aware that the implementation may change</p>",
+        "id": 419384880,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706850064
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419381901\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"485103\">Martin Rodriguez Reboredo</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419377951\">said</a>:</p>\n<blockquote>\n<p>That is to cover cases where allocs can fail, most commonly by running out of memory. It's expected for the kernel to handle those situations as gracefully as possible, so if it could propagate the alloc error it's the best option out there.</p>\n</blockquote>\n<p>wow this is more complex than I thought, how would you suggest adding them?</p>\n</blockquote>\n<p>ThinBox is currently a wrapper around the internal <code>WithHeader</code>, with a few extra layers of indirection. <code>WithHeader::new</code> has a line <code>alloc::handle_alloc_error</code> that turns an allocation failure into a panic. You just need to add a <code>WithHeader::try_new</code> that propagates this error instead, and expose it as <code>ThinBox::try_new</code></p>",
+        "id": 419385214,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706850332
+    },
+    {
+        "content": "<p>Okay do you have doc rs links to explain what that does? I'm getting lost in the weeds of why we are doing custom library standard datatypes again.</p>",
+        "id": 419392887,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706856270
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419392887\">said</a>:</p>\n<blockquote>\n<p>Okay do you have doc rs links to explain what that does? I'm getting lost in the weeds of why we are doing custom library standard datatypes again.</p>\n</blockquote>\n<p>Just to reiterate: One reason is that we do not want allocation to panic. We want failed allocations to return an error instead. Upstream alloc does not provide this for all types.</p>",
+        "id": 419405021,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1706860363
+    },
+    {
+        "content": "<p>Okay that makes sense, how do I create a WithHeader?</p>",
+        "id": 419407517,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706861541
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419407517\">said</a>:</p>\n<blockquote>\n<p>Okay that makes sense, how do I create a WithHeader?</p>\n</blockquote>\n<p>Is this something from the rust std library because I couldn't find anything when I googled it. But I've been struggling with what is from std and what has the exact same names and is completely different within the kernel.</p>",
+        "id": 419407680,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706861635
+    },
+    {
+        "content": "<p><code>alloc</code> in the kernel is basically std's <code>alloc</code>, with some more <code>try_x</code> methods to handle failed allocation and without some types that aren't needed</p>",
+        "id": 419467462,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706883861
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419407517\">said</a>:</p>\n<blockquote>\n<p>Okay that makes sense, how do I create a WithHeader?</p>\n</blockquote>\n<p>This is in Rust's <code>alloc</code> source. You won't have results googling a lot of these things, they're implementation details</p>",
+        "id": 419467683,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706883941
+    },
+    {
+        "content": "<p>Google indexes the source code of the standard library, in fact! (Or at least a version of it) For me, googling does not give great results, but it does give me enough, including the official source view that defines <code>WithHeader</code>, plus the tracking issue. Even the RFL v8 is there :)</p>",
+        "id": 419489570,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1706890467
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419489570\">said</a>:</p>\n<blockquote>\n<p>Google indexes the source code of the standard library, in fact! (Or at least a version of it) For me, googling does not give great results, but it does give me enough, including the official source view that defines <code>WithHeader</code>, plus the tracking issue. Even the RFL v8 is there :)</p>\n</blockquote>\n<p>Do you mind sending the source then? I didn't see reprogramming the rust std when i join this group lol.</p>",
+        "id": 419525146,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706903920
+    },
+    {
+        "content": "<p>I zero results searching for <code>WithHeader</code> online or in the repo, google just gives a butch of http or packet libraries.</p>",
+        "id": 419525277,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706903985
+    },
+    {
+        "content": "<p>Have you looked at the implementation of ThinBox in std at all? The standard library docs (and all rustdoc docs) have a button that shows you the source file</p>",
+        "id": 419529548,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706905645
+    },
+    {
+        "content": "<blockquote>\n<p>Do you mind sending the source then? I didn't see reprogramming the rust std when i join this group lol.</p>\n</blockquote>\n<p>Which source? If you mean <code>alloc</code>, it is in the Rust repository, under <code>library</code>. But please note that the changes required need to follow a particular convention -- please see how we have done the others in our fork.</p>\n<p>To be clear, we are not \"reprogramming the rust std\" -- so far we are trying to keep it as close as possible to <code>alloc</code>, as the rationale in <code>rust/alloc/README.md</code> explains (please give it a look). Though it is true that we may need to fork it further in the future.</p>",
+        "id": 419529567,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1706905650
+    },
+    {
+        "content": "<blockquote>\n<p>I zero results searching for <code>WithHeader</code> online or in the repo, google just gives a butch of http or packet libraries.</p>\n</blockquote>\n<p>With a query in Google like:</p>\n<div class=\"codehilite\"><pre><span></span><code>rust &quot;withheader&quot;\n</code></pre></div>\n\n<p>you should see relevant results (for me, it does so in the first few results, even the RFL patch is in the first page).</p>\n<p>And if you grep for <code>WithHeader</code> in the repository (the Rust one, not the kernel's), you will see it too.</p>",
+        "id": 419529911,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1706905790
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419529911\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>I zero results searching for <code>WithHeader</code> online or in the repo, google just gives a butch of http or packet libraries.</p>\n</blockquote>\n<p>With a query in Google like:</p>\n<div class=\"codehilite\"><pre><span></span><code>rust &quot;withheader&quot;\n</code></pre></div>\n\n<p>you should see relevant results (for me, it does so in the first few results, even the RFL patch is in the first page).</p>\n<p>And if you grep for <code>WithHeader</code> in the repository (the Rust one, not the kernel's), you will see it too.</p>\n</blockquote>\n<p>I was missing the quotes on my search, but i still dont see it in the repo. Maybe my fork is outdated, but since I changed orgin to wedson's I don't think I can actually pull the changes currently.</p>",
+        "id": 419531745,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706906501
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419529548\">said</a>:</p>\n<blockquote>\n<p>Have you looked at the implementation of ThinBox in std at all? The standard library docs (and all rustdoc docs) have a button that shows you the source file</p>\n</blockquote>\n<p>not the source yet, just the normal doc page, looking at it now though.</p>",
+        "id": 419531983,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706906590
+    },
+    {
+        "content": "<p>What is the first step here, I dont have much experience with using Guards, or programming useful datatypes like this in general. But anything I can do to help, but I also don't want to make a mistake that affects everyone that uses the kernel's tinybox.</p>",
+        "id": 419532776,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706906949
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419532776\">said</a>:</p>\n<blockquote>\n<p>I also don't want to make a mistake that affects everyone that uses the kernel's tinybox.</p>\n</blockquote>\n<p>Never worry about this sort of thing, this is why we have reviews :)</p>\n<p>What exactly is your background? It seems like you might be a bit newer to the Rust ecosystem</p>",
+        "id": 419547837,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706914254
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419547837\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"680789\">Carson Range</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419532776\">said</a>:</p>\n<blockquote>\n<p>I also don't want to make a mistake that affects everyone that uses the kernel's tinybox.</p>\n</blockquote>\n<p>Never worry about this sort of thing, this is why we have reviews :)</p>\n<p>What exactly is your background? It seems like you might be a bit newer to the Rust ecosystem</p>\n</blockquote>\n<p>With Rust I've been working on a gui app with iced and doing a fullstack website with leptos and axum. But I took the os fundamentals and internals class so I do understand inodes and os concepts. It might not seem like it but this is not a normal rust project, even something like importing a datatype becomes hard because of the split from std's alloc.</p>",
+        "id": 419561210,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706922635
+    },
+    {
+        "content": "<p>It's true I only have like a year of rust experience, but Rust has only been around since 2011.</p>",
+        "id": 419561440,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706922801
+    },
+    {
+        "content": "<p>Yeah, nobody has really been working with Rust all that long. Anyway for this specific project it would definitely help to poke around the Rust library on github and just get a better feel for how things are laid out there. The source for rustc's alloc is at <a href=\"https://github.com/rust-lang/rust/tree/master/library/alloc\">https://github.com/rust-lang/rust/tree/master/library/alloc</a> (the other big names, <code>core</code>, <code>std</code>, <code>proc_macro</code>, and <code>test</code>, live in the same parent directory). RFL has more or less forked the <code>alloc/src</code> directory to <a href=\"https://github.com/torvalds/linux/tree/master/rust/alloc\">https://github.com/torvalds/linux/tree/master/rust/alloc</a>. Miguel keeps it in sync with the upstream alloc library when we bump rust versions</p>",
+        "id": 419573919,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706933936
+    },
+    {
+        "content": "<p>But data types that haven't yet been needed aren't in RFL's alloc crate, e.g. ThinBox. So the first thing for your task is basically to sync ThinBox implementation from rust's alloc to RFL's alloc. Literally just copying the type over and making sure the kernel compiles still</p>",
+        "id": 419574103,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706934126
+    },
+    {
+        "content": "<p>Then you can build off of it</p>",
+        "id": 419574105,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706934131
+    },
+    {
+        "content": "<p><code>alloc</code> and <code>std</code> seem pretty magical if you're not familiar with looking at the code on <code>rust-lang/rust</code>. But there's nothing special about them, they're just regular Cargo crates that happen to use a lot of unstable features, and extra attributes to make the compiler aware of the types.</p>",
+        "id": 419574166,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706934230
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419574105\">said</a>:</p>\n<blockquote>\n<p>Then you can build off of it</p>\n</blockquote>\n<p>I thought I had to redo the sections that do allocation?</p>",
+        "id": 419576215,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706935934
+    },
+    {
+        "content": "<p>That's what I meant by building off of it. For a sanity check, just get the kernel with rust's ThinBox as-is first before you start changing the implementation.</p>",
+        "id": 419583640,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1706943802
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419583640\">said</a>:</p>\n<blockquote>\n<p>That's what I meant by building off of it. For a sanity check, just get the kernel with rust's ThinBox as-is first before you start changing the implementation.</p>\n</blockquote>\n<p>okay sounds good, what should I do next? focus on completing the task I want to work on or try to focus on changing it.</p>",
+        "id": 419584754,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1706945115
+    },
+    {
+        "content": "<p>So I've progressed with my code, I think im making some good changes to CStr and CString. Now I need to use ThinBox and I looked into the code and learned about <code>no_global_oom_handling</code>, so I was wondering how do I create a ThinBox? Since I can't use either <code>new</code> method.</p>\n<p>I also had questions about the disabling the ThinBox feature in the makefile here <br>\n<a href=\"https://github.com/Rust-for-Linux/linux/blob/f090f0d0eea9666a96702b29bc9a64cbabee85c5/rust/Makefile#L72\">https://github.com/Rust-for-Linux/linux/blob/f090f0d0eea9666a96702b29bc9a64cbabee85c5/rust/Makefile#L72</a></p>\n<p>Since I'm using it now within kernel bindings does that mean that it's allowed? There are so many things I haven't had to deal with in rust I've learned here.</p>",
+        "id": 420590985,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707458475
+    },
+    {
+        "content": "<p>That attribute is actually added specific for the kernel’s fork of alloc, you’ll probably wind up being able to remove it</p>",
+        "id": 420591317,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707458752
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/420591317\">said</a>:</p>\n<blockquote>\n<p>That attribute is actually added specific for the kernel’s fork of alloc, you’ll probably wind up being able to remove it</p>\n</blockquote>\n<p>i assume you mean <code>no_thin</code> and not <code>no_global_oom_handling</code></p>",
+        "id": 420591422,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707458819
+    },
+    {
+        "content": "<p>i rather repeat myself now than redraft a pr lol</p>",
+        "id": 420591443,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707458837
+    },
+    {
+        "content": "<p>no_thin, you probably just have to get remove that before you get ThinBox to show up at all</p>",
+        "id": 420593690,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707460428
+    },
+    {
+        "content": "<p>After that, just copy <code>new</code> to a new function called <code>try_new</code> that returns a Result. Then figure out where in the chain the allocation happens, and just make changes needed to propagate the error up instead of panicking</p>",
+        "id": 420593785,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707460494
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/420593785\">said</a>:</p>\n<blockquote>\n<p>After that, just copy <code>new</code> to a new function called <code>try_new</code> that returns a Result. Then figure out where in the chain the allocation happens, and just make changes needed to propagate the error up instead of panicking</p>\n</blockquote>\n<p>wow that's a lot easier than I thought.</p>",
+        "id": 420677551,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707493248
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/419385214\">said</a>:</p>\n<blockquote>\n<p>ThinBox is currently a wrapper around the internal <code>WithHeader</code>, with a few extra layers of indirection. <code>WithHeader::new</code> has a line <code>alloc::handle_alloc_error</code> that turns an allocation failure into a panic. You just need to add a <code>WithHeader::try_new</code> that propagates this error instead, and expose it as <code>ThinBox::try_new</code></p>\n</blockquote>\n<p>yeah this has thrown me for a loop, I've looking through the docs and code for <code>WithHeader</code>. Do we have a common way to handle allocation? It seems natural to me that we would have our own <code>layout</code> and <code>alloc_layout</code> but I don't see anything like that.</p>",
+        "id": 420693502,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707497917
+    },
+    {
+        "content": "<p>Futher researching it seems <code>WithHeader</code> is the only type that has an alloc panic but I rather be safe than sorry.</p>",
+        "id": 420695492,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707498515
+    },
+    {
+        "content": "<p>There may be other functions that allocate, but just focus on <code>new</code> for now</p>",
+        "id": 420712135,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707504878
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/420712135\">said</a>:</p>\n<blockquote>\n<p>There may be other functions that allocate, but just focus on <code>new</code> for now</p>\n</blockquote>\n<p>Okay, for now I haven't included the errors for allocation, is there a doc or guidelines on how allocation is dealt with?</p>",
+        "id": 420712408,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707504972
+    },
+    {
+        "content": "<p><code>handle_alloc_error</code> is what turns an alloc error into a panic in Rust's alloc. Kernel can never have a call to <code>handle_alloc_error</code>, so figure out where ThinBox has a call to <code>handle_alloc_error</code> and propagate that error instead (so whoever calls <code>ThinBox::try_new</code> can handle the error somehow). The signature should be the same as <code>Box::try_new</code></p>",
+        "id": 420718021,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707507187
+    },
+    {
+        "content": "<p>So I've hit a road block, I've made changes to CString </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">CString</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">buf</span>: <span class=\"nc\">ThinBox</span><span class=\"o\">&lt;</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"sd\">/// `NUL` terminator is counted in length.</span>\n<span class=\"w\">    </span><span class=\"n\">len</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>so I can translate between that and a <code>CStr</code> at o(1) however I forgot rust does not like slices that are of unknown lengths </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">error</span><span class=\"p\">[</span><span class=\"n\">E0277</span><span class=\"p\">]</span>: <span class=\"nc\">the</span><span class=\"w\"> </span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">values</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"k\">type</span> <span class=\"err\">`</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">cannot</span><span class=\"w\"> </span><span class=\"n\">be</span><span class=\"w\"> </span><span class=\"n\">known</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"n\">compilation</span><span class=\"w\"> </span><span class=\"n\">time</span>\n<span class=\"w\">   </span><span class=\"o\">-</span>-&gt; <span class=\"nc\">rust</span><span class=\"o\">/</span><span class=\"n\">kernel</span><span class=\"o\">/</span><span class=\"kt\">str</span><span class=\"p\">.</span><span class=\"n\">rs</span>:<span class=\"mi\">617</span>:<span class=\"mi\">42</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">617</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">             </span><span class=\"n\">buf</span>: <span class=\"nc\">ThinBox</span>::<span class=\"n\">try_new_unsize</span><span class=\"p\">(</span><span class=\"n\">cstr</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">buf</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"o\">-----------------------</span><span class=\"w\"> </span><span class=\"o\">^^^^^^^^^^</span><span class=\"w\"> </span><span class=\"n\">doesn</span><span class=\"o\">'</span><span class=\"na\">t</span><span class=\"w\"> </span><span class=\"n\">have</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"n\">known</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"n\">compile</span><span class=\"o\">-</span><span class=\"n\">time</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"n\">introduced</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">call</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">help</span>: <span class=\"nc\">the</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"nb\">Sized</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">not</span><span class=\"w\"> </span><span class=\"n\">implemented</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"err\">`</span>\n<span class=\"n\">note</span>: <span class=\"nc\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">ThinBox</span>::<span class=\"o\">&lt;</span><span class=\"n\">Dyn</span><span class=\"o\">&gt;</span>::<span class=\"n\">try_new_unsize</span><span class=\"err\">`</span>\n<span class=\"w\">   </span><span class=\"o\">-</span>-&gt; <span class=\"o\">/</span><span class=\"n\">home</span><span class=\"o\">/</span><span class=\"n\">redhawk</span><span class=\"o\">/</span><span class=\"n\">code</span><span class=\"o\">/</span><span class=\"n\">linux</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">-</span><span class=\"k\">for</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">/</span><span class=\"n\">alloc</span><span class=\"o\">/</span><span class=\"n\">boxed</span><span class=\"o\">/</span><span class=\"n\">thin</span><span class=\"p\">.</span><span class=\"n\">rs</span>:<span class=\"mi\">114</span>:<span class=\"mi\">27</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">114</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">     </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">try_new_unsize</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">value</span>: <span class=\"nc\">T</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                           </span><span class=\"o\">^</span><span class=\"w\"> </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">ThinBox</span>::<span class=\"o\">&lt;</span><span class=\"n\">Dyn</span><span class=\"o\">&gt;</span>::<span class=\"n\">try_new_unsize</span><span class=\"err\">`</span>\n\n<span class=\"n\">error</span><span class=\"p\">[</span><span class=\"n\">E0277</span><span class=\"p\">]</span>: <span class=\"nc\">the</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span>: <span class=\"nc\">Unsize</span><span class=\"o\">&lt;</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"o\">&gt;</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">not</span><span class=\"w\"> </span><span class=\"n\">satisfied</span>\n<span class=\"w\">   </span><span class=\"o\">-</span>-&gt; <span class=\"nc\">rust</span><span class=\"o\">/</span><span class=\"n\">kernel</span><span class=\"o\">/</span><span class=\"kt\">str</span><span class=\"p\">.</span><span class=\"n\">rs</span>:<span class=\"mi\">617</span>:<span class=\"mi\">42</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">617</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">             </span><span class=\"n\">buf</span>: <span class=\"nc\">ThinBox</span>::<span class=\"n\">try_new_unsize</span><span class=\"p\">(</span><span class=\"n\">cstr</span><span class=\"p\">.</span><span class=\"mf\">0.</span><span class=\"n\">buf</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"o\">-----------------------</span><span class=\"w\"> </span><span class=\"o\">^^^^^^^^^^</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">Unsize</span><span class=\"o\">&lt;</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"o\">&gt;</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">not</span><span class=\"w\"> </span><span class=\"n\">implemented</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"err\">`</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">                  </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"n\">introduced</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">call</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">note</span>: <span class=\"nc\">all</span><span class=\"w\"> </span><span class=\"n\">implementations</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">Unsize</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">are</span><span class=\"w\"> </span><span class=\"n\">provided</span><span class=\"w\"> </span><span class=\"n\">automatically</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">compiler</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">see</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">https</span>:<span class=\"c1\">//doc.rust-lang.org/stable/std/marker/trait.Unsize.html&gt; for more information</span>\n<span class=\"n\">note</span>: <span class=\"nc\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">ThinBox</span>::<span class=\"o\">&lt;</span><span class=\"n\">Dyn</span><span class=\"o\">&gt;</span>::<span class=\"n\">try_new_unsize</span><span class=\"err\">`</span>\n<span class=\"w\">   </span><span class=\"o\">-</span>-&gt; <span class=\"o\">/</span><span class=\"n\">home</span><span class=\"o\">/</span><span class=\"n\">redhawk</span><span class=\"o\">/</span><span class=\"n\">code</span><span class=\"o\">/</span><span class=\"n\">linux</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">-</span><span class=\"k\">for</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">/</span><span class=\"n\">alloc</span><span class=\"o\">/</span><span class=\"n\">boxed</span><span class=\"o\">/</span><span class=\"n\">thin</span><span class=\"p\">.</span><span class=\"n\">rs</span>:<span class=\"mi\">116</span>:<span class=\"mi\">12</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">114</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">     </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">try_new_unsize</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">value</span>: <span class=\"nc\">T</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">            </span><span class=\"o\">--------------</span><span class=\"w\"> </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">associated</span><span class=\"w\"> </span><span class=\"n\">function</span>\n<span class=\"mi\">115</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">     </span><span class=\"k\">where</span>\n<span class=\"mi\">116</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\">         </span><span class=\"n\">T</span>: <span class=\"nc\">Unsize</span><span class=\"o\">&lt;</span><span class=\"n\">Dyn</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\">            </span><span class=\"o\">^^^^^^^^^^^</span><span class=\"w\"> </span><span class=\"n\">required</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">bound</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">ThinBox</span>::<span class=\"o\">&lt;</span><span class=\"n\">Dyn</span><span class=\"o\">&gt;</span>::<span class=\"n\">try_new_unsize</span><span class=\"err\">`</span>\n</code></pre></div>\n<p>It doesn't seem possible for me to use a thinbox for this. I was thinking something like <code>Vec::from_raw_parts</code> but that's extremely unsafe and I thought we were trying to avoid that.</p>",
+        "id": 420718103,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707507228
+    },
+    {
+        "content": "<p>let me know what you guys think of this since this idea hasn't really worked out</p>\n<p><a href=\"https://doc.rust-lang.org/std/vec/struct.Vec.html#method.from_raw_parts\">https://doc.rust-lang.org/std/vec/struct.Vec.html#method.from_raw_parts</a></p>",
+        "id": 420719796,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707507909
+    },
+    {
+        "content": "<p>The idea is to keep the size small. ThinBox&lt;[u8]&gt; is one pointer, Box&lt;[u8]&gt; is two pointers, and Vec&lt;[u8]&gt; is three.</p>\n<p>I don't know what exactly you are doing but <code>ThinBox&lt;[u8]&gt;</code> keeps the length already, in the allocation <a href=\"https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4bef56cb1cf4d470711e3debf0e4a57e\">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4bef56cb1cf4d470711e3debf0e4a57e</a></p>",
+        "id": 420739819,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707516416
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/420739819\">said</a>:</p>\n<blockquote>\n<p>The idea is to keep the size small. ThinBox&lt;[u8]&gt; is one pointer, Box&lt;[u8]&gt; is two pointers, and Vec&lt;[u8]&gt; is three.</p>\n<p>I don't know what exactly you are doing but <code>ThinBox&lt;[u8]&gt;</code> keeps the length already, in the allocation <a href=\"https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4bef56cb1cf4d470711e3debf0e4a57e\">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4bef56cb1cf4d470711e3debf0e4a57e</a></p>\n</blockquote>\n<p>I had no idea it kept track of length, I thought it was a unsized collection. The doc's didn't even have <code>len()</code>, im surprised. Also what type of list can I use here to transfer that into the thinbox buffer?</p>\n<p><a href=\"https://rust-for-linux.github.io/docs/src/kernel/str.rs.html#550-580\">https://rust-for-linux.github.io/docs/src/kernel/str.rs.html#550-580</a></p>",
+        "id": 420744967,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707519006
+    },
+    {
+        "content": "<p>It's the same as <code>Box&lt;[u8]&gt;</code> - <code>len</code> doesn't come from the Box itself. <code>Box&lt;T&gt;</code> (and ThinBox&lt;T&gt;, Arc, others) have a <code>Deref</code> impl so you can use methods as if it was a <code>&amp;T</code> -&gt; <code>&amp;[u8]</code> in this case</p>",
+        "id": 420745304,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707519200
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"587349\">Trevor Gross</span> <a href=\"#narrow/stream/291566-Library/topic/ThinBox/near/420745304\">said</a>:</p>\n<blockquote>\n<p>It's the same as <code>Box&lt;[u8]&gt;</code> - <code>len</code> doesn't come from the Box itself. <code>Box&lt;T&gt;</code> (and ThinBox&lt;T&gt;, Arc, others) have a <code>Deref</code> impl so you can use methods as if it was a <code>&amp;T</code> -&gt; <code>&amp;[u8]</code> in this case</p>\n</blockquote>\n<p>I didn't think <code>Deref</code> was where <code>len</code> came from, interesting</p>",
+        "id": 420745616,
+        "sender_full_name": "Carson Range",
+        "timestamp": 1707519382
+    },
+    {
+        "content": "<p><code>Deref</code> is also how you can pretend a <code>&amp;String</code> works as a <code>&amp;str</code>, <code>&amp;Vec&lt;T&gt;</code> works a <code>&amp;[T}</code>, CString/CStr, PathBuf/Path etc</p>",
+        "id": 420745725,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707519460
+    },
+    {
+        "content": "<p><code>[u8]</code> is unsized, <code>Box&lt;[u8]&gt;</code> is sized as two pointers (start + len), aka \"fat pointer\" - so pointer plus metadata. A <code>Box&lt;dyn SomeTrait&gt;</code> is also two pointers, as is <code>&amp;[u8]</code> and <code>&amp;dyn SomeTrait</code>.</p>\n<p><code>ThinBox</code> has the same information as <code>Box</code> except that metadata is stored at the beginning of the allocation instead of wherever the <code>Box</code> is. Benefits: now you only have one pointer to pass around, which makes it easier to work with some APIs that give you a single pointer for object storage (Wedson's use case). Downsides: knowing the length now means you need to spend time dereferencing another value</p>",
+        "id": 420746262,
+        "sender_full_name": "Trevor Gross",
+        "timestamp": 1707519728
+    }
+]

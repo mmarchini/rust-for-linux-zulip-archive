@@ -1,0 +1,230 @@
+[
+    {
+        "content": "<p>Hi! The GPU driver I'm working with handles some very large structures (some &gt;64K), and it turns out I'm overflowing the kernel stack. I tried playing around with <code>Box&lt;&gt;</code> to reduce usage, but I'm not even sure if the code I'm writing guarantees that the structs won't end up on the stack anyway, and I have no way to debug exactly where my stack usage is going. Has anyone looked into how idiomatic Rust interacts with the tiny kernel stacks / some way to debug and resolve this?</p>\n<p>At the very least we'd need some kind of tooling to warn on large stack frames, much like the kernel already does for C... I saw there is a <code>-Z emit-stack-sizes</code>, but the kernel build process would need some extra tooling to actually consume that information and emit warnings.</p>",
+        "id": 297665766,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662581593
+    },
+    {
+        "content": "<p>can <code>make LLVM=1 checkstack</code> help you somehow?</p>",
+        "id": 297667049,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662582105
+    },
+    {
+        "content": "<p><a href=\"https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623\">https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623</a></p>",
+        "id": 297669998,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662583342
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/297669998\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623\">https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623</a></p>\n</blockquote>\n<p>This is mpe's solution in the discussion about a related topic.</p>",
+        "id": 297670267,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662583501
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/297670267\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/297669998\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623\">https://github.com/Rust-for-Linux/linux/issues/121#issuecomment-821070623</a></p>\n</blockquote>\n<p>This is mpe's solution in the discussion about a related topic.</p>\n</blockquote>\n<p>I just tried it myself, a few problems and solutions</p>\n<ul>\n<li>the <code>stack-sizes</code> tool seems not working, the 0.5.0 version doesn't have a binary, however <code>llvm-readelf --stack-size</code> can provide a display of the stack sizes</li>\n<li><code>KRUSTCFLAGS</code> is now <code>KRUSTFLAGS</code> (without C)</li>\n</ul>",
+        "id": 297673081,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662584684
+    },
+    {
+        "content": "<p>Given this:</p>\n<blockquote>\n<p><a href=\"https://reviews.llvm.org/D103928?id=351006\">https://reviews.llvm.org/D103928?id=351006</a></p>\n</blockquote>\n<p>Looks like the best way is to let Rust tell LLVM the stack limitation via this module attribute</p>",
+        "id": 297685408,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662591195
+    },
+    {
+        "content": "<p>It seems like <code>checkstack</code> was broken for huge stack sizes on arm64, but I fixed it. Thank you!</p>\n<p>Now the problem is I'm hitting some really weird compiler behavior... I have some huge structs, and I'm trying to avoid stack usage like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">hwdata_a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">try_new</span><span class=\"p\">(</span><span class=\"n\">raw</span>::<span class=\"n\">HWDataA</span>::<span class=\"n\">ver</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">foo</span>: <span class=\"nc\">val</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"o\">..</span><span class=\"p\">.]</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"n\">default</span>::<span class=\"nb\">Default</span><span class=\"p\">()</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<p>I'm hitting some really strange behavior, where initializing more fields progressively increases the stack usage. I've narrowed it down to initializing (not adding!) one more u32 field causing the stack usage of this function to go from 4K to 12K.</p>\n<p>I need some ergonomic way of initializing structs inside a Box&lt;&gt; that guarantees they won't be spilled to the stack... if I need to start playing with MaybeUninit and all that, it's going to make the driver much more painful to write...</p>",
+        "id": 297711747,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662616402
+    },
+    {
+        "content": "<p>In place construction has been discussed a bit yesterday at Kangrejos in the context of pinning. tl;dr: We don't have any safe way right now, but I believe we do want to add it.</p>",
+        "id": 297739904,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1662629837
+    },
+    {
+        "content": "<p>This seems to be a special-case of the more general problem,  a simplified version of y86-dev's solution may be usable here.</p>\n<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> are the fields just being assigned values? (Or do you need some in-place construction for fields as well?)</p>",
+        "id": 297742201,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1662630791
+    },
+    {
+        "content": "<p>In this case the fields are just being assigned values, and I worked around it with <a href=\"https://github.com/AsahiLinux/linux/blob/79f30db48ae9325f6d7d9d990f486999838f5236/drivers/gpu/drm/asahi/initdata.rs#L44\">a macro</a> (so I can use in-place construction syntax and convert it to assignment, under the unsafe assumption that the struct can be zero-initialized). But I have other structs which need in-place construction (because the whole point of the object design is enforcing ownership and that pointers are valid, so I can't have a default for child objects or their pointers)...</p>\n<p>For owning structs (which I control) the best I could come up with is to just split them in ways that reduce stack usage, and throw <code>Box&lt;&gt;</code>es in all over the place (<a href=\"https://github.com/AsahiLinux/linux/blob/79f30db48ae9325f6d7d9d990f486999838f5236/drivers/gpu/drm/asahi/fw/initdata.rs#L1132\">example</a> where I split 3 substructs out). For GPU structs (which have a fixed layout) containing pointers, I have no good solution. It hasn't been a problem so far, but I think it will become one when I get to the rendering part, since there are ~1500-byte structs containing lots of pointers involved, and I really don't want those to take a trip through the stack... there's also the fact that, for the owning structs, more <code>Box&lt;&gt;</code> is going to have some performance impact, especially for stuff that gets allocated/deallocated every time a GPU operation happens...</p>",
+        "id": 297752319,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662635180
+    },
+    {
+        "content": "<p>I am no expert but I remember hearing that calling <code>.assume_init</code> on data not actually initialized is bad. There is an example in the docs showing how to initialize a struct field-by-field: <a href=\"https://doc.rust-lang.org/stable/std/mem/union.MaybeUninit.html#initializing-a-struct-field-by-field\">https://doc.rust-lang.org/stable/std/mem/union.MaybeUninit.html#initializing-a-struct-field-by-field</a>, maybe this is what you want?</p>",
+        "id": 297994272,
+        "sender_full_name": "yshui",
+        "timestamp": 1662736033
+    },
+    {
+        "content": "<p>also, does the <code>box</code> keyword initialize the box in-place? or is it something not permitted in kernel rust?</p>",
+        "id": 297994454,
+        "sender_full_name": "yshui",
+        "timestamp": 1662736084
+    },
+    {
+        "content": "<p>i did some testing and the <code>box</code> keyword doesn't seem to have eliminated the object on the stack, unfortunately</p>",
+        "id": 297996360,
+        "sender_full_name": "yshui",
+        "timestamp": 1662736644
+    },
+    {
+        "content": "<p><code>box</code> is supposed to elide the stack I think, but we can't use it in the kernel since it requires global OOM handling...</p>\n<p>Initializing field-by-field works, but is not safe if open-coded, and the point here is to provide a safe API for initializing objects. After some back and forth on Twitter, we came up with a very ugly macro to do field-by-field initialization safely (mostly) that uses regular struct constructor syntax and even supports nested structs. It's not pretty, but I guess it will do for now... it would be really nice to have in place construction though, since this is quite a hack!</p>\n<blockquote>\n<p>I am no expert but I remember hearing that calling .assume_init on data not actually initialized is bad.</p>\n</blockquote>\n<p>For plain data types where zero bytes are a valid value, initializing the whole struct to zero means you can safely <code>assume_init</code>. You have to know that all fields meet that condition, though (it would be nice if there were some auto-derived trait that told you that...)</p>",
+        "id": 298238376,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662895652
+    },
+    {
+        "content": "<p>This is pretty much a known issue. It's a simplified problem to the pinned initialisation problem where non of the fields are actually pinned.</p>",
+        "id": 298243368,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662898648
+    },
+    {
+        "content": "<p>There are a declarative macro and a proc macro solution being discussed in Kangrejos last week, you can check <a href=\"https://kangrejos.com/\">https://kangrejos.com/</a> for the slides if you are interested</p>",
+        "id": 298243556,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662898735
+    },
+    {
+        "content": "<p>Ah, I just checked the slides! It's similar to what I came up with, but mine just uses standard initializer syntax since I don't care about pinning (I just don't want large values on the stack, I don't mind copying/moving small ones).</p>\n<p>This is what I have: <a href=\"https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4e0612b78fb5408c8a32b815bdf7a04d\">https://play.rust-lang.org/?version=nightly&amp;mode=debug&amp;edition=2021&amp;gist=4e0612b78fb5408c8a32b815bdf7a04d</a></p>\n<p>It's missing the \"all fields initialized\" check, but that would be done similarly to the Kangrejos slides with a dummy struct init (I just took it out while I was debugging the macro weirdness to make nested structs work).</p>",
+        "id": 298260242,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662908474
+    },
+    {
+        "content": "<p>Is there a good simple example where the on stack temporary isn't optimized away? I know relying on compiler optimization is not as good as guaranteed in-place initialization, but I am curious. I tried something like this: <a href=\"https://godbolt.org/z/MoEPdqb6n\">https://godbolt.org/z/MoEPdqb6n</a>, looks like the initialization happened in place.</p>",
+        "id": 298264228,
+        "sender_full_name": "yshui",
+        "timestamp": 1662911076
+    },
+    {
+        "content": "<p>on the other hand, I wonder if it’s possible to have the counterpart of try_new() for box keyword? For example “?box”, that’s maybe useful (because of the ergonomic)</p>",
+        "id": 298264235,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662911081
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> I think rust is trying to phase out the <code>box</code> syntax. For example: <a href=\"https://github.com/rust-lang/rust/issues/49733#issuecomment-1111283609\">https://github.com/rust-lang/rust/issues/49733#issuecomment-1111283609</a></p>",
+        "id": 298264429,
+        "sender_full_name": "yshui",
+        "timestamp": 1662911206
+    },
+    {
+        "content": "<p>What’s the reason of the phasing out? If it’s because of lack of users, then the usage in Linux proves it’s not.</p>",
+        "id": 298264824,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662911423
+    },
+    {
+        "content": "<p>No I don't think it's lack of users. It's used in <code>std</code>, and they are trying to remove it. For why it's being phased out, I am not sure. Maybe it's to reduce the amount of compiler magic? <em>Maybe</em> related: <a href=\"https://manishearth.github.io/blog/2017/01/10/rust-tidbits-box-is-special/\">https://manishearth.github.io/blog/2017/01/10/rust-tidbits-box-is-special/</a></p>",
+        "id": 298265301,
+        "sender_full_name": "yshui",
+        "timestamp": 1662911754
+    },
+    {
+        "content": "<p>Also although <code>box</code> is called a placement new syntax, without optimization it actually doesn't guarantee that a stack object won't be created: <a href=\"https://godbolt.org/z/e9s3nb1dW\">https://godbolt.org/z/e9s3nb1dW</a>, oddly</p>",
+        "id": 298265604,
+        "sender_full_name": "yshui",
+        "timestamp": 1662911944
+    },
+    {
+        "content": "<p>I think we clearly need a way to avoid move from stack to heap. Otherwise, people may say “the language is not ready”</p>",
+        "id": 298265654,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662912001
+    },
+    {
+        "content": "<p>For sure. But looks like most of the time the compiler does a good job, I've been fiddling around and can't quite recreate the problem with a simple case.</p>",
+        "id": 298265790,
+        "sender_full_name": "yshui",
+        "timestamp": 1662912073
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298265654\">said</a>:</p>\n<blockquote>\n<p>I think we clearly need a way to avoid move from stack to heap. Otherwise, people may say “the language is not ready”</p>\n</blockquote>\n<p>You can always create an uninitialised box and initialise it unsafely. Sure it's not very elegant and require unsafe, but from my impression in the kangrejos workshop, kernel people seems not very repellent to the usage of unsafe compared to Rust people.</p>",
+        "id": 298285306,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662926281
+    },
+    {
+        "content": "<p>Like, doing so in Rust is unsafe because the programmer have to make sure each field is initialised once and only once. But in C the same is still true and there's no compiler to check this property for you as well, so it's not worse.</p>",
+        "id": 298285436,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662926390
+    },
+    {
+        "content": "<p>Admittedly field projection of raw pointer is harder in Rust, and that could potentially be tackled through new language features.</p>",
+        "id": 298285564,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662926465
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298285306\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298265654\">said</a>:</p>\n<blockquote>\n<p>I think we clearly need a way to avoid move from stack to heap. Otherwise, people may say “the language is not ready”</p>\n</blockquote>\n<p>You can always create an uninitialised box and initialise it unsafely. Sure it's not very elegant and require unsafe, but from my impression in the kangrejos workshop, kernel people seems not very repellent to the usage of unsafe compared to Rust people.</p>\n</blockquote>\n<p>Any chance that they are OK because they don't need to write \"SAFETY\" comments yet? Since they haven't tried Rust? ;-) Once they need to explain themselves whenever they use an <code>unsafe</code>, they may change their ideas.</p>",
+        "id": 298291647,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662931607
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298285436\">said</a>:</p>\n<blockquote>\n<p>Like, doing so in Rust is unsafe because the programmer have to make sure each field is initialised once and only once. But in C the same is still true and there's no compiler to check this property for you as well, so it's not worse.</p>\n</blockquote>\n<p>I  understand a lot of the asks require new language features and they may take time (similar to my expection to Rust memory ordering model). So no hurries. But you know what is also \"not worse than C\"? Staying using C ;-)</p>\n<p>Just think it's good to have some idea before kernel developers begin to ask for.</p>",
+        "id": 298292431,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1662932358
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298264228\">said</a>:</p>\n<blockquote>\n<p>Is there a good simple example where the on stack temporary isn't optimized away? I know relying on compiler optimization is not as good as guaranteed in-place initialization, but I am curious. I tried something like this: <a href=\"https://godbolt.org/z/MoEPdqb6n\">https://godbolt.org/z/MoEPdqb6n</a>, looks like the initialization happened in place.</p>\n</blockquote>\n<p>It happens with complicated structures! I saw strange behavior where initializing too many fields caused it to start putting more of the struct into the stack. At one point, adding a single field initializer increased stack usage from 4K to 12K. But it seems I need a lot of fields to get to that point, so maybe I'm tripping some sort of threshold in the optimizer? I'm not surprised you're not seeing it with simple cases...</p>\n<p><a href=\"https://github.com/AsahiLinux/linux/blob/796af62483c34763d3305db072fc9f7775979d4a/drivers/gpu/drm/asahi/initdata.rs#L137\">This</a> reliably gets spilled onto the stack if you replace the <code>box_and_init!</code> with just <code>Box::try_new</code>.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298285306\">said</a>:</p>\n<blockquote>\n<p>You can always create an uninitialised box and initialise it unsafely. Sure it's not very elegant and require unsafe, but from my impression in the kangrejos workshop, kernel people seems not very repellent to the usage of unsafe compared to Rust people.</p>\n</blockquote>\n<p>I'm happy with the crazy macro solution for now because it solves the safety issue (by requiring that all fields are initialized) and keeps normal syntax, but I would not be happy if there were no way to do that. It's not about avoiding unsafe code altogether, but rather about keeping unsafe code in \"core\" code or abstractions, and have the bulk of the logic be safe. I have to deal with a lot of complex structures, and one of the big advantages of Rust is that I was able to build an object system that uses the Rust ownership and lifetime rules to enforce the relationships between those structures, not just for safety on the kernel side, but also to keep things consistent with GPU firmware. If I had to use open-coded unsafe code every time I initialize a struct, that would be ugly and also remove a lot of the advantages of Rust here, since there would be many more places in the code that could have a mistake...</p>\n<p>For context, the GPU I'm writing a driver has an unfortunate design quirk that if we crash its firmware, the only way to recover is rebooting the entire machine (I couldn't find a way around this, it has to do with the firmware being loaded by the bootloader). So any driver bug that causes the structure lifetimes to be managed wrong, even one that does not cause any unsoundness from the kernel's point of view, is as bad as a kernel panic since it forces users to reboot. That's one big reason why writing this in Rust is beneficial, because it helps get both of those things right. And that relies on the core object system being sound, so that the rest of the driver can safely work with all these structures and have the GPU pointer validity and lifetimes checked at compile time.</p>\n<p>To give an example: we have to support multiple firmware versions, and some of them add new pointers. If structure initialization didn't have static checking that all fields are initialized, then adding a new pointer field for a firmware version change would mean that all initializers of that struct are suddenly UB (at least on paper - in practice probably not since these aren't real pointers, but it would still be incorrect and crash the firmware), until we go through and check all of them. That's a really big downgrade from Rust's usual safety guarantees. So I really think being able to do \"placement new\" in Rust is critical for these kinds of use cases. Right now we can get most of the way there with macros, so that's okay, but I hope the language gets that feature some day!</p>",
+        "id": 298322973,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1662966266
+    },
+    {
+        "content": "<p>What if you allocate the memory before creating the stack temporary? I've seen people claim that the allocation failure path is a common cause for it being spilled on the stack.</p>\n<div class=\"codehilite\"><pre><span></span><code>let uninit_box = Box::try_new_uninit()?;\n*uninit_box = MaybeUninit::new(MyStruct { ... });\nlet my_box = uninit_box.assume_init();\n</code></pre></div>",
+        "id": 298334133,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1662971000
+    },
+    {
+        "content": "<p>Though I guess the field-by-field initialization is more robust against spilling on the stack.</p>",
+        "id": 298334359,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1662971089
+    },
+    {
+        "content": "<p>How about using a macro like this? It only compiles if all fields are mentioned.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">box_and_init</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$type</span>:<span class=\"nc\">ident</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"cp\">$(</span><span class=\"w\"> </span><span class=\"cp\">$(#[$attr:meta]</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"cp\">$field</span>:<span class=\"nc\">ident</span>: <span class=\"cp\">$val</span>:<span class=\"nc\">expr</span><span class=\"p\">),</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"cp\">$(,</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"w\"> </span><span class=\"p\">})</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"cp\">#[allow(unreachable_code)]</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"k\">fn</span> <span class=\"nf\">_field_check</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">                </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span>: <span class=\"cp\">$type</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cp\">$type</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"cp\">$(</span><span class=\"w\"></span>\n<span class=\"w\">                        </span><span class=\"cp\">$(</span><span class=\"w\"> </span><span class=\"cp\">#[$attr]</span><span class=\"w\"> </span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"w\"></span>\n<span class=\"w\">                        </span><span class=\"cp\">$field</span>: <span class=\"nc\">todo</span><span class=\"o\">!</span><span class=\"p\">(),</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"w\"></span>\n<span class=\"w\">                </span><span class=\"p\">};</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"w\">            </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"o\">&lt;</span><span class=\"cp\">$type</span><span class=\"o\">&gt;</span>::<span class=\"n\">try_new_uninit</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">                </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">),</span><span class=\"w\"></span>\n<span class=\"w\">                </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">v</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">into_raw</span><span class=\"p\">(</span><span class=\"n\">v</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"cp\">$type</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"cp\">$(</span><span class=\"w\"></span>\n<span class=\"w\">                        </span><span class=\"cp\">$(</span><span class=\"w\"> </span><span class=\"cp\">#[$attr]</span><span class=\"w\"> </span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"w\"></span>\n<span class=\"w\">                        </span><span class=\"n\">core</span>::<span class=\"n\">ptr</span>::<span class=\"n\">addr_of_mut</span><span class=\"o\">!</span><span class=\"p\">((</span><span class=\"o\">*</span><span class=\"n\">ptr</span><span class=\"p\">).</span><span class=\"cp\">$field</span><span class=\"p\">).</span><span class=\"n\">write</span><span class=\"p\">(</span><span class=\"cp\">$val</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"w\"></span>\n<span class=\"w\">                    </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"nb\">Box</span>::<span class=\"n\">from_raw</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">))</span><span class=\"w\"></span>\n<span class=\"w\">                </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">};</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"cp\">#[derive(Debug)]</span><span class=\"w\"></span>\n<span class=\"k\">struct</span> <span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">a</span>: <span class=\"kt\">i32</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">b</span>: <span class=\"kt\">i32</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">c</span>: <span class=\"kt\">i32</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">box_and_init</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">a</span>: <span class=\"mi\">10</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">b</span>: <span class=\"mi\">30</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">c</span>: <span class=\"mi\">45</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}).</span><span class=\"n\">unwrap</span><span class=\"p\">();</span><span class=\"w\"></span>\n\n<span class=\"w\">    </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{:?}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>",
+        "id": 298336803,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1662972106
+    },
+    {
+        "content": "<p>This macro leaks memory if any of the <code>$val</code> expressions contain a <code>return</code>, but that can be fixed using some structs with destructors.</p>",
+        "id": 298337703,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1662972438
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Stack.20sizes/near/298334133\">said</a>:</p>\n<blockquote>\n<p>What if you allocate the memory before creating the stack temporary? I've seen people claim that the allocation failure path is a common cause for it being spilled on the stack.</p>\n<p><div class=\"codehilite\"><pre><span></span><code>let uninit_box = Box::try_new_uninit()?;\n*uninit_box = MaybeUninit::new(MyStruct { ... });\nlet my_box = uninit_box.assume_init();\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>This is a very good point. <code>Box::new</code> gets some extra optimisation from LLVM because it is assumed that allocation will succeed, so the construction of the struct can be moved after the allocation. This matters a lot especially if any of the field (or the whole struct) contains destructor. Moving the construction of things with dtor after <code>Box::try_new</code> will change the semantics and therefore not allowed.</p>\n<p>BTW, you can do this totally safely:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">uninit_box</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">try_new_uninit</span><span class=\"p\">()</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">my_box</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nb\">Box</span>::<span class=\"n\">write</span><span class=\"p\">(</span><span class=\"n\">uninit_box</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">MyStruct</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">});</span><span class=\"w\"></span>\n</code></pre></div>",
+        "id": 298368678,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662984809
+    },
+    {
+        "content": "<p>IIRC this approach still will generate on-stack temps and move code if more than one field contain destructors, though.</p>",
+        "id": 298368975,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1662984938
+    },
+    {
+        "content": "<p>None of my fields had destructors, so that's not the problem...</p>\n<p>I don't want to actually require all fields to be specified for box_and_init!() (since I plan to use it for giant parameter structures with lots of zero-default fields - that's why it instead requires <code>..Default::default()</code> at the end, as a proxy for \"default zero initializing is OK\" even though it's not quite correct), but I'll have a different macro that actually requires all fields for other use cases.</p>",
+        "id": 298432103,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1663005028
+    }
+]

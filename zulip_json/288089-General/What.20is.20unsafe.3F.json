@@ -1,0 +1,1340 @@
+[
+    {
+        "content": "<p>So I was reading Lina's thread, and it's a very enlightening discussion on the use of <code>unsafe</code> in kernel Rust. Barring a lot of the GPU stuff I don't understand, I feel there are maybe 4 layers to this discussion:</p>\n<p>1) the most basic: what should be considered unsafe? Normal Rust is in user space, and built around its standard library, so it has a pretty well defined notion of safety. whereas kernel Rust interfaces with the rest of the Linux kernel, and more over, with hardware. i can imagine each driver could have slightly different definition of safety. for example, (please forgive my ignorance about GPUs), say dangling pointer to GPU memory could cause graphic operation to fail, but can't touch main memory; gpu drivers might still want to consider that unsafe and try to prevent that.</p>\n<p>2) how to design invariant so that it can be compartmentalized. Lina made a point that the gpu driver upholds safety as a whole, even if when you take it apart each part isn't necessarily safe. the example being, IIUC, <code>IoPageTable</code> is safe, but becomes \"unsafe\" when you put CPU pointers into GPU-mapped memory? </p>\n<p>in normal rust, the unsafe boundary is pushed to as late as possible. things are generally considered safe unless it actually cause stuff to go boom on the spot. one relevant example is, converting references to pointers, and pointer arithmetics, are safe. only when you try to dereference a raw pointer, you need to use <code>unsafe</code>. I wonder if the same principle applies here? also, sometimes runtime checks can help you establish invariants that are difficult to do with type system alone.</p>\n<p>in general, designing the invariant that has to be upheld by safe interfaces can be difficult, sometimes it's indeed impossible to break thing down. </p>\n<p>3) can something be considered safe without perfect knowledge of the hardware? i think it's ok to settle for \"it's safe to the best of my knowledge\". it's the model seL4 operates on: it's mathematically proven to be safe <em>if</em> its model of X86 matches real hardware. if this is good enough for seL4, it's probably good enough for us? :-)</p>\n<p>4) ignore all above points, it just <em>is</em> unsafe, and it's used everywhere. do we then plaster the code with <code>unsafe</code> and safety comments? i am inclined to think it's worthwhile, but i am not sure.</p>\n<p>thoughts?</p>",
+        "id": 301715384,
+        "sender_full_name": "yshui",
+        "timestamp": 1664564462
+    },
+    {
+        "content": "<p>I think Linus' point about \"being realistic about the safety guarantees\" plays into the first point as well</p>",
+        "id": 301715812,
+        "sender_full_name": "yshui",
+        "timestamp": 1664564605
+    },
+    {
+        "content": "<p>I think a lot of it boils down to the fact that dealing with hardware is intrinsically unsafe. A bus-mastering device can violate any of the guarantee without IOMMU (which isn't guranteed to be used and is also not fine-grained enough even if its' used).</p>",
+        "id": 301833453,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664636662
+    },
+    {
+        "content": "<p>I think it's fair if we limit ourselves to \"we guarantee it's safe as long as the hardware don't misbehave\". and then we could probably do some validation on what pointer is passed to the hardware?</p>",
+        "id": 301850404,
+        "sender_full_name": "yshui",
+        "timestamp": 1664646718
+    },
+    {
+        "content": "<p>I think the crucial point from my thread is that safety/soundness is a property of interfaces. So it is something that can be more clearly defined for the <code>kernel</code> crate, since that is a bunch of interfaces for modules to use. But within any given piece of code, as soon as you introduce one <code>unsafe</code> block, that can impose requirements on other safe code. That's already the case in normal Rust. For example, I was reading the <code>Pin</code> docs earlier today <a href=\"https://doc.rust-lang.org/std/pin/index.html#projections-and-structural-pinning\">here</a>:</p>\n<blockquote>\n<p>The struct must only be <code>Unpin</code> if all the structural fields are <code>Unpin</code>. This is the default, but <code>Unpin</code> is a safe trait, so as the author of the struct it is your responsibility not to add something like <code>impl&lt;T&gt; Unpin for Struct&lt;T&gt;</code>. (Notice that adding a projection operation requires unsafe code, so the fact that <code>Unpin</code> is a safe trait does not break the principle that you only have to worry about any of this if you use unsafe.)</p>\n</blockquote>\n<p>Having <code>unsafe</code> in one place means doing something safe in another place can turn the design unsound, and make UB possible.</p>\n<p>So in the kernel, it's reasonable to say that interfacing with hardware is unsafe, because we can't know what hardware will do. That's already the case (<code>IoMem</code> is unsafe to instantiate). But we don't have to make every little operation <code>unsafe</code>, since once the programmer uses <code>unsafe</code> once to get at a hardware interface, it is their responsibility that the rest of the code is using it safely. There's no need to plaster <code>unsafe</code> everywhere, you only need to make sure the user has to use <code>unsafe</code> <em>at least once</em>.</p>\n<p>That doesn't mean we should fully minimize the number of APIs that are <code>unsafe</code>. For example, even if the design of an abstraction guarantees that the user already used <code>unsafe</code> to instantiate it, there can be some operations that are \"extra unsafe\" for some reason. Like, something that's more likely to be a footgun for users, or which imposes <em>extra</em> safety requirements above those imposed by the initial use of <code>unsafe</code>. And in those cases, it makes sense to have that API be <code>unsafe</code> too.</p>\n<p>Once you get into driver design, the challenge is to compartmentalize things as much as possible and make safety something that you can evaluate for small pieces of code. But for something like a GPU driver, the interactions are complex enough that there are safety aspects that span the whole driver. And in that case, I think the goal should be to make those safety aspects a property of the overall driver design, in a way that it's possible to evaluate at a high level and doesn't mean you need to audit all the code in detail and guarantee it's correct. So, safety is tiered: some things (especially those tied to individual <code>unsafe</code> blocks) enforce safety locally and are easy to audit at a low level, and some things are high-level concepts where you can audit safety by just understanding the design, without digging into the details of the implementation too much.</p>\n<p>In the end, I think we can agree that the goal should be to minimize bugs. You <em>have</em> to use <code>unsafe</code> to write drivers, so there is no way to make any hard guarantees like there is with userspace Rust. But Rust's tools let us greatly reduce the surface where bugs appear, if used properly, and that's what makes it an awesome language for drivers too. It's all about the balance between ergonomics and \"scary markers\" (like <code>unsafe</code>), so that us developers can comfortably write good code!</p>",
+        "id": 301890321,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664683609
+    },
+    {
+        "content": "<p>Just to give some examples from my driver:</p>\n<p><a href=\"https://github.com/AsahiLinux/linux/blob/e92bd6fc55c71382d76d8950face426d292e79c1/drivers/gpu/drm/asahi/event.rs#L75\">This</a> is an example of typical Rust <code>unsafe</code> usage. I loan out references-as-pointers to items within an array together with guards, and the design of the abstraction here is sound as explained in the comment. It's just working around Rust's lifetime model to do something special, but which you can reasonably see is ultimately sound.</p>\n<p><a href=\"https://github.com/AsahiLinux/linux/blob/e92bd6fc55c71382d76d8950face426d292e79c1/drivers/gpu/drm/asahi/object.rs#L34\">This</a> unsafe function just adds an offset to a GPU pointer. The safety model is different from Rust's pointers/references: you can think of these GPU pointers as being somewhere between those two. They are expected to be valid and <code>GpuPointer</code> enforces lifetimes (possibly in a leaky way, but it tries). I don't expect adding random offsets to pointers to be a thing I actually do normally, so this is <code>unsafe</code> to represent that you really need to know what you're doing if you use it. And then <a href=\"https://github.com/AsahiLinux/linux/blob/e92bd6fc55c71382d76d8950face426d292e79c1/drivers/gpu/drm/asahi/object.rs#L85\">this</a> macro uses that method to make inner pointers to fields in GPU objects, and <em>that</em> is safe since you know the offset is within the object the original pointer pointed to. This is an example of using the <code>unsafe</code> marker for something that isn't directly about CPU-side safety, but which is analogous, and then having a safe abstraction on top.</p>\n<p>And <a href=\"https://github.com/AsahiLinux/linux/blob/e92bd6fc55c71382d76d8950face426d292e79c1/drivers/gpu/drm/asahi/render.rs#L103\">this</a> is an example of GPU-side safety enforced by design. The work queues have (weak, so unchecked) GPU pointers to the GPU context and notifier list, and those need to outlive the work queue for things to be sound. But those objects are owned by the <code>Renderer</code> that owns the work queues, and come after, and fields are dropped in declaration order, so that is enforced by the design: the work queues will be dropped first, so there can be no dangling pointers, and you don't have to dig into the details of the rest of the code to understand that. Obviously this is a \"weaker\" guarantee (the rest of the code could replace those weak pointers, cache them, or do something silly like that), but the point is that that's not something you'd do without a good reason, so it's not a mistake that would happen by accident. In this case, just using <code>GpuWeakPointer</code> implies the programmer is responsible for the lifetime management here, so I don't think adding <code>unsafe</code> markers would make sense. <code>GpuWeakPointer</code> is, within this driver, itself a (lack of) safety indication, and it makes more sense to just document that.</p>",
+        "id": 301891104,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664684729
+    },
+    {
+        "content": "<p>I think the first two examples are great in showing that it often is possible to confine <code>unsafe</code> to a single module. I think that this will be perfectly fine for the kernel even in the longer term. We could advise/require driver writers to add a <code># Safety</code> chapter to the module documentation if their module uses <code>unsafe</code> and document what general invariants they intend to uphold in the module.<br>\nThat way it will be clear for reviewers and future authors what they have to be careful about.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/301891104\">said</a>:</p>\n<blockquote>\n<p>And <a href=\"https://github.com/AsahiLinux/linux/blob/e92bd6fc55c71382d76d8950face426d292e79c1/drivers/gpu/drm/asahi/render.rs#L103\">this</a> is an example of GPU-side safety enforced by design. The work queues have (weak, so unchecked) GPU pointers to the GPU context and notifier list, and those need to outlive the work queue for things to be sound. But those objects are owned by the <code>Renderer</code> that owns the work queues, and come after, and fields are dropped in declaration order, so that is enforced by the design: the work queues will be dropped first, so there can be no dangling pointers, and you don't have to dig into the details of the rest of the code to understand that. Obviously this is a \"weaker\" guarantee (the rest of the code could replace those weak pointers, cache them, or do something silly like that), but the point is that that's not something you'd do without a good reason, so it's not a mistake that would happen by accident. In this case, just using <code>GpuWeakPointer</code> implies the programmer is responsible for the lifetime management here, so I don't think adding <code>unsafe</code> markers would make sense. <code>GpuWeakPointer</code> is, within this driver, itself a (lack of) safety indication, and it makes more sense to just document that.</p>\n</blockquote>\n<p>I would argue that making <code>WorkQueue::new</code> <code>unsafe</code> would be a good idea. It has the additional safety requirement of \"these pointers live at least as long as I do\". It also does not plaster unsafe over everything, because it only sits at the initialization (the thing about the drop order might not be obvious to most kernel reviewers, so I think if there were a comment explaining that, it would be good).<br>\nThis also has precedent in the kernel crate, before <code>LockClassKey</code> was introduced as a safe wrapper for <code>*mut bindings::lock_class_key</code>, all initialization functions for locks were <code>unsafe</code>. The requirement was that the lockclasskey lived at least as long as the lock. On the rust side this was almost always <code>'static</code> which is why it is now tracked by lifetimes.</p>",
+        "id": 301911042,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664703316
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> </p>\n<blockquote>\n<p>But within any given piece of code, as soon as you introduce one unsafe block, that can impose requirements on other safe code.</p>\n</blockquote>\n<p>I think in normal Rust it's the other way around. It's safe code imposes requirements on <code>unsafe</code> blocks. i.e. there is some \"safety contract\" that every piece of unsafe code must uphold. for example, simple things like \"not creating 2 <code>&amp;mut</code> to the same object\". And as long as your <code>unsafe</code> blocks play to this rule, you don't need to worry about them in the back of your mind all the time. in normal Rust at least.</p>\n<p>And if your function is not guaranteed to uphold this contract, then the whole function needs to be <code>unsafe</code>.</p>",
+        "id": 301994265,
+        "sender_full_name": "yshui",
+        "timestamp": 1664768136
+    },
+    {
+        "content": "<p>There certainly is the problem that the \"safety contract\" isn't yet fully defined for normal Rust (to the best of my knowledge). But I think this is generally how <code>unsafe</code> code should operate</p>",
+        "id": 301994330,
+        "sender_full_name": "yshui",
+        "timestamp": 1664768207
+    },
+    {
+        "content": "<blockquote>\n<p>In the end, I think we can agree that the goal should be to minimize bugs.</p>\n</blockquote>\n<p>Yes, fully agree with you. Don't let perfect be the enemy of good</p>\n<p>However:</p>\n<blockquote>\n<p>You have to use <code>unsafe</code> to write drivers, so there is no way to make any hard guarantees like there is with userspace Rust.</p>\n</blockquote>\n<p>There might as well be no way to make the same level of guarantees, but the necessity of <code>unsafe</code> can't be one of the reasons. Userspace Rust <em>has</em> to use <code>unsafe</code> too! The point is that the <code>unsafe</code>-ty is contained, and documented with <code>SAFETY:</code> comments.</p>\n<p><code>unsafe</code> is when you need to do something that's beyond the language's ability to prove safe - you know after the <code>unsafe {}</code> block is done all the safety contracts and invariants still hold, but the compiler couldn't see that fact with its type system and borrow checker. </p>\n<p>You are just telling the compiler \"trust me with this\" with <code>unsafe</code>.</p>",
+        "id": 301996399,
+        "sender_full_name": "yshui",
+        "timestamp": 1664770731
+    },
+    {
+        "content": "<p>Or at least that's the philosophy of normal Rust. If the kernel is a land so full of danger we can't abstract a reasonable safety contract/invariant (how to design such an invariant? is my point (2)), only then we enter the discussion whether we should forgo the use of the <code>unsafe</code> keyword, because if we use it as Rust intended we will be using it everywhere (my point (4))</p>",
+        "id": 301996557,
+        "sender_full_name": "yshui",
+        "timestamp": 1664770904
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/301994265\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> </p>\n<blockquote>\n<p>But within any given piece of code, as soon as you introduce one unsafe block, that can impose requirements on other safe code.</p>\n</blockquote>\n<p>I think in normal Rust it's the other way around. It's safe code imposes requirements on <code>unsafe</code> blocks. i.e. there is some \"safety contract\" that every piece of unsafe code must uphold. for example, simple things like \"not creating 2 <code>&amp;mut</code> to the same object\". And as long as your <code>unsafe</code> blocks play to this rule, you don't need to worry about them in the back of your mind all the time. in normal Rust at least.</p>\n<p>And if your function is not guaranteed to uphold this contract, then the whole function needs to be <code>unsafe</code>.</p>\n</blockquote>\n<p>I think you're conflating two concepts here. There are some things that are UB or can lead to UB in unsafe code, and which unsafe code must not do. But unsafe code imposes requirements on safe code all the time (just look at many of the Safety comments we already have, many of them rely on invariants upheld by safe code).</p>",
+        "id": 301999388,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664773896
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/301996399\">said</a>:</p>\n<blockquote>\n<p><code>unsafe</code> is when you need to do something that's beyond the language's ability to prove safe - you know after the <code>unsafe {}</code> block is done all the safety contracts and invariants still hold, but the compiler couldn't see that fact with its type system and borrow checker. </p>\n</blockquote>\n<p>But that knowledge relies on knowledge about things outside the <code>unsafe</code> block very often! So <code>unsafe</code> code isn't necessarily self-contained, it very often relies on facts about its safe environment in order to not invoke UB. This is the case in normal Rust, and it's the case in the kernel.  Just look at the <code>Pin</code> documentation I linked - that's a document telling you you need to uphold certain rules when implementing a <em>safe</em> trait, but those rules only come into play if there is <code>unsafe</code> code involved elsewhere. If you have that <code>unsafe</code> code, and then don't follow the rules in the safe bit, your code is unsound and can invoke UB, just by changing safe code.</p>",
+        "id": 301999567,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664774100
+    },
+    {
+        "content": "<p>Put another way: if your code has zero unsafe blocks, then you can make arbitrary changes and it will remain safe. If your code has one unsafe code, that guarantee is instantly lost. The unsafe code might be sound, it might invoke UB, or it might be sound <em>only if</em> the rest of the code does certain things a certain way. This is, and has always been, how unsafe Rust works. The standard library is full of examples of this. You cannot safely make arbitrary changes to arbitrary safe code within a module that uses <code>unsafe</code> or uses modules whose API does not promise soundness.</p>\n<p>And <em>then</em> you can define a soundness API boundary such that you can say \"okay, if you don't touch any of the code in this module, then even though it contains unsafe blocks, it is sound no matter what the user does outside of it\". That's how you get the soundness/safety guarantees back.</p>",
+        "id": 301999701,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664774272
+    },
+    {
+        "content": "<p>I get the feeling there's a lot of confusion around safety in Rust... <code>unsafe</code> blocks don't mark which parts of the code are unsafe and you have to audit to ensure soundness, they mark the <em>entry point</em> of that analysis. That analysis can, and very often does, then extend outside those <code>unsafe</code> blocks. And the goal is to have that analysis terminate (to know that, exhaustively, all possible code paths are sound) within a reasonable scope so that we can know that the code is correct. But that is very often going to involve safe code too.</p>",
+        "id": 301999908,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664774514
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> </p>\n<blockquote>\n<p>I think you're conflating two concepts here.</p>\n</blockquote>\n<p>I think we might be talking over each other a little bit, or maybe you could have been confused by \"SAFETY\" comments on top of <code>unsafe fn</code> and <code>unsafe impl</code>s? Those <code>unsafe</code> imposes requirements on other code, regarding how they can be used. But those can't be used from safe code anyway.</p>\n<p>The other use of <code>unsafe</code> is <code>unsafe { ... }</code>. Those shouldn't impose extra requirements on other code if used as intended. </p>\n<p>Let me just pull up a <a href=\"https://github.com/Rust-for-Linux/linux/blob/542379556669fee413ad45bc9611187e075b0d47/rust/kernel/sync/guard.rs#L63-L65\">random example</a>, <code>Guard::new</code> is an <code>unsafe fn</code>, because if the caller doesn't own the lock bad things happen. So yes, it imposes requirements on other code. It's called <a href=\"https://github.com/Rust-for-Linux/linux/blob/542379556669fee413ad45bc9611187e075b0d47/rust/kernel/sync/spinlock.rs#L119\">here</a>, in the <code>unsafe {...}</code>, with a safety comment justifying its use. Other safe code does <em>not</em> have to be aware of the existence of this <code>unsafe</code> block, because it's behind <code>SpinLock::lock</code>, which is safe. i.e. it doesn't impose requirements on safe code.</p>",
+        "id": 302000797,
+        "sender_full_name": "yshui",
+        "timestamp": 1664775376
+    },
+    {
+        "content": "<p>If an <code>unsafe</code> block imposes requirements on safe code, then its unsafe-ness is \"leaking\"</p>",
+        "id": 302000877,
+        "sender_full_name": "yshui",
+        "timestamp": 1664775478
+    },
+    {
+        "content": "<blockquote>\n<p>But that knowledge relies on knowledge about things outside the <code>unsafe</code> block very often! So <code>unsafe</code> code isn't necessarily self-contained, it very often relies on facts about its safe environment in order to not invoke UB. </p>\n</blockquote>\n<p>Hmm, I think I see where you are coming from. I see it as the safe code establishing an invariant that any <code>unsafe</code> code can rely on. When I say <code>unsafe</code> imposes something on other code, I think about requirements unique to each <code>unsafe</code> block. Like the safety comments on <code>unsafe fn</code>s, usually each <code>unsafe fn</code> has its own unique requirements. </p>\n<p>Whereas in <code>Pin</code>'s case, the safe code established an invariant that <em>any</em> <code>unsafe</code> block can rely on. So it's less each <code>unsafe</code> block is imposing its own requirement.</p>\n<p>This also is my point (2) which is about how we could design an invariant like this.</p>",
+        "id": 302001815,
+        "sender_full_name": "yshui",
+        "timestamp": 1664776202
+    },
+    {
+        "content": "<p>Reading the safety comment on <code>IoMem::try_new</code>. To me it's odd that <code>IoMem::try_new</code> is <code>unsafe</code>. Shouldn't initiating DMA be <code>unsafe</code> instead? Maybe I am missing some context here.</p>",
+        "id": 302003121,
+        "sender_full_name": "yshui",
+        "timestamp": 1664777188
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> </p>\n<blockquote>\n<p>Put another way: if your code has zero unsafe blocks, then you can make arbitrary changes and it will remain safe. If your code has one unsafe code, that guarantee is instantly lost. The unsafe code might be sound, it might invoke UB, or it might be sound only if the rest of the code does certain things a certain way.</p>\n</blockquote>\n<p>OK, I think I understand your perspective a bit better now.  Yes, it is true that some pre-condition must be setup before entering an <code>unsafe</code> block. But I don't think in practice it's as terrifying as you made it out to be.</p>\n<p>Usually code that sets up the pre-condition is contained within the function the <code>unsafe</code> block resides, so you can touch everything else without worrying about it. In some cases it would span 2, 3 structs, bound by a contract/invariant between them. <code>Unpin</code> is the exceptional case where there is a language wide invariant, but that isn't usually problematic since there is unlikely to be a safe, generic <code>fn</code> that does pin projections.</p>\n<p>However, my bigger point is, there should be no unsafe-ness leftover. i.e. <em>after</em> an <code>unsafe</code> block has done executing, safe code doesn't have to be aware that an unsafe block has ever been executed. After an unsafe block, safe code should be able to do whatever it wants and not cause UB.</p>",
+        "id": 302004028,
+        "sender_full_name": "yshui",
+        "timestamp": 1664777917
+    },
+    {
+        "content": "<p>Could you then help review Asahi Lina's GPU driver code to prove your point? <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 302004955,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1664778560
+    },
+    {
+        "content": "<p>I should have understood Lina's points better before I replied. I apologize.</p>",
+        "id": 302006677,
+        "sender_full_name": "yshui",
+        "timestamp": 1664779647
+    },
+    {
+        "content": "<blockquote>\n<p>In this case, just using GpuWeakPointer implies the programmer is responsible for the lifetime management here, so I don't think adding unsafe markers would make sense.</p>\n</blockquote>\n<p>Sounds like these WeakPointers are analogous to raw pointers, which also doesn't have lifetime checks. I think it's worthwhile to make accessing these pointers be unsafe. work queue can encapsulate these behind a safe interface, other code that uses weak pointers have to use <code>unsafe {}</code> to indicate they are doing it under their own risk.</p>",
+        "id": 302007190,
+        "sender_full_name": "yshui",
+        "timestamp": 1664779933
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302000797\">said</a>:</p>\n<blockquote>\n<p>Other safe code does <em>not</em> have to be aware of the existence of this <code>unsafe</code> block, because it's behind <code>SpinLock::lock</code>, which is safe. i.e. it doesn't impose requirements on safe code.</p>\n</blockquote>\n<p>But it does, it's right there! The unsafe code is sound because the spinlock was just acquired, <em>in safe code</em>. Had that not been the case the unsafe code would be a problem. In this case it happens to be two lines of code before the <code>unsafe</code> block, but it can be much further away, such as the <code>Pin</code> example I mentioned where you are no allowed to impl <code>Unpin</code> without following certain rules if you have any projection operations (which contain the <code>unsafe {}</code> part).</p>",
+        "id": 302007202,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664779940
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> yeah, you are right. I addressed that in a comment below</p>",
+        "id": 302007253,
+        "sender_full_name": "yshui",
+        "timestamp": 1664779974
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302004028\">said</a>:</p>\n<blockquote>\n<p>However, my bigger point is, there should be no unsafe-ness leftover. i.e. <em>after</em> an <code>unsafe</code> block has done executing, safe code doesn't have to be aware that an unsafe block has ever been executed. After an unsafe block, safe code should be able to do whatever it wants and not cause UB.</p>\n</blockquote>\n<p>Okay, that's an interesting point: that the <code>unsafe</code> code can impose <em>preconditions</em> on safe code but shouldn't impose <em>postconditions</em> on safe code. Is that actually documented somewhere as a desirable design in Rust? I can see how it makes some sense, but it also seems somewhat academic in other ways, depending on the exact design.</p>",
+        "id": 302007592,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664780188
+    },
+    {
+        "content": "<p>To me it sounds like the more important question is whether those conditions (pre or post) leak, and to what extent, outside module/impl boundaries. Obviously we agree that them leaking across a public API boundary is a bug.</p>",
+        "id": 302007886,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664780353
+    },
+    {
+        "content": "<p>Actually, I can find counterexamples to the \"no postconditions\" idea, I'm pretty sure. Give me a second.</p>",
+        "id": 302008037,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664780413
+    },
+    {
+        "content": "<p>The information on how to correct write <code>unsafe</code> Rust code is still obscure and sparse. And parts of it is not even defined (e.g. Stacked borrow is still WIP). But I think this is generally the model how unsafe code should be written.</p>\n<p>Think of it this way: a library using unsafe code should have no effect on you, if you only write safe code. However this promise can be broken if the library's <code>unsafe {}</code> blocks don't uphold the correct postconditions.</p>",
+        "id": 302008083,
+        "sender_full_name": "yshui",
+        "timestamp": 1664780432
+    },
+    {
+        "content": "<p>Right, and that's why we agree that public interfaces should be sound.</p>",
+        "id": 302008225,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664780506
+    },
+    {
+        "content": "<p>As for postconditions, consider <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/gpio.rs#L136\">this</a>. That's <code>unsafe</code> code imposing postconditions on the safe code that follows.</p>",
+        "id": 302008251,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664780522
+    },
+    {
+        "content": "<p>In this example, it's probably better if the <code>unsafe</code> block encapsulate the whole lifetime of <code>this</code>. Because otherwise it would be possible for safe code in that function to exhibit UB. But yeah, this is a good example, and I'm not 100% sure if this breaks the unsafe code guide line.</p>",
+        "id": 302009053,
+        "sender_full_name": "yshui",
+        "timestamp": 1664780939
+    },
+    {
+        "content": "<p>partially because the guideline isn't complete yet.</p>",
+        "id": 302009104,
+        "sender_full_name": "yshui",
+        "timestamp": 1664780967
+    },
+    {
+        "content": "<p>I will try to see if I can find a reference.</p>",
+        "id": 302009358,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781083
+    },
+    {
+        "content": "<blockquote>\n<p>Soundness is a type system concept (actually originating from the study of logics) and means that the type system is \"correct\" in the sense that well-typed programs actually have the desired properties. For Rust, this means well-typed programs cannot cause Undefined Behavior. This promise only extends to safe code however; for unsafe code, it is up to the programmer to uphold this contract.</p>\n</blockquote>\n<p>I take this as saying code outside <code>unsafe</code> blocks, as long as they compile, can never cause UB.</p>",
+        "id": 302009571,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781176
+    },
+    {
+        "content": "<p>source is: <a href=\"https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library\">https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library</a></p>",
+        "id": 302009601,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781186
+    },
+    {
+        "content": "<p>So yeah, I think that <code>unsafe</code> block is probably incorrect.</p>",
+        "id": 302009681,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781239
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/301911042\">said</a>:</p>\n<blockquote>\n<p>I would argue that making <code>WorkQueue::new</code> <code>unsafe</code> would be a good idea. It has the additional safety requirement of \"these pointers live at least as long as I do\". It also does not plaster unsafe over everything, because it only sits at the initialization (the thing about the drop order might not be obvious to most kernel reviewers, so I think if there were a comment explaining that, it would be good).<br>\nThis also has precedent in the kernel crate, before <code>LockClassKey</code> was introduced as a safe wrapper for <code>*mut bindings::lock_class_key</code>, all initialization functions for locks were <code>unsafe</code>. The requirement was that the lockclasskey lived at least as long as the lock. On the rust side this was almost always <code>'static</code> which is why it is now tracked by lifetimes.</p>\n</blockquote>\n<p>Right... the problem here is that you can't actually achieve safety guarantees for firmware operations without plastering <code>unsafe</code> everywhere. Rust is great for CPU-side safety because it encourages writing code that is inherently safe (which it is if you don't use <code>unsafe</code>). But the firmware is written in C, and does unsafe things all over the place, and imposes a huge number of preconditions on the driver. If we actually tried to enumerate all possible ways the driver can crash the firmware and make sure you always need to use <code>unsafe</code> somewhere around those places, we'd end up with half the driver being in <code>unsafe</code> blocks. Sure, making <code>WorkQueue::new</code> <code>unsafe</code> is a minor change, but it's also just one of a million ways you can crash the firmware by not upholding invariants. So I don't think it's actually useful to \"just throw some of these in\", because it's a battle that we cannot win...</p>\n<p>That's why I say I'm using Rust's features to <em>help</em> with the driver development, to make crashing the firmware by accident much harder, and to make those mistakes unlikely. But I don't think I can reasonably contain all the firmware-side unsafety in Rust-side <code>unsafe</code>. It's just not practical. Just the fact that I was able to use Rust's lifetime features to manage GPU-side pointer lifetimes is amazing! And it works, things are stable! But if you ask me to try to apply the same strict rules we apply to CPU-side Rust abstractions... I don't think I can do that.</p>\n<p>Put another way: I'm not interested in marking ways I can crash the firmware as <code>unsafe</code>. I'm interested in making them not compile, as much as I can, and hard to do by accident, elsewhere!</p>",
+        "id": 302009733,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781246
+    },
+    {
+        "content": "<p>Or look at it this way: if safe code breaks precondition, then unsafe code does UB, which is acceptable; if unsafe code breaks postcondition, then safe code does UB, which is not.</p>",
+        "id": 302009881,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781337
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009571\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>Soundness is a type system concept (actually originating from the study of logics) and means that the type system is \"correct\" in the sense that well-typed programs actually have the desired properties. For Rust, this means well-typed programs cannot cause Undefined Behavior. This promise only extends to safe code however; for unsafe code, it is up to the programmer to uphold this contract.</p>\n</blockquote>\n<p>I take this as saying code outside <code>unsafe</code> blocks, as long as they compile, can never cause UB.</p>\n</blockquote>\n<p>From the next line (emphasis mine):</p>\n<blockquote>\n<p>Accordingly, we say that a library (or an individual function) is sound if it is impossible for safe code to cause Undefined Behavior <em>using its public API</em>.</p>\n</blockquote>\n<p>That's why I keep talking about API boundaries...</p>",
+        "id": 302009976,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781377
+    },
+    {
+        "content": "<p>Yeah, a library should be sound, but in general Rust code should be sound.</p>",
+        "id": 302010081,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781439
+    },
+    {
+        "content": "<p>Yes, but there is no hard rule for where the soundness boundary should be for code that isn't a library. It's up to the programmer. Sometimes the design can be improved and that boundary moved closer to the <code>unsafe</code> block, of course.</p>",
+        "id": 302010227,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781507
+    },
+    {
+        "content": "<p>That's an interesting point. I think you are saying it's OK for a library's code to be potentially unsound, as long as it's public interface is sound?</p>",
+        "id": 302010565,
+        "sender_full_name": "yshui",
+        "timestamp": 1664781661
+    },
+    {
+        "content": "<p>Soundness is a property of the interface itself. You cannot define soundness (in a useful way in the context of Rust) as an absolute concept. It has to be attached to an interface, because there has to be a boundary where you say \"if everything to this side of the boundary is safe, then the code exhibits no UB\".</p>",
+        "id": 302010758,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781753
+    },
+    {
+        "content": "<p>So it doesn't make sense to say \"a library's code is unsound\". If the public interface is sound, the library is sound. It makes sense to say \"this internal interface of the library is sound\" and that's a good thing if you can achieve it, because it makes writing a correct library easier!</p>",
+        "id": 302010827,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781789
+    },
+    {
+        "content": "<p>More accurately, soundness is a property of the implementation <em>viewed through an interface</em>. So the library is sound viewed through its public API.</p>",
+        "id": 302011247,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664781990
+    },
+    {
+        "content": "<p>In the trivial examples of <code>unsafe</code> code we discussed, that code is sound <em>viewed through the function call interface</em>. The risk of UB does not escape the function body. Those are the easy cases, of course ^^</p>",
+        "id": 302011343,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664782046
+    },
+    {
+        "content": "<p>Hmm, the concepts are a bit conflated here. There is the soundness of a type system, which means if a program type checks, it's guaranteed to not have UB. And there is the soundness of a library, which is as you explained. </p>\n<p>And of course, Rust's type system requires the programmer to write <code>unsafe</code> code correctly, otherwise a program that type checks can have UB.</p>\n<p>What I meant by \"the library's code being potentially unsound\", is that the library's <code>unsafe</code> code is written in a way, that even if it compiles, its safe code can still possibly cause UB.</p>",
+        "id": 302011398,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782079
+    },
+    {
+        "content": "<p>The question is \"possibly cause UB\" under what conditions? If those conditions can be triggered by a user of the library, the library is unsound. If those conditions can only be triggered by changing the library itself, then the library is sound.</p>",
+        "id": 302011506,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664782133
+    },
+    {
+        "content": "<p>In <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/gpio.rs#L136\">the example you gave</a>, the function interface is sound, and the function most likely does not have UB. But it uses unsafe code in a way that it's possible to cause UB in safe code, which I think is running against the guideline.</p>",
+        "id": 302011584,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782190
+    },
+    {
+        "content": "<p>But we do that all the time with <code>unsafe</code> code. It's fundamental to how it works in Rust, and it is a <em>good</em> thing, because using <code>unsafe</code> blocks removes a lot of safeguards from rust, and it makes no sense to wrap things in <code>unsafe</code> just because they need to uphold preconditions for other <code>unsafe</code> code. That just increases the amount of <em>other</em> mistakes you can make that the compiler won't catch for you any more.</p>",
+        "id": 302011717,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664782251
+    },
+    {
+        "content": "<p>Because this weakens the compiler's ability to make sure the library's <em>interface</em> is indeed sound as you claimed.</p>",
+        "id": 302011718,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782251
+    },
+    {
+        "content": "<p>Sorry, that's continuing from my previous message</p>",
+        "id": 302011809,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782290
+    },
+    {
+        "content": "<p>What's the best way of phrasing this ^^; Let me organize my thoughts a little bit.</p>",
+        "id": 302012132,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782468
+    },
+    {
+        "content": "<p>I think the crux here is that Rust defines the <em>source</em> of the UB as the <code>unsafe</code> code. So no matter how many preconditions/postconditions it imposes on surrounding code, if there is UB, from the point of view of the Rust language contract, it's the <code>unsafe</code> code's fault. However, that is different from the point of view of the programmer, because if the programmer <em>deliberately</em> chooses to write the <code>unsafe</code> code in a way that imposes those pre/postconditions, they are assuming responsibility for upholding them in the safe code.</p>",
+        "id": 302012137,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664782474
+    },
+    {
+        "content": "<p>Ah, firstly, there is a misuse of terminology, sorry to be pedantic. I was saying <code>unsafe</code> code should <em>upheld</em> postconditions, in other words, they should not <em>deprive</em> later safe code of <em>pre</em>conditions that should hold.</p>\n<p>It's somewhat wrong to say they impose postconditions, I think.</p>",
+        "id": 302013107,
+        "sender_full_name": "yshui",
+        "timestamp": 1664782949
+    },
+    {
+        "content": "<p>I think this all comes down to reduce the amount of context you have to keep in mind when you code. Rust says as long as your code compiles, it does not have UB, so you don't need to remember ownership, lifetime, etc. all the time, the compiler checks them for you. However, there is <code>unsafe</code> blocks. If like you said, <code>unsafe</code> can sometimes not upheld their contract - so use <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/gpio.rs#L136\">the example</a>, that <code>unsafe</code> fails to upheld the contract that there should not be a <code>&amp;mut</code> in safe code to a pinned object. If this happens, you have extra context to keep in mind: I can't move out of <code>this</code>. And if you forget that, the code goes boom.</p>",
+        "id": 302013942,
+        "sender_full_name": "yshui",
+        "timestamp": 1664783278
+    },
+    {
+        "content": "<p>Granted, in that example, this context only lasts until the end of that function, but the general point stands.</p>",
+        "id": 302014025,
+        "sender_full_name": "yshui",
+        "timestamp": 1664783312
+    },
+    {
+        "content": "<p>If all your <code>unsafe</code> blocks upheld their contract, then there is no extra mind baggage when you are writing safe code.</p>",
+        "id": 302014086,
+        "sender_full_name": "yshui",
+        "timestamp": 1664783352
+    },
+    {
+        "content": "<p>So yeah, if I was to review the Rust kernel patch, that unsafe block is definitely something I would point out ^^</p>",
+        "id": 302014404,
+        "sender_full_name": "yshui",
+        "timestamp": 1664783480
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009681\">said</a>:</p>\n<blockquote>\n<p>So yeah, I think that <code>unsafe</code> block is probably incorrect.</p>\n</blockquote>\n<p>I disagree, <code>unsafe</code> blocks should only encapsulate the operation that is actually unsafe.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009733\">said</a>:</p>\n<blockquote>\n<p>Right... the problem here is that you can't actually achieve safety guarantees for firmware operations without plastering <code>unsafe</code> everywhere. Rust is great for CPU-side safety because it encourages writing code that is inherently safe (which it is if you don't use <code>unsafe</code>). But the firmware is written in C, and does unsafe things all over the place, and imposes a huge number of preconditions on the driver. If we actually tried to enumerate all possible ways the driver can crash the firmware and make sure you always need to use <code>unsafe</code> somewhere around those places, we'd end up with half the driver being in <code>unsafe</code> blocks. Sure, making <code>WorkQueue::new</code> <code>unsafe</code> is a minor change, but it's also just one of a million ways you can crash the firmware by not upholding invariants. So I don't think it's actually useful to \"just throw some of these in\", because it's a battle that we cannot win...</p>\n</blockquote>\n<p>Now I have become too curious if it would actually be that bad (I believe you, I just want to see if with my own eyes). So when I have more time for this I am definitely going to make a fork...</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009733\">said</a>:</p>\n<blockquote>\n<p>Put another way: I'm not interested in marking ways I can crash the firmware as <code>unsafe</code>. I'm interested in making them not compile, as much as I can, and hard to do by accident, elsewhere!</p>\n</blockquote>\n<p>That is excellent design. And I still think that if it is possible to crash the firmware via another way. That way should be marked <code>unsafe</code>.</p>",
+        "id": 302014450,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664783512
+    },
+    {
+        "content": "<blockquote>\n<p>I disagree, unsafe blocks should only encapsulate the operation that is actually unsafe.</p>\n</blockquote>\n<p><span aria-label=\"cry\" class=\"emoji emoji-1f622\" role=\"img\" title=\"cry\">:cry:</span> I have the feeling that people aren't really aligned on what <code>unsafe</code> blocks should do. I think <code>unsafe</code> block should be written in a way that it's impossible to cause UB in safe code.</p>\n<p>My argument for this is in the later message</p>",
+        "id": 302015145,
+        "sender_full_name": "yshui",
+        "timestamp": 1664783825
+    },
+    {
+        "content": "<p>I think it should mark <code>unsafe</code> operations and be accompanied with a safety comment explaining what invariants are upheld. That way it is easier to spot during review if the <code>unsafe</code> operation was used correctly.</p>",
+        "id": 302015312,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664783910
+    },
+    {
+        "content": "<p>I do not really see a difference between UB happens in safe code (because it violated invariants) vs UB happens in unsafe code.</p>",
+        "id": 302015422,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664783980
+    },
+    {
+        "content": "<p>Well, it's the mindset when writing code, isn't it? In safe code, you don't need to keep in mind which invariants you must hold. The <code>unsafe {}</code> block delimits the boundary where you need to worry vs where you don't.</p>",
+        "id": 302015829,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784137
+    },
+    {
+        "content": "<p>Take a look at <code>Vec</code>. You constantly need to be aware that modifying <code>len</code> might result in UB later, because you set it to the wrong value (We currently do not have <code>unsafe</code> fields).</p>",
+        "id": 302015944,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664784214
+    },
+    {
+        "content": "<p>Is there a specific example? <code>Vec</code> is pretty long.</p>",
+        "id": 302016168,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784314
+    },
+    {
+        "content": "<p>BTW do you know if there is any consensus on exactly what <code>unsafe</code> can and can't do? I only know about the UCG working group, which seems to be still WIP</p>",
+        "id": 302016551,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784504
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302016168\">said</a>:</p>\n<blockquote>\n<p>Is there a specific example? <code>Vec</code> is pretty long.</p>\n</blockquote>\n<p>I mean as a general concept. The programmer of <code>Vec</code> needs to be aware that they cannot change the length arbitrarily. This is reflected by the scarcity of <code>self.len =</code> and <code>self.len +=</code>.</p>",
+        "id": 302016662,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664784562
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302016551\">said</a>:</p>\n<blockquote>\n<p>BTW do you know if there is any consensus on exactly what <code>unsafe</code> can and can't do? I only know about the UCG working group, which seems to be still WIP</p>\n</blockquote>\n<p>What do you mean by \"can and can't do\"? What kind of invariants it can impose? IIRC it was mostly arbitrary invariants. E.g. a trait can be <code>unsafe</code> due to any number of custom invariants (implement this trait only if you also implement that trait etc.).</p>\n<p>At the end of the day it should not produce UB :)</p>",
+        "id": 302016915,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664784659
+    },
+    {
+        "content": "<p>Yeah, but they are all in unsafe blocks. We don't yet have a way to enforce that modification to a field has to be in <code>unsafe</code>. Yet <code>libstd</code> devs made sure to put all of those in <code>unsafe {}</code>.</p>",
+        "id": 302017007,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784691
+    },
+    {
+        "content": "<p>Correct, but I dislike huge <code>unsafe</code> blocks, because the safety comment is at the top and applies to the <em>whole</em> block. I prefer small blocks where it is immediately evident what invariants are imposed.</p>",
+        "id": 302017268,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664784793
+    },
+    {
+        "content": "<blockquote>\n<p>What do you mean by \"can and can't do\"? What kind of invariants it can impose?</p>\n</blockquote>\n<p>Hmm, more about what invariants they must upheld.</p>",
+        "id": 302017280,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784798
+    },
+    {
+        "content": "<p>well you still need to ensure all type invariants (e.g. references are well aligned, dereferencable, non-null etc. a <code>Box</code> must be unique).</p>",
+        "id": 302017489,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664784890
+    },
+    {
+        "content": "<blockquote>\n<p>I prefer small blocks where it is immediately evident what invariants are imposed.</p>\n</blockquote>\n<p>but then it's unclear how far the invariants extend. in <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/gpio.rs#L136\">the example</a>, the invariants is imposed as long as <code>this</code> is alive, but it's not immediately clear. If you extend <code>unsafe</code> block then it's much more explicit.</p>",
+        "id": 302017527,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784908
+    },
+    {
+        "content": "<blockquote>\n<p>well you still need to ensure all type invariants.</p>\n</blockquote>\n<p>Which is why I think you shouldn't get a <code>&amp;mut</code> out of the <code>Pin</code></p>",
+        "id": 302017705,
+        "sender_full_name": "yshui",
+        "timestamp": 1664784979
+    },
+    {
+        "content": "<p>Well, before there is an official specification on <code>unsafe</code>, it's more or less my words against yours. Although I do think I have a good point <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 302017820,
+        "sender_full_name": "yshui",
+        "timestamp": 1664785066
+    },
+    {
+        "content": "<p>yes, but not really, to me it is quiet clear that when reviewing I need to check the lifetime of <code>this</code>.</p>\n<p>If you were to extend the <code>unsafe</code> block until the last usage of <code>this</code>, then you would not need the <code>unsafe</code> block that calls <code>bindings::gpiochip_add_data_with_key</code>. And subsequently you would put the safety comment on the unsafe in line 136. To me this seems <strong>way</strong> worse than having to check the lifetime of <code>this</code>...</p>",
+        "id": 302017904,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664785087
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302017820\">said</a>:</p>\n<blockquote>\n<p>Well, before there is an official specification on <code>unsafe</code>, it's more or less my words against yours. Although I do think I have a good point <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>\n</blockquote>\n<p>I do not think that is going to come out any time soon... I also think that the kernel might have different needs, so we should create such a specification ourselves.</p>",
+        "id": 302018019,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664785149
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302017705\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>well you still need to ensure all type invariants.</p>\n</blockquote>\n<p>Which is why I think you shouldn't get a <code>&amp;mut</code> out of the <code>Pin</code></p>\n</blockquote>\n<p>pin projection is solved by <code>pin-project-lite</code> (it is a <em>horribly</em> complicated declarative macro, which is why it is not used) and I have an <a href=\"https://github.com/rust-lang/rfcs/pull/3318\">RFC</a> to bring this feature into the language itself.</p>",
+        "id": 302018298,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664785282
+    },
+    {
+        "content": "<blockquote>\n<p>To me this seems way worse</p>\n</blockquote>\n<p>Hmm, I would choose to <code>let this = self.get_mut_unchecked</code> several times inside <code>unsafe</code> blocks where it's needed</p>",
+        "id": 302018768,
+        "sender_full_name": "yshui",
+        "timestamp": 1664785475
+    },
+    {
+        "content": "<blockquote>\n<p>so we should create such a specification ourselves.</p>\n</blockquote>\n<p>yes, definitely. this should happen before each driver dev comes up with their own definition of <code>unsafe</code></p>",
+        "id": 302019012,
+        "sender_full_name": "yshui",
+        "timestamp": 1664785601
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302018768\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>To me this seems way worse</p>\n</blockquote>\n<p>Hmm, I would choose to <code>let this = self.get_mut_unchecked</code> several times inside <code>unsafe</code> blocks where it's needed</p>\n</blockquote>\n<p>that just introduces unnecessary noise. Instead of doing that (as it is relatively elaborate) one could just do the same thing that <code>pin-project-lite</code> does manually...</p>",
+        "id": 302019095,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664785633
+    },
+    {
+        "content": "<blockquote>\n<p>do the same thing that pin-project-lite does manually...</p>\n</blockquote>\n<p>that would be a good idea. at least better than a (in my opinion) misuse of <code>unsafe</code></p>",
+        "id": 302019264,
+        "sender_full_name": "yshui",
+        "timestamp": 1664785712
+    },
+    {
+        "content": "<p>though I personally think <code>pin-project-lite</code> isn't that bad ^^; </p>\n<p>what's the kernel rust's stance on proc-macro?</p>",
+        "id": 302019320,
+        "sender_full_name": "yshui",
+        "timestamp": 1664785746
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302019320\">said</a>:</p>\n<blockquote>\n<p>though I personally think <code>pin-project-lite</code> isn't that bad ^^; </p>\n</blockquote>\n<p><em><a href=\"https://docs.rs/pin-project-lite/latest/src/pin_project_lite/lib.rs.html#291-298\">really?!</a></em></p>\n<blockquote>\n<p>what's the kernel rust's stance on proc-macro?</p>\n</blockquote>\n<p>currently it is a \"last resort\" and <code>syn</code> cannot be used.</p>",
+        "id": 302019572,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664785865
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302014450\">said</a>:</p>\n<blockquote>\n<p>Now I have become too curious if it would actually be that bad (I believe you, I just want to see if with my own eyes). So when I have more time for this I am definitely going to make a fork...</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009733\">said</a>:</p>\n<blockquote>\n<p>Put another way: I'm not interested in marking ways I can crash the firmware as <code>unsafe</code>. I'm interested in making them not compile, as much as I can, and hard to do by accident, elsewhere!</p>\n</blockquote>\n<p>That is excellent design. And I still think that if it is possible to crash the firmware via another way. That way should be marked <code>unsafe</code>.</p>\n</blockquote>\n<p>Remember how I said that bad field data can crash the firmware, so every firmware struct mutation would have to be <code>unsafe</code>...</p>",
+        "id": 302019825,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664785975
+    },
+    {
+        "content": "<p>But it's not just that. You need to ensure all the structures for a render command outlive the render, which means you need to wait for the event. So that imposes a huge safety condition boundary that encapsulates the entire render command submission and event notification pipeline. I make that manageable by having the <code>WorkQueue</code> hold onto references to everything pertinent to a render, so they can only be dropped when it gets the completion event. But that still relies on all that machinery working properly. If something signals an event too early for some reason, that would cause a firmware crash. That's unlikely given the design involved, but should everything down that chain be <code>unsafe</code> because breaking it breaks the firmware? I don't think so...</p>",
+        "id": 302020321,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664786238
+    },
+    {
+        "content": "<p>Ah we are getting sidetracked by the <code>Pin</code>! anyhow i think my general point about less context, less mind baggage, and be explicit where you need to worry about the invariants, still holds.</p>",
+        "id": 302020376,
+        "sender_full_name": "yshui",
+        "timestamp": 1664786261
+    },
+    {
+        "content": "<p>In a way the property that I'm using Rust features to help keep firmware interactions safe is opt-in for my driver design, but shouldn't be something taken as a rule the way the CPU side works, because it's just not practical...</p>\n<p>Another example: the general RTKit interface used to interface to all those coprocessors is safe right now. But of course you can crash them with bad messages (there is even a \"please crash\" message!). Should the send function be <code>unsafe</code>? What does that actually <em>achieve</em>? \"Be careful sending messages to coprocessors or you might crash them\"? Well, someone writing an RTKit driver already knows that... adding an <code>unsafe {}</code> block there is just noise.</p>",
+        "id": 302021126,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664786629
+    },
+    {
+        "content": "<p>You also have to keep in mind that more abstractions, more explicit <code>unsafe</code>, etc. also make the code harder to read and review. For example, I could wrap every single firmware struct in a proper Rust abstraction, make all the fields private, have accessor methods and check that all the values are in range, for every single field. That would let me narrow down some of the safety boundary, but it would also make the whole driver slower, and a lot larger and more bloated, and harder to maintain when firmware versions change struct definitions. It's not worth it... and it wouldn't achieve perfect safety anyway because it would only cover fields/structs on their own, not their interactions.</p>",
+        "id": 302022044,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787013
+    },
+    {
+        "content": "<p>this is a difficult thing to convince others of, and probably sounds a bit harsh. but I think if you choose to use Rust, you should follow its rules. granted, for kernel, the rules is even less well established than normal Rust. but I think what's safe and what's <code>unsafe</code> should no come down to personal preferences. maybe we do decide that there is no need for <code>unsafe</code> in these cases, but that's a universal decision.</p>\n<p>also what you think is noise could as well be valuable information to others reading the code.</p>",
+        "id": 302022077,
+        "sender_full_name": "yshui",
+        "timestamp": 1664787034
+    },
+    {
+        "content": "<p>Regular Rust doesn't have these rules either. A regular Rust program can <code>popen()</code> a C app, send it garbage data, and make it crash. That's an analogous situation to what I'm doing here. I don't think anyone is suggesting Rust's stdlib should make <code>popen()</code> unsafe because it can be used to launch and crash non-Rust programs, right?</p>",
+        "id": 302022244,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787112
+    },
+    {
+        "content": "<p>Using Rust features to help avoid that in the specific case of a crashy C sidecar app is <em>opt-in</em>, not opt-out! ^^</p>",
+        "id": 302022382,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787147
+    },
+    {
+        "content": "<p>My driver is just like that</p>",
+        "id": 302022401,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787154
+    },
+    {
+        "content": "<p>yeah, in this case it's a bit grayer than other cases. if you don't want to make the guarantee that firmware won't crash, that's fine with the general Rust's idea of safety. because it's about memory safety on the CPU side.</p>",
+        "id": 302022627,
+        "sender_full_name": "yshui",
+        "timestamp": 1664787239
+    },
+    {
+        "content": "<p>but i was trying to talk about the more general case.. 🥲</p>",
+        "id": 302022761,
+        "sender_full_name": "yshui",
+        "timestamp": 1664787279
+    },
+    {
+        "content": "<p>In the end the goal of the GPU driver is to expose a safe interface to userspace. If I move the \"perfect safety\" boundary further into the driver, what would be left outside? Not much... it's not like the driver is doing any significant computation (unlike the userspace side of GPU drivers, that's a much better use case for safe Rust!). Its entire purpose is to achieve that safety. So I try to compartmentalize as much as is reasonable while keeping the driver straightforward enough to review and maintain. And all that helps me avoid mistakes (and it worked!). But trying to self-impose a rule that every internal interface for some definition of internal interface should be fully sound on its own in terms of firmware stability... that's just not going to work, or it's going to end up with a dummy sound abstraction layer for the entire driver anyway and then trivial glue code outside, or, if I really push it, a mess of runtime checks that just slows everything down and makes the design a lot more complicated (because this can't be statically guaranteed by the compiler in every case).</p>",
+        "id": 302023317,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787506
+    },
+    {
+        "content": "<p>At the end of the day I think we want to be practical. We want less buggy code and code that's easier to review. Let's use Rust's features to make that much easier for the kernel, but let's not devolve into striving for \"perfect safety\" and then never getting anything done. Even I made this mistake while I was developing the driver, trying to get lifetimes and all that to work in <em>every</em> case, and people (with much more experience with Rust!) had to tell me to stop doing that, that sometimes you get lost trying to get the compiler to do everything for you and it just isn't practical.</p>",
+        "id": 302023932,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664787740
+    },
+    {
+        "content": "<blockquote>\n<p>every internal interface for some definition of internal interface should be fully sound on its own</p>\n</blockquote>\n<p>That is also not something I was trying to push! <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span> I am saying in the case where they are not sound on its own, they should be <code>unsafe</code>. </p>\n<p>Of course, it's important to note that soundness in kernel <em>can</em> mean somewhat different things. If you don't want to include \"firmware won't crash\" in your soundness definition, then it's perfectly fine to not mark those interfaces <code>unsafe</code>.</p>",
+        "id": 302024285,
+        "sender_full_name": "yshui",
+        "timestamp": 1664787899
+    },
+    {
+        "content": "<p>But it's important we came together and have a definition of soundness/<code>unsafe</code> for the kernel, so everyone is aligned when they see an <code>unsafe</code> keyword what that means.</p>",
+        "id": 302024524,
+        "sender_full_name": "yshui",
+        "timestamp": 1664787977
+    },
+    {
+        "content": "<p>Right, that's what I'm saying, that if I did that, I'd have large parts of the driver end up as <code>unsafe</code> (and the way <code>unsafe</code> scoping works in Rust, that would be a net negative because it would either needlessly stick large amounts of code into an <code>unsafe</code> block, or force me to pre-calculate tons of values into temporary variables, which breaks <code>place!()</code> and also could double the line-count of some parts of the driver).</p>",
+        "id": 302024566,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788008
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302024524\">said</a>:</p>\n<blockquote>\n<p>But it's important we came together and have a definition of soundness/<code>unsafe</code> for the kernel, so everyone is aligned when they see an <code>unsafe</code> keyword what that means.</p>\n</blockquote>\n<p>I don't think this is necessarily the case! I think it's important that we keep using standard Rust conventions for pure CPU-side safety, and I think it's important that we come up with some basic guidelines for hardware- and kernel-related subsystems (like the idea that instantiating <code>IoMem</code> is <code>unsafe</code> because the hardware might do DMA). But I think that within complex, self-contained things like individual subsystems and drivers, it's ultimately up to the overall design how to define what is and isn't <code>unsafe</code>. It's not that clear-cut!</p>",
+        "id": 302025079,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788237
+    },
+    {
+        "content": "<p>For example, I said I don't want <code>unsafe</code> to strictly encompass firmware safety. But I still made that <code>offset()</code> function on <code>GpuPointer</code> <code>unsafe</code>, because it's really only meant to be used from the inner field macros and if you're using it directly you're probably doing something wrong, and I want the compiler to shout at you, and <code>unsafe</code> is a convenient way to do that.</p>",
+        "id": 302025207,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788291
+    },
+    {
+        "content": "<p>It's practical to do stuff like that, I think.</p>",
+        "id": 302025314,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788328
+    },
+    {
+        "content": "<p>And in the end, when it comes to hardware and complicated cases like this, it all comes down to a judgement call. We can't have perfect rules and we shouldn't waste time rules-lawyering everything first, because there's so much that Rust can offer to the kernel even without that!</p>",
+        "id": 302025729,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788501
+    },
+    {
+        "content": "<p>More practically: I also think that spending too much time on discussions like this I think is likely to alienate kernel developers not experienced with Rust. We're never going to have a perfect definition of <code>unsafe</code> that covers every case in kernel land, and putting too much emphasis on that is just going to distract us from making things better <em>today</em> and make the other folks think we're just a bunch of language lawyers ^^</p>",
+        "id": 302026089,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788646
+    },
+    {
+        "content": "<p>Another practical example: <code>io_pgtable</code> can warn if you try to unmap an already unmapped page, and there's no practical way to make it not do that without changing the C code, just in the Rust abstraction. Should it be <code>unsafe</code>? Maybe? But it's academic anyway because anything using <code>io_pgtable</code> is, in <em>practice</em>, code with a huge safety responsibility since it's managing a page table, even if <code>io_pgtable</code> is otherwise safe in a vacuum, and even if it didn't have that quirk. So in the end it just... doesn't matter. Having that discussion isn't going to actually make the kernel better in any way. <code>io_pgtable</code> users still need to get the code right, regardless of how those functions are tagged, at a much deeper level.</p>",
+        "id": 302026869,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664788883
+    },
+    {
+        "content": "<p>I say, let's focus on building safe or almost-safe abstractions, let's get people out there using Rust in the kernel, and let's show the rest of the kernel community that this stuff matters and helps us write better, more stable, more secure drivers! It doesn't have to be perfect at some abstract language level, it's already going to be much better than C and much more likely to be correct in practice! There is always time to improve things, to catch corner cases better, to build better abstractions once we understand the use cases, and more! The reality is that even with only an ad-hoc notion of firmware safety, and even for a Rust newbie like myself, I built a GPU driver that went from first render to running a full desktop with multiprocessing and parallel rendering stably in <em>two days of work</em>, and that is freaking <em>magic</em>!!! I didn't have any CPU-side safety issues, concurrency issues, or anything, and thanks to Rust features and design patterns I had 95% of the firmware stuff right! That would have <em>never</em> happened in C! <span aria-label=\"sparkles\" class=\"emoji emoji-2728\" role=\"img\" title=\"sparkles\">:sparkles:</span></p>",
+        "id": 302028080,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664789338
+    },
+    {
+        "content": "<p>And the good part is that since the kernel is a monolithic codebase, unlike with the Rust standard library and crates, there is no problem with making mistakes and having to break APIs to fix them. We can always do that at any time!</p>",
+        "id": 302028920,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664789660
+    },
+    {
+        "content": "<p>That's also a huge part of Linux development culture, that we're always refactoring and improving interfaces, and it's how the kernel can support so much hardware without being a huge mess (relatively). It's very different from stuff like the Rust core development model, and we need to be aware of that since it means the priorities are very different!</p>",
+        "id": 302029229,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664789793
+    },
+    {
+        "content": "<blockquote>\n<p>we shouldn't waste time rules-lawyering everything first</p>\n</blockquote>\n<p>I fully agree with all those points. I watched the actix developer being driven away by rule-lawyering and that wasn't great. I am more coming from the angle of helping people communicate with their code. For example, we did uncover misalignment around if <code>unsafe</code> blocks can force invariants on safe code. I think this still makes the discussion valuable. </p>\n<blockquote>\n<p>is likely to alienate kernel developers not experienced with Rust.</p>\n</blockquote>\n<p>I am worried that this is going to happen nonetheless. Rust has the reputation of being hard to learn, and the longstanding battle with the borrow checker is still ongoing. And I think there is concern subsystem devs might not know rust well enough to review code. But anyway, this is not relevant to your point.</p>\n<blockquote>\n<p>even for a Rust newbie like myself</p>\n</blockquote>\n<p>I think you are underselling yourself a little bit <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span> I think many people (including me) are amazed by how quickly you were able to become proficient and productive with Rust.</p>",
+        "id": 302034798,
+        "sender_full_name": "yshui",
+        "timestamp": 1664792052
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302025207\">said</a>:</p>\n<blockquote>\n<p>For example, I said I don't want <code>unsafe</code> to strictly encompass firmware safety. But I still made that <code>offset()</code> function on <code>GpuPointer</code> <code>unsafe</code>, because it's really only meant to be used from the inner field macros and if you're using it directly you're probably doing something wrong, and I want the compiler to shout at you, and <code>unsafe</code> is a convenient way to do that.</p>\n</blockquote>\n<p>the offset function also transmutes the type, so that is another reason why it should be unsafe</p>",
+        "id": 302038579,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664793901
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302026089\">said</a>:</p>\n<blockquote>\n<p>More practically: I also think that spending too much time on discussions like this I think is likely to alienate kernel developers not experienced with Rust. We're never going to have a perfect definition of <code>unsafe</code> that covers every case in kernel land, and putting too much emphasis on that is just going to distract us from making things better <em>today</em> and make the other folks think we're just a bunch of language lawyers ^^</p>\n</blockquote>\n<p>The converse is also true for the Rust community. If there are no clear cut definitions of what I can do in safe code that would be <code>unsafe</code> in userspace Rust, then it is not going to sit well with them. We need to strike a balance here.</p>",
+        "id": 302038596,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664793907
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302028080\">said</a>:</p>\n<blockquote>\n<p>I say, let's focus on building safe or almost-safe abstractions, let's get people out there using Rust in the kernel, and let's show the rest of the kernel community that this stuff matters and helps us write better, more stable, more secure drivers! It doesn't have to be perfect at some abstract language level, it's already going to be much better than C and much more likely to be correct in practice! There is always time to improve things, to catch corner cases better, to build better abstractions once we understand the use cases, and more! The reality is that even with only an ad-hoc notion of firmware safety, and even for a Rust newbie like myself, I built a GPU driver that went from first render to running a full desktop with multiprocessing and parallel rendering stably in <em>two days of work</em>, and that is freaking <em>magic</em>!!! I didn't have any CPU-side safety issues, concurrency issues, or anything, and thanks to Rust features and design patterns I had 95% of the firmware stuff right! That would have <em>never</em> happened in C! <span aria-label=\"sparkles\" class=\"emoji emoji-2728\" role=\"img\" title=\"sparkles\">:sparkles:</span></p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302028920\">said</a>:</p>\n<blockquote>\n<p>And the good part is that since the kernel is a monolithic codebase, unlike with the Rust standard library and crates, there is no problem with making mistakes and having to break APIs to fix them. We can always do that at any time!</p>\n</blockquote>\n<p>I agree, we should experiment and come up with the best solution. I think there is an open design space for solutions fixing the ergonomics with plastering <code>unsafe</code> everywhere and still documenting safety with <code>unsafe</code>. But currently I am pretty busy getting field projection and initialization done, so it will have to wait.</p>",
+        "id": 302038601,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664793911
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302015145\">said</a>:</p>\n<blockquote>\n<p>I think <code>unsafe</code> block should be written in a way that it's impossible to cause UB in safe code.</p>\n</blockquote>\n<p>That's fundamentally unachievable. In many scenarios, <code>unsafe</code> is <em>not local</em>.</p>\n<p>One good example is for types that have invariants. For example, <code>String</code> has an invariant that the content it stores is UTF-8. But <code>String</code> is defined just as a wrapper of <code>Vec&lt;u8&gt;</code>, so creating a <code>String</code> with non-UTF8 <code>Vec</code> doesn't require any use of <code>unsafe</code>. The opposite is true for invariants, as <code>unsafe</code> can rely on this property (which is defined without using any unsafe!). For the <code>String</code> example, creating a <code>String</code> with non-UTF8 is safe, but this will result unsoundness. Implementing <code>as_str</code> in <code>String</code> by converting the <code>&amp;[u8]</code> to <code>&amp;str</code> is unsafe, but is sound. So it makes no sense to discuss whether something is sound <em>within</em> the module. You can only say discuss whether the API exposed by the module is sound or not.</p>\n<p>I like this quote from Asahi Lina a lot, and I feel this is a very good summary:<br>\n<span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302011247\">said</a>:</p>\n<blockquote>\n<p>More accurately, soundness is a property of the implementation <em>viewed through an interface</em>. So the library is sound viewed through its public API.</p>\n</blockquote>\n<p>It's obviously desirable to minimise the locality of implications of <code>unsafe</code>. For library code we often try to confine it to within a module. But for drivers I think it might be fine to have the whole kernel module (crate) as the boundary as long as the unsoundness cannot be exposed to other kernel subsystems or the userspace.</p>",
+        "id": 302062604,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664803460
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span>: I very much believe that mapping pages into the IOMMU is <code>unsafe</code> unless one has an <code>&amp;mut</code> (for writeable mappings) or <code>&amp;</code> (for read-only mappings) reference to the page.  PCIe devices are <em>not</em> trusted in general (consider e.g. Thunderbolt), so memory accessible to a device needs to be treated just as carefully as memory accessible to userspace.</p>",
+        "id": 302093561,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1664812829
+    },
+    {
+        "content": "<p>Random comment from a Rust newbie: I think this example from <a href=\"https://doc.rust-lang.org/nomicon/working-with-unsafe.html\">nomicon</a> describes the situation best. A relevant quote:</p>\n<blockquote>\n<p>This code is 100% Safe Rust but it is also completely unsound. Changing the capacity violates the invariants of Vec (that cap reflects the allocated space in the Vec). This is not something the rest of Vec can guard against. It has to trust the capacity field because there's no way to verify it.<br>\nBecause it relies on invariants of a struct field, this unsafe code does more than pollute a whole function: it pollutes a whole module. Generally, the only bullet-proof way to limit the scope of unsafe code is at the module boundary with privacy.<br>\nHowever this works perfectly. The existence of make_room is not a problem for the soundness of Vec because we didn't mark it as public. Only the module that defines this function can call it. Also, make_room directly accesses the private fields of Vec, so it can only be written in the same module as Vec.</p>\n</blockquote>",
+        "id": 302106810,
+        "sender_full_name": "Yerkebulan Tulibergenov",
+        "timestamp": 1664816647
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302093561\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span>: I very much believe that mapping pages into the IOMMU is <code>unsafe</code> unless one has an <code>&amp;mut</code> (for writeable mappings) or <code>&amp;</code> (for read-only mappings) reference to the page.  PCIe devices are <em>not</em> trusted in general (consider e.g. Thunderbolt), so memory accessible to a device needs to be treated just as carefully as memory accessible to userspace.</p>\n</blockquote>\n<p>Yes, but the <code>io_pgtable</code> API does not map pages into an IOMMU, it just maps pages into a page table that isn't associated with anything. So, strictly speaking, it is safe, since it just builds some in-memory data structures. The user of that API is responsible for installing that page table root pointer into an IOMMU, and <em>that</em> is where the unsafe part is! That's why this is an interesting example, because from a driver development perspective <code>io_pgtable</code> is one of the more dangerous things to be using in a real driver, but from a language safety perspective it is completely safe on its own.</p>",
+        "id": 302107300,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664816806
+    },
+    {
+        "content": "<p>So if we consider the whole driver as the module with its public API, then as long as we can't cause UB from its public API, we should be fine. Again I am a Rust newbie, so I might completely wrong.</p>",
+        "id": 302107311,
+        "sender_full_name": "Yerkebulan Tulibergenov",
+        "timestamp": 1664816807
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412382\">Yerkebulan Tulibergenov</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302107311\">said</a>:</p>\n<blockquote>\n<p>So if we consider the whole driver as the module with its public API, then as long as we can't cause UB from its public API, we should be fine. Again I am a Rust newbie, so I might completely wrong.</p>\n</blockquote>\n<p>Yup, that's the idea. Of course, it is still desirable to limit how much unsafety pollutes the entire driver, because if it were just a free-for-all, we'd be going close to where we were back with C. So it's about driver design and trying to restrict the scope of code which has to uphold specific invariants, where possible.</p>",
+        "id": 302108012,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664817037
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302009681\">said</a>:</p>\n<blockquote>\n<p>So yeah, I think that <code>unsafe</code> block is probably incorrect.</p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302017820\">said</a>:</p>\n<blockquote>\n<p>Well, before there is an official specification on <code>unsafe</code>, it's more or less my words against yours.</p>\n</blockquote>\n<p>I don't agree. I think it is well-established, even if just informally, that unsafe code may rely on safe code being correct within its safety boundary. This can be seen from the reference, the nomicon, standard library code and documentation, etc.</p>\n<p>Now, the main question in this discussion is where that safety boundary should be. For instance, if I understand correctly, Lina is arguing for having the boundary on the whole kernel driver, while typically the boundary is the Rust module.</p>",
+        "id": 302128963,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664823734
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302128963\">said</a>:</p>\n<blockquote>\n<p>Now, the main question in this discussion is where that safety boundary should be. For instance, if I understand correctly, Lina is arguing for having the boundary on the whole kernel driver, while typically the boundary is the Rust module.</p>\n</blockquote>\n<p>That is not my understanding of what they are saying.</p>",
+        "id": 302135787,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1664826198
+    },
+    {
+        "content": "<p>What is your understanding then?</p>",
+        "id": 302142219,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664828602
+    },
+    {
+        "content": "<p>My understand of the discussion (or what I learn most from the discussion) is  the \"style\"  of <code>unsafe</code>, i.e. pre-condition <code>unsafe</code> vs post-condition <code>unsafe</code>.</p>\n<p>Most of the <code>unsafe</code> marking is pre-condition style, that is: <code>unsafe</code> marks the code that may <strong>directly</strong> invoke UB under some conditions,  for example, dereferencing a raw pointer. The advantage of this is you can always check these conditions at <code>unsafe</code> invocations. I guess people all agree that pre-condition <code>unsafe</code> is preferred</p>\n<p>Unlike pre-condition, post-condition <code>unsafe</code> is that if you have an invocation of the <code>unsafe</code> API/function, you will need to take care of all the following related (even) safe code as well to guarantee soundness. For example, <a href=\"https://doc.rust-lang.org/std/pin/struct.Pin.html#method.new_unchecked\">Pin::new_unchecked</a>: \"by calling this method you promise that the reference P dereferences to will not be moved out of again\".</p>\n<p>Overall, post-condition <code>unsafe</code> should be avoided. And if I understand their points correctly (I'm going to guess what's in their mind, so could be wrong). Asahi Lina stated that in the GPU driver, she used post-condition <code>unsafe</code> because it's impossible or not ergonomic to convert to pre-condition <code>unsafe</code> (I'm sure she tried). And yshui thought there should be a way to convert post-condition <code>unsafe</code> to pre-condition <code>unsafe</code>.</p>\n<p>(Sorry if I get any of you wrong, trying to summarize the whole thing).</p>\n<p>I guess the things that we can agree on are:</p>\n<ul>\n<li>pre-condition <code>unsafe</code> is preferred (without sacrifice of performance or ergonomic).</li>\n<li>it's only a style thing, neither breaks Rust safety requirement.</li>\n</ul>\n<p>I think the decision of this pre-condition vs post-condition thing should really be case-by-case, we may also have a few in the kernel crate.</p>\n<p>And I sincerely hope if anyone thinks something should be done in a better way, please work on the actual code and send out the changes that support the point. Because as you all may know: talk is cheap...</p>",
+        "id": 302149896,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1664831645
+    },
+    {
+        "content": "<p>Also because without enough code and concrete cases, we don't know what's the right direction.</p>",
+        "id": 302150878,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1664832089
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> </p>\n<blockquote>\n<p>So creating a <code>String</code> with non-UTF8 <code>Vec</code> doesn't require any use of unsafe. </p>\n</blockquote>\n<p>I don't think this is true. There is no API that allows you to do that.</p>",
+        "id": 302152530,
+        "sender_full_name": "yshui",
+        "timestamp": 1664832791
+    },
+    {
+        "content": "<p>You can do it within the string module.</p>",
+        "id": 302152765,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664832930
+    },
+    {
+        "content": "<p>As you said, there is no API to do that, so it implies that soundness is a property of an interface.</p>",
+        "id": 302152901,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664832976
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> </p>\n<blockquote>\n<p>that unsafe code may rely on safe code being correct within its safety boundary.</p>\n</blockquote>\n<p>The way you phrased it is a bit ambiguous. Yes, we agreed that <code>unsafe</code> code can rely on safe code correctly setting up its preconditions, which has examples everywhere. But the thing we are not aligned on is whether <code>unsafe</code> code can leave the program in such a state, where code out side <code>unsafe</code> blocks can exhibit UB. </p>\n<p>I think the answer is obviously no, and I think the language in UCG semi-supports my point.</p>",
+        "id": 302153083,
+        "sender_full_name": "yshui",
+        "timestamp": 1664833076
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> OK, you were saying that from library writer's perspective. </p>\n<p>But does <code>libstd</code> <em>actually</em> do that? I cannot check the entirety of <code>str</code> right now, but this <a href=\"https://doc.rust-lang.org/src/core/str/converts.rs.html#92\">quick example</a> seems to suggests <code>libstd</code> authors does abide by the rule that <code>[u8] -&gt; str</code> is unsafe.</p>",
+        "id": 302153532,
+        "sender_full_name": "yshui",
+        "timestamp": 1664833287
+    },
+    {
+        "content": "<p>So yes, the language can't enforce that you use <code>unsafe</code>, because <code>str</code> is just <code>[u8]</code>, but <code>libstd</code> seems to follow the rule. Another example is the one we already discussed above - accessing <code>Vec::len</code> doesn't have to be put in <code>unsafe</code>, but <code>libstd</code> is doing it anyways.</p>",
+        "id": 302153734,
+        "sender_full_name": "yshui",
+        "timestamp": 1664833394
+    },
+    {
+        "content": "<p>And these are examples of non-locality of unsafety.</p>",
+        "id": 302153859,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664833443
+    },
+    {
+        "content": "<p>We never argued <code>unsafe</code> has to be local. We agreed that <code>unsafe</code> can depends on preconditions set up by safe code outside <code>unsafe</code>. There are even language level invariants that are upheld by safe code (like the <code>Unpin</code> example).</p>\n<p>My point is <code>unsafe</code> cannot \"leak\" unsafety into safe code.</p>",
+        "id": 302154055,
+        "sender_full_name": "yshui",
+        "timestamp": 1664833563
+    },
+    {
+        "content": "<p>The implementation of <code>from_utf8_unchecked</code> is entirely safe, but you can't implement it arbitrarily because other part of unsafe code depends on it. How is not <code>unsafe</code> leaking unsafety into safe code?</p>",
+        "id": 302154097,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664833590
+    },
+    {
+        "content": "<p>Hmm, there seems to be some misunderstanding here. <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n<p><code>from_utf8_unchecked</code> is <em>not</em> safe code, simply because it is marked as <code>unsafe fn</code>. And <code>unsafe fn</code>, unlike <code>unsafe {}</code> blocks, don't have to upheld safety contracts, because you have to call them from <code>unsafe {}</code>.</p>\n<p>And <code>unsafe {}</code> blocks are where unsafety must not leak from. Is that clearer?</p>",
+        "id": 302154650,
+        "sender_full_name": "yshui",
+        "timestamp": 1664833906
+    },
+    {
+        "content": "<p><code>from_utf8_unchecked</code> is an unsafe function but it is safe code.</p>",
+        "id": 302154800,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664833985
+    },
+    {
+        "content": "<p>Yeah, I see where you are coming from, but in our discussion, safe code is code not inside <code>unsafe {}</code> blocks, and vice versa</p>\n<p>EDIT: and <code>unsafe fn</code>, <code>unsafe impl</code>, sorry I missed that.</p>",
+        "id": 302155203,
+        "sender_full_name": "yshui",
+        "timestamp": 1664834175
+    },
+    {
+        "content": "<p>And impl of <code>from_utf8_unchecked</code> is not inside <code>unsafe{}</code></p>",
+        "id": 302155256,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664834205
+    },
+    {
+        "content": "<p>The function is marked as <code>unsafe</code> to make the <code>String</code> API sound.<br>\nIt doesn't change the fact that <em>all</em> safe code inside the <code>alloc::string</code> module needs to uphold the UTF-8 invariant.</p>",
+        "id": 302155265,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664834213
+    },
+    {
+        "content": "<p>Our discussion would be nonproductive if we are not aligned on the terminology.</p>",
+        "id": 302155495,
+        "sender_full_name": "yshui",
+        "timestamp": 1664834337
+    },
+    {
+        "content": "<p>The standard library enabled <code>deny(unsafe_op_in_unsafe_fn)</code> so code inside <code>unsafe fn</code> is <em>not</em> unsafe code.</p>",
+        "id": 302155719,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664834433
+    },
+    {
+        "content": "<p><code>unsafe fn</code> requires extra preconditions to hold for them to uphold safety guarantees, just like <code>unsafe {}</code> blocks. in that sense, and in the sense that matters to our discussion, they are unsafe code.</p>\n<p>It's the same situation as when you don't use any unsafe operations in an <code>unsafe {}</code> block, but it's still unsafe code. Accessing <code>Vec::len</code> is again the example.</p>",
+        "id": 302157417,
+        "sender_full_name": "yshui",
+        "timestamp": 1664835280
+    },
+    {
+        "content": "<p>Fine, if you insist on that we can use <code>String::push</code> as an example instead. The signature is safe and the implementation is safe, but the implementation must upheld the utf-8 invariant. So if you replace this perfectly safe implementation with some other perfectly safe code it can still cause unsoundness.</p>",
+        "id": 302173723,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664844153
+    },
+    {
+        "content": "<p>Nothing changes the fact that an <code>unsafe</code> block causes all safe code inside that module to be potentially unsound.</p>",
+        "id": 302173757,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1664844201
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302128963\">said</a>:</p>\n<blockquote>\n<p>Now, the main question in this discussion is where that safety boundary should be. For instance, if I understand correctly, Lina is arguing for having the boundary on the whole kernel driver, while typically the boundary is the Rust module.</p>\n</blockquote>\n<p>More specifically, I think the boundary should be as small as practical, but there should be no hard rule that the boundary has to be smaller than the whole kernel driver.</p>\n<p>The module boundary makes sense when modules offer self-contained pieces of functionality, like in the standard library. There are no external constraints on that, so they can achieve a sound interface just by being well-designed. But within a driver (particularly complex ones), modules are a means of organizing code. Since the driver is driving one piece of hardware, it's unlikely that that hardware can also be neatly divided into equivalent modules, each of which can be safely driven in a self-contained way. So, it follows that there will most likely be safety requirements that span modules within a driver.</p>\n<p>Put another way, I think \"keep module APIs sound\" should be a rule for the <code>kernel</code> crate and a suggestion/guideline/soft design goal for drivers. However, having driver UAPIs be sound is <em>security-critical</em>, while having <code>kernel</code> APIs be sound is not (it's just a really good idea). That's why it's really important to still strive to contain safety requirements within a driver to manageable blocks, so we can increase the chances of the overall code being correct.</p>",
+        "id": 302192391,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664861262
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> </p>\n<blockquote>\n<p>Fine, if you insist on that we can use String::push as an example instead. </p>\n</blockquote>\n<p><code>String::push</code> is safe by the nature of char being valid UTF-8. If you write a push function that accept arbitrary bytes, then you should validate the bytes, then append to the <code>Vec&lt;u8&gt;</code> in <code>unsafe {}</code> blocks.</p>",
+        "id": 302224350,
+        "sender_full_name": "yshui",
+        "timestamp": 1664876599
+    },
+    {
+        "content": "<blockquote>\n<p>More specifically, I think the boundary should be as small as practical, but there should be no hard rule that the boundary has to be smaller than the whole kernel driver.</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> </p>\n<p>Do you mean the boundary of accessing hardware safely? Or also CPU-side memory safety as well?</p>",
+        "id": 302225507,
+        "sender_full_name": "yshui",
+        "timestamp": 1664877064
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302224350\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> </p>\n<blockquote>\n<p>Fine, if you insist on that we can use String::push as an example instead. </p>\n</blockquote>\n<p><code>String::push</code> is safe by the nature of char being valid UTF-8. If you write a push function that accept arbitrary bytes, then you should validate the bytes, then append to the <code>Vec&lt;u8&gt;</code> in <code>unsafe {}</code> blocks.</p>\n</blockquote>\n<p><code>char</code> contains a single unicode codepoint without encoding it to UTF-8, UTF-16 or anything else. <code>String::push</code> encodes it to UTF-8 using safe code, but this safe code still has to uphold the safety invariant of <code>String</code> that it contains only UTF-8.</p>",
+        "id": 302229569,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1664878742
+    },
+    {
+        "content": "<p>Hmm, good point.</p>",
+        "id": 302233019,
+        "sender_full_name": "yshui",
+        "timestamp": 1664880196
+    },
+    {
+        "content": "<p>That's a good counterexample to my argument. I am thinking about writing something that sums this all up, and asking for feedback from the wider community.</p>",
+        "id": 302234163,
+        "sender_full_name": "yshui",
+        "timestamp": 1664880697
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302192391\">said</a>:</p>\n<blockquote>\n<p>More specifically, I think the boundary should be as small as practical, but there should be no hard rule that the boundary has to be smaller than the whole kernel driver.</p>\n</blockquote>\n<p>Indeed, the smaller, the better, i.e. \"<em>having the boundary potentially as wide as the whole kernel driver</em>\".</p>",
+        "id": 302239344,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664882778
+    },
+    {
+        "content": "<p>If we were to do that, it could make sense to have a <code>// SAFETY BOUNDARY</code> tag or similar to describe where a particular boundary is, e.g. the function, the Rust module or the kernel driver.</p>\n<p>For instance:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// SAFETY BOUNDARY</span>\n<span class=\"k\">fn</span> <span class=\"nf\">f</span><span class=\"p\">(</span><span class=\"n\">a</span>: <span class=\"kt\">u32</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">u32</span> <span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"mi\">5</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"fm\">panic!</span><span class=\"p\">();</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">.</span><span class=\"n\">add_unchecked</span><span class=\"p\">(</span><span class=\"mi\">5</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// SAFETY BOUNDARY</span>\n<span class=\"c1\">// (i.e. the default case in Rust typically)</span>\n<span class=\"k\">mod</span> <span class=\"nn\">m</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// ...</span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">//! ...</span>\n\n<span class=\"c1\">// SAFETY BOUNDARY</span>\n<span class=\"c1\">// (i.e. applies to the outer, as if it was a `//!` comment but it is not documentation)</span>\n\n<span class=\"n\">module</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// ...</span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<p>i.e. I would want to make it very explicit where the boundary is if we were to have potentially several levels where it could be.</p>\n<p>Any thoughts?</p>",
+        "id": 302239719,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664882931
+    },
+    {
+        "content": "<p>(I know some of you don't agree on changing the boundary etc.; but I am trying to see what would be the implications in a world like that)</p>",
+        "id": 302241502,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664883623
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"412316\">@bjorn3</span> <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> I think I have a slightly better \"rule\" (actually more like a guideline or suggestion) that can encompass this example.</p>\n<p>So to formally state my previous thought, I was thinking whenever you are trying to uphold an invariant the compiler cannot check, you have to put that code in <code>unsafe {}</code>. To which <code>String::push</code> is a good counterargument. And after some thought I realize that rule is a slippery slope and can easily rope a lot of code into <code>unsafe {}</code>.</p>\n<p>Now the better \"rule\" I came up with, is \"safe code cannot have an intermediate state that breaks any desired invariants\".</p>",
+        "id": 302249015,
+        "sender_full_name": "yshui",
+        "timestamp": 1664886469
+    },
+    {
+        "content": "<p>Looking at <code>String::push</code>, none of the intermediate states breaks the \"str cannot contain non-utf8\" invariant.</p>\n<p>Looking at <code>Vec::truncate</code>, as an example. If modifying <code>self.len</code> is done out side the unsafe block, then after changing <code>self.len</code> and before <code>drop_in_place</code>, the \"<code>Vec::len</code> equals to the number of valid elements in that <code>Vec</code>\" invariant is broken.</p>",
+        "id": 302249556,
+        "sender_full_name": "yshui",
+        "timestamp": 1664886619
+    },
+    {
+        "content": "<p>And OTOH <code>unsafe {}</code> blocks only uphold their invariants when considered as a whole, when their preconditions are met.</p>",
+        "id": 302251951,
+        "sender_full_name": "yshui",
+        "timestamp": 1664887453
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"541742\">@yshui</span> If I write the following code, do I have to wrap the body of <code>append</code> in <code>unsafe</code>?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// invariant: len is always the length of the vec</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Container</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">stuff</span>: <span class=\"nb\">Vec</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">len</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">Container</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">append</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">val</span>: <span class=\"nc\">T</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">stuff</span><span class=\"p\">.</span><span class=\"n\">push</span><span class=\"p\">(</span><span class=\"n\">val</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"o\">+=</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">iter</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Iter</span><span class=\"o\">&lt;'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"n\">Iter</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">container</span>: <span class=\"nc\">self</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"n\">pos</span>: <span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Iter</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">container</span>: <span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span> <span class=\"nc\">Container</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"n\">pos</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"nb\">Iterator</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Iter</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"k\">type</span> <span class=\"nc\">Item</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">);</span><span class=\"w\"></span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">next</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span>::<span class=\"n\">Item</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">pos</span><span class=\"w\"> </span><span class=\"o\">&gt;=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">container</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"nb\">None</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">pos</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">pos</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">pos</span><span class=\"w\"> </span><span class=\"o\">+=</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">;</span><span class=\"w\"></span>\n<span class=\"w\">            </span><span class=\"nb\">Some</span><span class=\"p\">((</span><span class=\"n\">pos</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">container</span><span class=\"p\">.</span><span class=\"n\">stuff</span><span class=\"p\">.</span><span class=\"n\">get_unchecked</span><span class=\"p\">(</span><span class=\"n\">pos</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}))</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>\n<p>With your new definition I will have to do it, because <code>append</code> has an intermediate state that breaks an invariant.</p>",
+        "id": 302268731,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664892495
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@y86</span> I assume the invariant you meant is <code>Container::len == Container::stuff.len()</code>. And yes, I would argue that you should wrap the body of <code>append</code> in <code>unsafe</code>, similar to <a href=\"https://doc.rust-lang.org/src/alloc/vec/mod.rs.html#1763\">what <code>Vec::push</code> does</a>.</p>\n<p>Because this invariant is a safety critical invariant. If this invariant doesn't hold, <code>Iter::next</code> will exhibit UB.</p>",
+        "id": 302270102,
+        "sender_full_name": "yshui",
+        "timestamp": 1664892918
+    },
+    {
+        "content": "<p>note in <code>Vec::push</code>, strictly speaking only <code>ptr::write</code> are required by the compiler to be in <code>unsafe</code>, yet it choose to wrap <code>self.len += 1</code> as well.</p>",
+        "id": 302270312,
+        "sender_full_name": "yshui",
+        "timestamp": 1664892973
+    },
+    {
+        "content": "<p>if we had <code>unsafe</code> fields I would agree with you...</p>",
+        "id": 302270344,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664892983
+    },
+    {
+        "content": "<p>Yeah there is no way for the compiler to enforce this, without <code>unsafe</code>fields...</p>",
+        "id": 302270460,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893025
+    },
+    {
+        "content": "<p>But I think you <em>should</em> do that anyway, like what <code>libstd</code> is doing</p>",
+        "id": 302270521,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893051
+    },
+    {
+        "content": "<p>I think this could be a very simple proc-macro (probably even without <code>syn</code>)</p>",
+        "id": 302270529,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893055
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302270521\">said</a>:</p>\n<blockquote>\n<p>But I think you <em>should</em> do that anyway, like what <code>libstd</code> is doing</p>\n</blockquote>\n<p>well libstd isnt doing it consistently...</p>",
+        "id": 302270562,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893068
+    },
+    {
+        "content": "<p>there would be a <code>warning: unnecessary `unsafe` block</code></p>",
+        "id": 302270725,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893113
+    },
+    {
+        "content": "<p>I hope it is. <span aria-label=\"cry\" class=\"emoji emoji-1f622\" role=\"img\" title=\"cry\">:cry:</span> Are there examples where it fails to do that?</p>",
+        "id": 302270726,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893113
+    },
+    {
+        "content": "<p>Ah indeed, that's sad.</p>",
+        "id": 302270808,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893145
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302270726\">said</a>:</p>\n<blockquote>\n<p>I hope it is. <span aria-label=\"cry\" class=\"emoji emoji-1f622\" role=\"img\" title=\"cry\">:cry:</span> Are there examples where it fails to do that?</p>\n</blockquote>\n<p><code>String::push</code>?</p>",
+        "id": 302270852,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893158
+    },
+    {
+        "content": "<p><code>String::push</code> is fine (according to me, anyway) as there is no intermediate state that breaks the invariant.</p>",
+        "id": 302271167,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893230
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302271167\">said</a>:</p>\n<blockquote>\n<p><code>String::push</code> is fine (according to me, anyway) as there is no intermediate state that breaks the invariant.</p>\n</blockquote>\n<p>oh right, sorry mixed your opinions xd</p>",
+        "id": 302271259,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893262
+    },
+    {
+        "content": "<blockquote>\n<p>there would be a <code>warning: unnecessary `unsafe` block</code></p>\n</blockquote>\n<p>Ralf Jung raise a similar point years ago in this blog post: <a href=\"https://www.ralfj.de/blog/2016/01/09/the-scope-of-unsafe.html\">https://www.ralfj.de/blog/2016/01/09/the-scope-of-unsafe.html</a></p>",
+        "id": 302271426,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893320
+    },
+    {
+        "content": "<p>I wonder why none of the unsafe fields proposal moved ahead in the end.</p>",
+        "id": 302271691,
+        "sender_full_name": "yshui",
+        "timestamp": 1664893412
+    },
+    {
+        "content": "<p>good question... havent read any of them yet</p>",
+        "id": 302271957,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664893499
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302270102\">said</a>:</p>\n<blockquote>\n<p>Because this invariant is a safety critical invariant.</p>\n</blockquote>\n<p>I would avoid the term \"safety critical\" if possible. It can be very confusing for those trying to understand what \"safety\" in Rust means.</p>",
+        "id": 302282689,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664896173
+    },
+    {
+        "content": "<p>I think \"safety invariant\" is clear enough and avoids mixing things with functional safety topics.</p>",
+        "id": 302283147,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664896294
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302271426\">said</a>:</p>\n<blockquote>\n<p>Ralf Jung raise a similar point years ago in this blog post: <a href=\"https://www.ralfj.de/blog/2016/01/09/the-scope-of-unsafe.html\">https://www.ralfj.de/blog/2016/01/09/the-scope-of-unsafe.html</a></p>\n</blockquote>\n<p>I read that post a long time ago, but my impression is that it argues safe code within the boundary needs to be reviewed just as carefully as anything else within that boundary, not that <code>unsafe</code> blocks need to be expanded.</p>",
+        "id": 302285009,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664896772
+    },
+    {
+        "content": "<blockquote>\n<p>not that <code>unsafe</code> blocks need to be expanded.</p>\n</blockquote>\n<p>yeah but Ralf did later started a <a href=\"https://internals.rust-lang.org/t/pre-rfc-unsafe-types/3073\">pre-RFC</a> on unsafe fields/types because of this problem. so i think it's safe to assume they did want to expand <code>unsafe</code> blocks.</p>",
+        "id": 302286108,
+        "sender_full_name": "yshui",
+        "timestamp": 1664897063
+    },
+    {
+        "content": "<p>at least as an option</p>",
+        "id": 302286310,
+        "sender_full_name": "yshui",
+        "timestamp": 1664897117
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302286108\">said</a>:</p>\n<blockquote>\n<p>yeah but Ralf did later started a <a href=\"https://internals.rust-lang.org/t/pre-rfc-unsafe-types/3073\">pre-RFC</a> on unsafe fields/types because of this problem. so i think it's safe to assume they did want to expand <code>unsafe</code> blocks.</p>\n</blockquote>\n<p>That can't be, because then the post wouldn't say things like:</p>\n<blockquote>\n<p>What I am saying is that the scope of unsafe is larger than the <code>unsafe</code> block itself.</p>\n</blockquote>",
+        "id": 302286544,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664897177
+    },
+    {
+        "content": "<p>I never disagreed with this point, and I don't see why requiring the body of <code>fn evil</code> to be in <code>unsafe</code> would be in contradiction with this statement?</p>",
+        "id": 302288240,
+        "sender_full_name": "yshui",
+        "timestamp": 1664897584
+    },
+    {
+        "content": "<p>And from a quick read of the pre-RFC you link to, Ralf et al. were precisely discussing whether more code should be covered in unsafe blocks, e.g.:</p>\n<blockquote>\n<p>Do we want to (artificially?) extend the amount of operations considered unsafe such that more code that could cause memory unsafety, has to be in unsafe blocks?</p>\n<p>The caveat is that we will never be able to make sure that all such code is in unsafe blocks.</p>\n</blockquote>\n<p>In the end, it seems that the decision was not to go in that direction, at least at that point in time.</p>",
+        "id": 302290520,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664898199
+    },
+    {
+        "content": "<p>Note that I am not saying the way we are writing things are necessarily optimal, or that <code>unsafe</code> fields or other ideas are bad. If Rust gives clear direction on this matter, we would look into following it.</p>\n<p>However, what I am trying to say is that I don't see the validity of your original claim of \"Rust says this is wrong\", at least currently.</p>",
+        "id": 302290716,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664898246
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302288240\">said</a>:</p>\n<blockquote>\n<p>I never disagreed with this point, and I don't see why requiring the body of <code>fn evil</code> to be in <code>unsafe</code> would be in contradiction with this statement?</p>\n</blockquote>\n<p>If the body of <code>evil</code> is in an <code>unsafe</code> block, then wouldn't it be considered unsafe code?</p>\n<p>Even if it is not considered unsafe code, why would the post talk about the scope of unsafe code if all code has to be in the <code>unsafe</code> blocks to begin with?</p>",
+        "id": 302291012,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664898344
+    },
+    {
+        "content": "<p>In other words, the post is precisely trying to explain the concept of safety (abstraction) boundary and why one needs to be aware that the scope of \"unsafety\" (\"unsafe code\") is larger than just the <code>unsafe</code> blocks.</p>",
+        "id": 302291622,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664898515
+    },
+    {
+        "content": "<p>I think there are two things that are used somewhat ambiguously here, we could probably call them \"precondition\" unsafety, and \"postcondition\" unsafety. Let me explain what I mean by answering your points.</p>",
+        "id": 302292816,
+        "sender_full_name": "yshui",
+        "timestamp": 1664898836
+    },
+    {
+        "content": "<blockquote>\n<p>I don't see the validity of your original claim of \"Rust says this is wrong\", at least currently.</p>\n</blockquote>\n<p>Sorry, I think I might have made too many claims ^^; But I assume you meant the one about the unsafe block in <code>gpio.rs</code>?</p>",
+        "id": 302293049,
+        "sender_full_name": "yshui",
+        "timestamp": 1664898891
+    },
+    {
+        "content": "<p>The one deals with a different kind of \"scope beyond unsafe block\". The statement itself doesn't clearly specify if it's talking about precondition or postcondition, but the example given in the post, <code>fn evil</code>, is a precondition one. i.e. it's a case different from the unsafe block in <code>gpio.rs</code>. Let me explain.</p>",
+        "id": 302293533,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899034
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302293049\">said</a>:</p>\n<blockquote>\n<p>Sorry, I think I might have made too many claims ^^; But I assume you meant the one about the unsafe block in <code>gpio.rs</code>?</p>\n</blockquote>\n<p>Yeah.</p>",
+        "id": 302293558,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664899042
+    },
+    {
+        "content": "<p><code>fn evil</code> breaks a precondition to other unsafe blocks in <code>Vec</code>, that is, <code>self.len</code> equals to the number of valid elements in the <code>Vec</code>. This is an example of a unsafe block's precondition extend beyond the unsafe block itself. </p>\n<p>This is generally the case basically everywhere - before you enter an unsafe block, some kind of precondition must be upheld. many examples exist, like <a href=\"https://doc.rust-lang.org/src/core/str/converts.rs.html#92\"><code>str::from_utf8</code></a>, the precondition here being <code>v</code> not containing non-utf8 bytes.</p>",
+        "id": 302294539,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899313
+    },
+    {
+        "content": "<p>However, the unsafe block in <code>gpio.rs</code> has its unsafety extend beyond its scope in a different way. It breaks a postcondition that should always hold: there shouldn't be a <code>&amp;mut</code> to a pinned object.</p>",
+        "id": 302294908,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899412
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302292816\">said</a>:</p>\n<blockquote>\n<p>I think there are two things that are used somewhat ambiguously here, we could probably call them \"precondition\" unsafety, and \"postcondition\" unsafety. Let me explain what I mean by answering your points.</p>\n</blockquote>\n<p>Yeah, I saw the discussion above about them, as well as the other \"no broken invariants in intermediate steps\" rule idea that you posted etc.</p>\n<p>To be clear, I am thankful that you are taking a look at the code, reviewing it and trying to think about how unsafety should be handled in the kernel! :)</p>\n<p>I am just pointing out that I am not convinced the UCG (or the reference, etc.) are in conflict with the way we are currently dealing with unsafe blocks.</p>",
+        "id": 302294961,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664899429
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"541742\">@yshui</span> I have created a small test library + proc macro for <code>unsafe</code> fields: <a href=\"https://github.com/y86-dev/unsafe-fields\">https://github.com/y86-dev/unsafe-fields</a></p>",
+        "id": 302295154,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664899485
+    },
+    {
+        "content": "<p>Yes, I don't think there is codified guidelines that says that use of <code>unsafe {}</code> is wrong. And I did ask and get similar responses, that the safety boundary should be the function/module/library, from other people as well.</p>",
+        "id": 302295352,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899552
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302294908\">said</a>:</p>\n<blockquote>\n<p>However, the unsafe block in <code>gpio.rs</code> has its unsafety extend beyond its scope in a different way. It breaks a postcondition that should always hold: there shouldn't be a <code>&amp;mut</code> to a pinned object.</p>\n</blockquote>\n<p>who created that postcondition? IIRC <code>Pin</code> only guarantees that the pointee is not moved, not that <code>&amp;mut T</code> is not created.</p>",
+        "id": 302295455,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664899575
+    },
+    {
+        "content": "<p>So there is a lack of consensus in this area. But, based on practices I see from <code>libstd</code>, I think arguably we shouldn't use <code>unsafe</code> like that.</p>",
+        "id": 302295533,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899604
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302295533\">said</a>:</p>\n<blockquote>\n<p>So there is a lack of consensus in this area. But, based on practices I see from <code>libstd</code>, I think arguably we shouldn't use <code>unsafe</code> like that.</p>\n</blockquote>\n<p>I think we should just ask about that code snippet in <code>t-lang/wg-unsafe-code-guidelines</code> and see what their answer is.</p>",
+        "id": 302295740,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664899666
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@y86</span> right.</p>\n<blockquote>\n<p>IIRC Pin only guarantees that the pointee is not moved</p>\n</blockquote>\n<p>it guarantees the pointee cannot be moved using safe code, right? so as a corollary, you can have a <code>&amp;mut</code> to a pinned object in safe code, because if so, you can move it.</p>",
+        "id": 302296138,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899780
+    },
+    {
+        "content": "<blockquote>\n<p>we should just ask about that code snippet in <code>t-lang/wg-unsafe-code-guidelines</code> and see what their answer is.</p>\n</blockquote>\n<p>good idea. i am interested to see what they would think.</p>",
+        "id": 302296259,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899808
+    },
+    {
+        "content": "<p>should i do it?</p>",
+        "id": 302296601,
+        "sender_full_name": "yshui",
+        "timestamp": 1664899904
+    },
+    {
+        "content": "<p>Thanks for investigating it!</p>",
+        "id": 302298116,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664900366
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302296138\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> right.</p>\n<blockquote>\n<p>IIRC Pin only guarantees that the pointee is not moved</p>\n</blockquote>\n<p>it guarantees the pointee cannot be moved using safe code, right? so as a corollary, you can have a <code>&amp;mut</code> to a pinned object in safe code, because if so, you can move it.</p>\n</blockquote>\n<p>I can do the same thing with utf8:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span> <span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">s</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"kt\">str</span>::<span class=\"n\">from_utf8_unchecked</span><span class=\"p\">(</span><span class=\"s\">b\"this is utf8\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{s}\"</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">s</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"kt\">str</span>::<span class=\"n\">from_utf8_unchecked</span><span class=\"p\">(</span><span class=\"s\">b\"this is not: </span><span class=\"se\">\\xc3\\x28\\xfc\\xa1\\xa1\\xa1\\xa1\\xa1</span><span class=\"s\">\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"fm\">println!</span><span class=\"p\">(</span><span class=\"s\">\"{s}\"</span><span class=\"p\">);</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n</code></pre></div>",
+        "id": 302298415,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664900446
+    },
+    {
+        "content": "<p>sorry, I think I am not getting your point <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 302299103,
+        "sender_full_name": "yshui",
+        "timestamp": 1664900632
+    },
+    {
+        "content": "<p>uh I think I made a mistake, it doesnt make sense <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 302299442,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664900736
+    },
+    {
+        "content": "<blockquote>\n<p>If the body of evil is in an unsafe block, then wouldn't it be considered unsafe code?</p>\n</blockquote>\n<p>Yes, it would be.</p>\n<blockquote>\n<p>if all code has to be in the unsafe blocks to begin with?</p>\n</blockquote>\n<p>No, not all code would be in <code>unsafe</code> blocks. I was a bit unclear with my definition, but invariants are type invariants, but preconditions can involve things that's not part of the type, like values on the stack, etc. </p>\n<p>I think this distinction comes from the scope of the effect of breaking each of these. If you break a type invariant, all <code>unsafe</code> blocks in the methods of the type can lose their precondition guarantees; so ideally code that can break type invariants should be in <code>unsafe {}</code>. </p>\n<p>Also, this is a different question from whether an <code>unsafe {}</code> block can leak postconditions.</p>",
+        "id": 302300699,
+        "sender_full_name": "yshui",
+        "timestamp": 1664901126
+    },
+    {
+        "content": "<p>here are some discussions on <code>unsafe</code> fields:</p>\n<ul>\n<li><a href=\"https://internals.rust-lang.org/t/semi-rfc-unsafe-fields/2550\">https://internals.rust-lang.org/t/semi-rfc-unsafe-fields/2550</a> one post mentions RFCs that suggested this in the past (prior to 2015!):</li>\n<li><a href=\"https://github.com/rust-lang/rfcs/pull/80\">80</a></li>\n<li><a href=\"https://github.com/rust-lang/rfcs/pull/358\">358</a></li>\n<li><a href=\"https://github.com/rust-lang/rfcs/pull/588\">588</a></li>\n<li>discussion issue <a href=\"https://github.com/rust-lang/rfcs/issues/381\">381</a></li>\n</ul>\n<p>It seems that there was a <em>lot</em> of discussion on this topic (issue 381 is still open) but no consensus was reached.</p>",
+        "id": 302308371,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664903564
+    },
+    {
+        "content": "<p>This might fit well with the topic in this thread: <a href=\"https://internals.rust-lang.org/t/what-does-unsafe-mean/6696\">https://internals.rust-lang.org/t/what-does-unsafe-mean/6696</a></p>",
+        "id": 302308388,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1664903569
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"541742\">yshui</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302225507\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>More specifically, I think the boundary should be as small as practical, but there should be no hard rule that the boundary has to be smaller than the whole kernel driver.</p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> </p>\n<p>Do you mean the boundary of accessing hardware safely? Or also CPU-side memory safety as well?</p>\n</blockquote>\n<p>That's a good question! I think probably just hardware, since if you're having hardware-bound CPU-side safety issues, that's probably also a security problem in some way (trusting hardware). I suspect this is something we'll work out more clearly as we see more examples of different kinds of drivers written in Rust. In the case of my driver, I think I keep modules sound CPU-side, though it could use review (and I already know of some soundness issues I need to fix).</p>",
+        "id": 302345570,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664916928
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302239719\">said</a>:</p>\n<blockquote>\n<p>If we were to do that, it could make sense to have a <code>// SAFETY BOUNDARY</code> tag or similar to describe where a particular boundary is, e.g. the function, the Rust module or the kernel driver.</p>\n</blockquote>\n<p>I'm not sure that works for me as a general comment, because the issue is that the boundary is for some things but not others. E.g. I (think) I keep CPU-side safety on the module boundary like typical Rust, certain firmware issues are handled safely within modules too, and other firmware issues involve larger parts of the driver. There are still safety boundaries throughout, but they are not all-or-nothing.</p>",
+        "id": 302345822,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664917047
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302345822\">said</a>:</p>\n<blockquote>\n<p>I'm not sure that works for me as a general comment, because the issue is that the boundary is for some things but not others. E.g. I (think) I keep CPU-side safety on the module boundary like typical Rust, certain firmware issues are handled safely within modules too, and other firmware issues involve larger parts of the driver. There are still safety boundaries throughout, but they are not all-or-nothing.</p>\n</blockquote>\n<p>Makes sense. I guess you could add a comment explaining to what it applies (e.g. <code>// BOUNDARY: CPU-side.</code> etc.), since anyway I assume you/we will probably want to have it documented.</p>\n<p>On the other hand, I imagine that for similar drivers or even entire subsystems, similar rules would apply to all drivers/modules, so it may be not useful to repeat it everywhere (but still we should have a way to easily know what the rules are in each place).</p>\n<p>In any case, just food for thought -- we may want to establish a convention on how to document that before it is too late, if we end up deciding different drivers/subsystems will use different rules.</p>",
+        "id": 302353465,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1664920403
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302353465\">said</a>:</p>\n<blockquote>\n<p>In any case, just food for thought -- we may want to establish a convention on how to document that before it is too late, if we end up deciding different drivers/subsystems will use different rules.</p>\n</blockquote>\n<p>What about something like this? First, for <code>Safety</code> comments in <code>unsafe</code> blocks (typically CPU-side safety relevant), we could have a <code>Soundness boundary</code> line that sets the scope for what code needs to be aware of the invariants it relies on. E.g. <code>Soundness boundary: module</code> (allowing free-form text for more complicated cases). This could be  <code>module</code> by default since that is the normal default in Rust, but it could be narrower too (e.g. <code>fn</code> for when those invariants don't escape the current function). Then, for anything that escapes module-level soundness (including hardware-related or MM-related safety issues not usefully documented in individual <code>unsafe</code> blocks, if any), we could have <code>// SOUNDNESS:</code> comments at the function, struct, or module level that document the pre/postconditions that are implied in the design that users need to uphold.</p>\n<p>I also thought of an additional wrinkle to this topic: I have <code>unsafe</code> blocks that rely on the <em>correctness</em> (not soundness!) of other modules for soundness. Not in the sense that those modules have to uphold any invariants specific to that one <code>unsafe</code> block specifically, but rather that simply those invariants rely on the documented, intended behavior of other modules (i.e. them being bug-free). I suspect this is not uncommon in Rust too, you can probably find examples in the standard library and third-party crates of this kind of relationship. For example, that first example I linked earlier relies on the <code>SlotAllocator</code> never creating duplicate slots, because duplicate slots would imply mutable pointer aliasing in the <code>unsafe</code> block that relies on that behavior. But <code>SlotAllocator</code> could create those duplicate slots without using <code>unsafe</code>, because slots are instantiated via closure callback and nothing stops it from just making two with the same index. So, on paper, that <code>unsafe</code> block's soundness requirements escape its module, but that's just because it relies on another module not being buggy/malicious in its own implementation (that has nothing to do with that <code>unsafe</code> block on its own). Relying on module dependencies doing their job (especially fairly fundamental/simple ones) seems like a very natural thing to do, so I'd be very surprised if it isn't common in other Rust code (e.g. how much unsafe code would become UB if <code>Vec</code> stopped working, but not in an intrinsically unsafe way? E.g. if it dropped elements instead of pushing them, or did some other random safe thing that breaks its API contract?).</p>",
+        "id": 302397100,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664953089
+    },
+    {
+        "content": "<p>Now that my talk is finally done and I have some time again, I think I might spend a day auditing all the <code>unsafe</code> blocks in my driver and trying to enumerate the implicit firmware soundness conditions and documenting all this, and see where I land (I desperately need documentation anyway, especially before anyone starts reviewing it!)</p>",
+        "id": 302397505,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1664953254
+    },
+    {
+        "content": "<p>Any chance you could guarantee firmware-side safety statically?  The obvious approach would be to do something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"c1\">// trigger a BUG if CONFIG_ASAHI_DEBUG, or a WARN otherwise</span>\n<span class=\"w\">    </span><span class=\"c1\">// (this assumes that CONFIG_ASAHI_DEBUG should never be turned on in a distro kernel)</span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">asahi_bug_on</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">job_not_completed</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// free firmware memory here</span>\n</code></pre></div>",
+        "id": 302527681,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1664997462
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302527681\">said</a>:</p>\n<blockquote>\n<p>Any chance you could guarantee firmware-side safety statically?  The obvious approach would be to do something like:</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"c1\">// trigger a BUG if CONFIG_ASAHI_DEBUG, or a WARN otherwise</span>\n<span class=\"w\">    </span><span class=\"c1\">// (this assumes that CONFIG_ASAHI_DEBUG should never be turned on in a distro kernel)</span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">asahi_bug_on</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">job_not_completed</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// free firmware memory here</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>That looks like dynamic to me, but as I think I mentioned, it's just too much work to try to check every field for valid values, and we don't even have a good idea of what the rules are... at the end of the day, on some level, the answer is \"the driver is driving firmware safely because what it currently does doesn't crash the firmware\". In a way, I think Rust helps remove a lot of the uncertainty/unpredictability, even when the rules aren't encoded in a way the compiler can check them. For example, if the current driver handles object ownership relations (in cases of weak pointers where it isn't explicitly codified) in a certain way with a certain drop order, that drop order is most likely going to stay the same no matter what userspace does in practice, so if it works, it's correct.</p>",
+        "id": 302586351,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035513
+    },
+    {
+        "content": "<p>It might be worth introducing some cross-checks on firmware state (e.g. checking for completion as in a specific flag in a struct before dropping it), but that comes with its own perils due to cache coherency (a lot of the structs the firmware writes are not cache-coherent and only synced in one directly when the driver first instantiates them, so we can't actually rely on readback).</p>",
+        "id": 302586480,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035626
+    },
+    {
+        "content": "<p>So in the end we come back to driver design. In the case of jobs, those jobs are owned by the queue after submission, and they only get dropped after the completion notification has arrived, so unless some of that machinery is horribly broken, there's no way for a job to be dropped before it is complete.</p>",
+        "id": 302586569,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035686
+    },
+    {
+        "content": "<p>Though you do need to be careful with some cases, like the whole queue being dropped (I think I don't handle that properly right now, but we also don't even know how to cancel in-progress jobs, so there's a whole question to be asked there! This doesn't affect the current driver implementation because job submission is synchronous anyway, but will matter once we have the real UAPI.)</p>",
+        "id": 302586640,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035756
+    },
+    {
+        "content": "<p>I actually still need to test all the corner cases of multi-queue handling in macOS first, we haven't even looked at any of that beyond simple 1 app : 1 queue relations. So that should help clarify some things and let me implement it better. There's still a lot of Metal API testing to be done to understand exactly how scheduling is supposed to work...</p>",
+        "id": 302586902,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035975
+    },
+    {
+        "content": "<p>So far we've focused on simple OpenGL apps which don't really have any concurrency or do anything \"interesting\"</p>",
+        "id": 302586911,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665035993
+    },
+    {
+        "content": "<p>(within a single app; we do know the driver handles concurrency between different apps well already!)</p>",
+        "id": 302586981,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665036009
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302397505\">said</a>:</p>\n<blockquote>\n<p>Now that my talk is finally done and I have some time again, I think I might spend a day auditing all the <code>unsafe</code> blocks in my driver and trying to enumerate the implicit firmware soundness conditions and documenting all this, and see where I land (I desperately need documentation anyway, especially before anyone starts reviewing it!)</p>\n</blockquote>\n<p>I am still thinking about your suggestion above, but it would be great if you could give it a go, because it is the best way to know indeed. And given you cannot really know what may be going on from the firmware side, I guess you are probably a \"worst case\" in the documentation sense, thus it may work / be easier for other drivers too.</p>",
+        "id": 302707983,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1665078530
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302586351\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302527681\">said</a>:</p>\n<blockquote>\n<p>Any chance you could guarantee firmware-side safety statically?  The obvious approach would be to do something like:</p>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"c1\">// trigger a BUG if CONFIG_ASAHI_DEBUG, or a WARN otherwise</span>\n<span class=\"w\">    </span><span class=\"c1\">// (this assumes that CONFIG_ASAHI_DEBUG should never be turned on in a distro kernel)</span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">asahi_bug_on</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">job_not_completed</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"c1\">// free firmware memory here</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>That looks like dynamic to me, but as I think I mentioned, it's just too much work to try to check every field for valid values, and we don't even have a good idea of what the rules are... at the end of the day, on some level, the answer is \"the driver is driving firmware safely because what it currently does doesn't crash the firmware\". In a way, I think Rust helps remove a lot of the uncertainty/unpredictability, even when the rules aren't encoded in a way the compiler can check them. For example, if the current driver handles object ownership relations (in cases of weak pointers where it isn't explicitly codified) in a certain way with a certain drop order, that drop order is most likely going to stay the same no matter what userspace does in practice, so if it works, it's correct.</p>\n</blockquote>\n<p>Fair point!  (And yes, you did say that.)  This seems like a good candidate for fuzzing or even (<em>gasp</em>) formal methods, but those can wait until the driver is more complete.  In any case, I suspect the defect rate will be at least an order of magnitude less than if the driver were written in C.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302586480\">said</a>:</p>\n<blockquote>\n<p>It might be worth introducing some cross-checks on firmware state (e.g. checking for completion as in a specific flag in a struct before dropping it), but that comes with its own perils due to cache coherency (a lot of the structs the firmware writes are not cache-coherent and only synced in one directly when the driver first instantiates them, so we can't actually rely on readback).</p>\n</blockquote>\n<p>I can think of a couple of options:</p>\n<ol>\n<li>Store a side table on the host that contains the state of each job.</li>\n<li>Use some sort of memory barrier so that the firmware state can be read back.</li>\n</ol>\n<p>Both would likely have at least some overhead, so it might be necessary to gate them behind some sort of debug flag (selected either at compile-time or runtime).</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302586902\">said</a>:</p>\n<blockquote>\n<p>I actually still need to test all the corner cases of multi-queue handling in macOS first, we haven't even looked at any of that beyond simple 1 app : 1 queue relations. So that should help clarify some things and let me implement it better. There's still a lot of Metal API testing to be done to understand exactly how scheduling is supposed to work...</p>\n</blockquote>\n<p>I actually forgot for a bit that this you are having to reverse-engineer everything!  I am amazed that you are able to reverse-engineer something as complex as a GPU.</p>",
+        "id": 302780523,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1665118565
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302780523\">said</a>:</p>\n<blockquote>\n<ol>\n<li>Store a side table on the host that contains the state of each job.</li>\n</ol>\n</blockquote>\n<p>But that's redundant, right? The driver is already storing lists of jobs, that's the data structure that keeps them alive until they complete.</p>\n<p>This is where we get into the whole redundancy aspect of the whole idea of firmware safety... if you want safety, you end up programming what is essentially the driver itself, to build the safety boundary, and then there's very little left outside! The driver's job is already to make the firmware interface safe for userspace!</p>\n<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302780523\">said</a>:</p>\n<blockquote>\n<ol start=\"2\">\n<li>Use some sort of memory barrier so that the firmware state can be read back.</li>\n</ol>\n</blockquote>\n<p>I think this is actually possible (there is a way to ask the firmware to flush some cache lines), but it would have to be gated behind a debug flag, yeah, so it doesn't add overhead to normal usage. I think over time we'll want to add more debugging tools like this, to ease debugging firmware issues (another one which already exists in the Python prototype is keeping a global list of all GPU objects, including past ones, and consulting it when the firmware crashes, so you can see what it was trying to access).</p>\n<p><span class=\"user-mention silent\" data-user-id=\"550795\">Demi Obenour</span> <a href=\"#narrow/stream/288089-General/topic/What.20is.20unsafe.3F/near/302780523\">said</a>:</p>\n<blockquote>\n<p>I actually forgot for a bit that this you are having to reverse-engineer everything!  I am amazed that you are able to reverse-engineer something as complex as a GPU.</p>\n</blockquote>\n<p>And there's still so much to figure out... things like performance counters, job cancellation, ... ^^</p>",
+        "id": 302842277,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1665146544
+    }
+]

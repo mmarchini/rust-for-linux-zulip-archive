@@ -1,0 +1,902 @@
+[
+    {
+        "content": "<p>The goal for the I/O infrastructure is to generalize its API to be able to represent arbitrary backends. The first step in this direction has been done with [1].</p>\n<p>This has the advantage that:</p>\n<ol>\n<li>\n<p>We can build a common register abstraction (with the <code>register!()</code> macro [2]) on top of this generic interface, making it accessible for all busses and memory backed backends.</p>\n</li>\n<li>\n<p>We can share infrastructure that otherwise would be duplicated over and over again. For instance, <code>dma_read!()</code> and <code>dma_write!()</code> can be generalized over I/O backends with trait methods for <code>read_field()</code> and <code>write_field()</code>. </p>\n</li>\n</ol>\n<p>The duplication we would have without (2) came up for <code>iosys_map</code> for instance [3]. With generic I/O backends we have a generalization that is much more powerful than things like <code>iosys_map</code> though.</p>\n<p>As we have more people working on contributions towards those goals, let's use this thread for coordination.</p>\n<p>[1] <a href=\"https://lore.kernel.org/all/20260121202212.4438-1-zhiw@nvidia.com/\">https://lore.kernel.org/all/20260121202212.4438-1-zhiw@nvidia.com/</a><br>\n[2] <a href=\"https://lore.kernel.org/all/20260129-register-v5-5-c4587c902514@nvidia.com/\">https://lore.kernel.org/all/20260129-register-v5-5-c4587c902514@nvidia.com/</a><br>\n[3] <a href=\"https://lore.kernel.org/all/DFOP5BY09539.AFY5L5FV1HNV@kernel.org/\">https://lore.kernel.org/all/DFOP5BY09539.AFY5L5FV1HNV@kernel.org/</a></p>",
+        "id": 571198078,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769867565
+    },
+    {
+        "content": "<p>Hmm, I'm not sure if DMA should really share the infra with I/O and registers. To me ultimately the <code>dma_read!()</code> <code>dma_write!()</code> is to be replaced with field projection.</p>",
+        "id": 571218502,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769882186
+    },
+    {
+        "content": "<p>It's the exact same concept, I/O memory and DMA memory is in the end just an abstract backing storage that is shared between a device and the CPU. Same goes for any other device memory, regardless of through which bus it is connected to the CPU.</p>\n<p>I.e. for all of those the concept of registers, field accesses and \"unsafe slices\" is applicable.</p>\n<p>Look at C infrastructure like <code>iosys_map</code> [1] which builds exactly this abstraction (of course without all the nice advantages we can get from Rust's type system for building such an abstraction).</p>\n<p>[1] <a href=\"https://elixir.bootlin.com/linux/latest/source/include/linux/iosys-map.h\">https://elixir.bootlin.com/linux/latest/source/include/linux/iosys-map.h</a></p>",
+        "id": 571219651,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769883111
+    },
+    {
+        "content": "<p>For I/O memory you can't really create a slice unsafely, this will be some capability unique to DMA memory</p>",
+        "id": 571220760,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769884135
+    },
+    {
+        "content": "<p>You could still provide the abstract ability to memcpy from/to IO or DMA, though.</p>",
+        "id": 571220820,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769884197
+    },
+    {
+        "content": "<p>You can have some <code>UnsafeSlice</code> or <code>IoSlice</code> type that internally holds a pointer and provides you with the corresponding implementation for accessors such as <code>memcpy_to</code>, <code>memcpy_from</code>, etc.</p>",
+        "id": 571220853,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769884229
+    },
+    {
+        "content": "<p>This works for any backing storage, including DMA.</p>",
+        "id": 571220940,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769884302
+    },
+    {
+        "content": "<p>Sure, that's what I purposed in <a href=\"https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/\">https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/</a>. However I imagine for DMA memory you would want the ability to touch these memory directly without having to copy.</p>",
+        "id": 571221021,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769884380
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571218502\">said</a>:</p>\n<blockquote>\n<p>Hmm, I'm not sure if DMA should really share the infra with I/O and registers. To me ultimately the <code>dma_read!()</code> <code>dma_write!()</code> is to be replaced with field projection.</p>\n</blockquote>\n<p>I guess we could share the same infra by supporting MMIO with projections, too.</p>",
+        "id": 571221105,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769884450
+    },
+    {
+        "content": "<p>It'll be of a bit different paradigm to the current <code>register!()</code> design, as you'll have a view of IO that is strongly typed (i.e. the I/O struct is typed itself, rather than having each register being typed)</p>",
+        "id": 571221160,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769884508
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571221021\">said</a>:</p>\n<blockquote>\n<p>Sure, that's what I purposed in <a href=\"https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/\">https://lore.kernel.org/rust-for-linux/DFZHE3PGMQHS.3F108QF6VQEQ7@garyguo.net/</a>. However I imagine for DMA memory you would want the ability to touch these memory directly without having to copy.</p>\n</blockquote>\n<p>Not sure that's exactly the same idea as what I proposed here (actually it probably is <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span>): <a href=\"https://lore.kernel.org/all/DFSKLTVPNQ11.26N3WVT559F22@kernel.org/\">https://lore.kernel.org/all/DFSKLTVPNQ11.26N3WVT559F22@kernel.org/</a></p>\n<p>But either way, you don't have to copy it, you can touch it directly, through register accesses (through the <code>register!()</code> macro, raw reads/writes (e.g. <code>read32()</code>), field accesses (equivalent to the current <code>dma_read!()</code> / dma_write!()) and through the <code>IoSlice</code>, which provides you accessors, such as <code>memcpy_to_*</code>. The latter can be compatible with anything, e.g. another <code>IoSlice</code> of a different type or <code>UserSliceWriter</code> / <code>UserSliceReader</code>.</p>",
+        "id": 571222531,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769885699
+    },
+    {
+        "content": "<p>This covers anything that you'd want to do with DMA memory. or any other (I/O) memory that is shared with a device.</p>",
+        "id": 571222788,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769885918
+    },
+    {
+        "content": "<p>Using <code>read32()</code> on DMA memory seems wrong to me.</p>",
+        "id": 571225954,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1769889112
+    },
+    {
+        "content": "<p>Also what's the use case of making <code>register!()</code> work with DMA memory?</p>",
+        "id": 571226475,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1769889472
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571225954\">said</a>:</p>\n<blockquote>\n<p>Using <code>read32()</code> on DMA memory seems wrong to me.</p>\n</blockquote>\n<p>Or maybe the proposal is using a different function other then <code>readl()</code> to implement <code>read32()</code> for DMA?</p>",
+        "id": 571226613,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1769889629
+    },
+    {
+        "content": "<p>I was mostly worried about using C's <code>readl()</code> on DMA memory.</p>",
+        "id": 571226914,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1769889880
+    },
+    {
+        "content": "<p>but seems that's not the case given how <code>iosys_map</code> handles DMA vs MMIO?</p>",
+        "id": 571227068,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1769890029
+    },
+    {
+        "content": "<blockquote>\n<p>Or maybe the proposal is using a different function other then <code>readl()</code> to implement <code>read32()</code> for DMA?</p>\n</blockquote>\n<p>The backend implementation has to be specific for the backend. So, no this would not use <code>readl()</code>.</p>",
+        "id": 571227071,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769890035
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571221160\">said</a>:</p>\n<blockquote>\n<p>It'll be of a bit different paradigm to the current <code>register!()</code> design, as you'll have a view of IO that is strongly typed (i.e. the I/O struct is typed itself, rather than having each register being typed)</p>\n</blockquote>\n<p>I did some experiment to see if the untyped <code>Io</code> design we have today can be made compatible with the strongly typed <code>dma::CoherentAllocation</code> design. This is indeed possible. Some snippets:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">/// Trait to represent compile-time known size information.</span>\n<span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">KnownSize</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// Minimum size of object of this type.</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MIN_SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"sd\">/// Maximum size of object of this type.</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">maxsize</span><span class=\"p\">(</span><span class=\"n\">p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// For sized types, everything is known.</span>\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">KnownSize</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MIN_SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">maxsize</span><span class=\"p\">(</span><span class=\"n\">_</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"bp\">Self</span><span class=\"p\">::</span><span class=\"n\">MIN_SIZE</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">KnownSize</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">T</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MIN_SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">maxsize</span><span class=\"p\">(</span><span class=\"n\">p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">p</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"cp\">#[repr(transparent)]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">SliceLargerThan</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">([</span><span class=\"n\">T</span><span class=\"p\">]);</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">KnownSize</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">SliceLargerThan</span><span class=\"o\">&lt;</span><span class=\"n\">SIZE</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MIN_SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">maxsize</span><span class=\"p\">(</span><span class=\"n\">p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"n\">p</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">T</span><span class=\"p\">]).</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">core</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">TypedMmio</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// aka __iomem T*</span>\n\n<span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Mmio</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">TypedMmio</span><span class=\"o\">&lt;</span><span class=\"n\">SliceLargerThan</span><span class=\"o\">&lt;</span><span class=\"n\">SIZE</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 571228593,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769891483
+    },
+    {
+        "content": "<p>I have a question about the design of generalising I/O backends. I noticed that in the CoherentAllocation code, it has safety requirements such as the caller must ensure that there are no races with concurrent reads+writes. For generalising over all I/O backends, is the plan to take the union of all safety pre-conditions for all backends and have that in the interface?</p>",
+        "id": 571577241,
+        "sender_full_name": "Eliot Courtney",
+        "timestamp": 1770098241
+    },
+    {
+        "content": "<p>The safety precondition is for getting a slice, not dma_read/dma_write</p>",
+        "id": 571639597,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770119388
+    },
+    {
+        "content": "<p>Hey, I got paged into this thread from <a href=\"https://lore.kernel.org/all/20260203-qcom-socinfo-v2-2-d6719db85637@google.com/\">https://lore.kernel.org/all/20260203-qcom-socinfo-v2-2-d6719db85637@google.com/</a> , where I was trying to add methods to copy slices or arrays in/out of IO via <code>memcpy_toio</code> and <code>memcpy_fromio</code>.</p>\n<p>Questions:</p>\n<ol>\n<li>Are there patches in progress that aren't linked here already?</li>\n<li>When it comes to typed IO, are we considering the possibility of types which may be larger than the underlying region (the socinfo region from the series I'm working on) or which are DSTs (the versions regions in the series I'm working on)</li>\n<li>What differentiates an <code>IoSlice</code> from an object implementing the <code>Io</code> trait + an offset/length? Anything?</li>\n<li>If we want <code>IoSlice</code> to be a concrete type rather than a trait (implied above, but not explicitly stated?), then getting access to the underlying <code>Io</code> is either going to mean we have <code>IoSlice&lt;T&gt; where T: Io</code>, which complicates interfaces, or we're going to end up with <code>dyn Io</code> everywhere.</li>\n<li>Is <code>IoSlice</code> intended to be an owning type or a borrow?</li>\n</ol>",
+        "id": 571751802,
+        "sender_full_name": "Matthew Maurer",
+        "timestamp": 1770149027
+    },
+    {
+        "content": "<p>I think there is no work in progress yet, but I think <span class=\"user-mention\" data-user-id=\"1022631\">@Eliot Courtney</span> and <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> are looking into this as well.</p>\n<p>The main idea of <code>IoSlice</code> would be to have something that deals with the fact that we can't take a \"real\" slice of I/O memory, DMA memory, etc. You could also say <code>UnsafeSlice</code>. I think it should be a borrow of the I/O backend and provide methods that forward to the I/O backend implementation depending on what source or destination we are copying from / to.</p>\n<p>So, let's say you have a <code>dma::CoherentAllocation&lt;T&gt;</code>, then we could have a method <code>as_slice()</code> (or <code>as_io_slice()</code>) that returns a <code>IoSlice&lt;'io, T&gt;</code>. <code>IoSlice&lt;T&gt;</code> could have a method <code>copy_from_slice()</code>that takes a \"normal\" Rust slice.</p>\n<p>Similarly, you could also have methods that copy from a <code>UserSlice</code> or interact with <code>UserSliceReader</code> and <code>UserSliceWriter</code> directly. We could also have methods that allow us to copy back and forth between two <code>IoSlice&lt;T&gt;</code> with different I/O backends.</p>\n<p>This way users never have to think about what exact lower level accessors we need to copy from or to certain memory, as everything is abstracted in I/O backends and <code>IoSlice</code>.</p>",
+        "id": 571781349,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770159114
+    },
+    {
+        "content": "<p>Given the apparent need to have a non-array <code>CoherentAllocation</code> (actually, looks like DmaGspMem is already using slice with fixed size of 1), I think the final result would be more like a <code>IoView</code> rathan <code>IoSlice</code>. So take Nova code for example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Msgq</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">tx</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">MsgqTxHeader</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">rx</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">MsgqRxHeader</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">msgq</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">MsgqData</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">GspMem</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">ptes</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PteArray</span><span class=\"o\">&lt;</span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">GSP_PAGE_SIZE</span><span class=\"w\"> </span><span class=\"o\">/</span><span class=\"w\"> </span><span class=\"n\">size_of</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">cpuq</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Msgq</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">gspq</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Msgq</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>we should have ability to project <code>&amp;'a dma::CoherentAllocation&lt;GspMem&gt;</code> into something like <code>io::View&lt;'a, dma::CoherentAllocation&lt;GspMem&gt;, Msgq&gt;</code> and nestly project into <code>io::View&lt;'a, dma::CoherentAllocation&lt;GspMem&gt;, MsgqTxHeader&gt;</code> (and so on).</p>\n<p>Slice use case would really just be a small part of this, so you can a sub-slice projection from <code>dma::CoherentAllocation&lt;[Foo]&gt;</code> into <code>io::View&lt;'a, dma::CoherentAllocation&lt;[Foo]&gt;, [Foo]&gt;</code>. And going from slice to element is just an index projection.</p>\n<p>The <code>dma_read!</code>/<code>dma_write!</code> macro today is already doing projection, just always a index projection plus a field projection, where I see no reason that this cannot be generalized.</p>\n<p>The exact API and surface syntax is something to be figured out, but I think it'll be something on this line.</p>",
+        "id": 571783645,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770159886
+    },
+    {
+        "content": "<p>Interesting, if I understand your proposal correctly all the stuff I described would still work, plus it would cover the projection use cases.</p>",
+        "id": 571785264,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770160566
+    },
+    {
+        "content": "<p>Yes, this is more generic, <code>type IoSlice&lt;'io, T&gt; = IoView&lt;'io, [T]&gt;</code></p>",
+        "id": 571785334,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770160603
+    },
+    {
+        "content": "<p>Seems like a good idea, but it also looks pretty complicated.</p>",
+        "id": 571785398,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770160634
+    },
+    {
+        "content": "<p>Not really, it only looks complicated because I throw in <code>CoherentAllocation&lt;T&gt;</code> into the view type which I think is needed anyway as you need to way to specify the backend.</p>",
+        "id": 571785529,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770160700
+    },
+    {
+        "content": "<p>Given Eliot's series <a href=\"https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/\">https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/</a> about adding <code>CoherentArray</code>/<code>CoherentObject</code> this is probably an simplification, even.</p>",
+        "id": 571785709,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770160790
+    },
+    {
+        "content": "<p>Yeah, I think we can also build it up incrementally, e.g. we could start with only implementing the methods for copying to/from \"normal\" slices for <code>IoView&lt;'io, [T]&gt;</code> to satisfy Matt's use-case.</p>",
+        "id": 571785916,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770160874
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/571785709\">said</a>:</p>\n<blockquote>\n<p>Given Eliot's series <a href=\"https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/\">https://lore.kernel.org/rust-for-linux/20260130-coherent-array-v1-0-bcd672dacc70@nvidia.com/</a> about adding <code>CoherentArray</code>/<code>CoherentObject</code> this is probably an simplification, even.</p>\n</blockquote>\n<p>Agreed.</p>",
+        "id": 571786051,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770160915
+    },
+    {
+        "content": "<p>I've started the work and will be pushing WIP to here: <a href=\"https://github.com/nbdd0121/linux/commits/io_projection/\">https://github.com/nbdd0121/linux/commits/io_projection/</a>. So far I've done some improvement of <code>CoherentAllocation</code> and nothing generic yet.</p>",
+        "id": 572220281,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770315610
+    },
+    {
+        "content": "<p>Looks like those changes cover a bunch of what we discussed AFAICT. Gary, is there anything left for me to do w.r.t. my original patch series or have you got this covered?</p>",
+        "id": 572295571,
+        "sender_full_name": "Eliot Courtney",
+        "timestamp": 1770354353
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> would you be ok if I added a backend backed by system memory? We communicate with the firmware by reading and writing from a large region of shared memory, it would be cool if we could use something like the register!() macro to describe the layout and then use the generic I/O layers for reads and writes. I suspect that we might introduce some repetition otherwise (probably using core::mem::[read|write]_volatile(), which is undesirable</p>",
+        "id": 572377073,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1770384814
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> fyi</p>",
+        "id": 572377137,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1770384828
+    },
+    {
+        "content": "<p>is this normal shared memory, not dma coherent allocation?</p>",
+        "id": 572377872,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770385027
+    },
+    {
+        "content": "<p>This is normal shared memory, yes</p>",
+        "id": 572382873,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770386221
+    },
+    {
+        "content": "<p>actually, it depends what you mean by dma coherent. The allocation itself goes through shmem, but mapping might be uncached</p>",
+        "id": 572383238,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770386313
+    },
+    {
+        "content": "<p>but we don't have dedicated accessors to access those memory regions, it's just regular loads/stores to pointers</p>",
+        "id": 572383496,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770386377
+    },
+    {
+        "content": "<p>Do you not even require volatility or atomicity?</p>",
+        "id": 572383835,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770386448
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1022631\">Eliot Courtney</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572295571\">said</a>:</p>\n<blockquote>\n<p>Looks like those changes cover a bunch of what we discussed AFAICT. Gary, is there anything left for me to do w.r.t. my original patch series or have you got this covered?</p>\n</blockquote>\n<p>I think everything would be covered. Thank you for doing the work, it is very valuable in providing use cases to shape the design of new API.</p>",
+        "id": 572386390,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770387049
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572377073\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> would you be ok if I added a backend backed by system memory?</p>\n</blockquote>\n<p>I think that's perfectly fine as long as it is specific for the requirements of the shared memory, i.e. as Gary mentions volatility and atomicity requirements.</p>",
+        "id": 572391236,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770388248
+    },
+    {
+        "content": "<blockquote>\n<p>Do you not even require volatility or atomicity?</p>\n</blockquote>\n<p>Locking and mem barriers are going to be handled at a higher level, because it only has to happen on specific registers</p>",
+        "id": 572391742,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770388361
+    },
+    {
+        "content": "<p>The flow is:</p>\n<ul>\n<li>update reg X, Y, Z</li>\n<li>make sure mem accesses are flushed</li>\n<li>ring a doorbell which is an actual IoReg</li>\n</ul>",
+        "id": 572391973,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770388421
+    },
+    {
+        "content": "<p>as for the locking, ideally we'll lock entire portions of memory to guarantee atomicity of the update, and that will be done with a lock at a higher level</p>",
+        "id": 572392203,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770388484
+    },
+    {
+        "content": "<p>I don't think the IoBackend needs to be involved, at least not in our case</p>",
+        "id": 572392287,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770388513
+    },
+    {
+        "content": "<p>When you mention locking, I assume that you think about tearing. None of the I/O backends prevents tearing for concurrent accesses. So, here the expectation is always that drviers take care of this.</p>",
+        "id": 572392347,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770388527
+    },
+    {
+        "content": "<p>Maybe that implies having a custom backend, dunno</p>",
+        "id": 572392376,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770388532
+    },
+    {
+        "content": "<p>Looking at the flow it is not too different from some Nova GSP code is doing. I think you can still use dma coherent memory?</p>",
+        "id": 572393896,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770388931
+    },
+    {
+        "content": "<p>you mean the backend for coherent memory?</p>",
+        "id": 572399434,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390284
+    },
+    {
+        "content": "<p>Yes, the <code>dma::CoherentAllocation</code> that we have today. Does this memory region need to be obtained via other means?</p>",
+        "id": 572399718,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770390346
+    },
+    {
+        "content": "<p>it does</p>",
+        "id": 572399749,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390356
+    },
+    {
+        "content": "<p>As I said, it's memory allocated through shmem</p>",
+        "id": 572399836,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390373
+    },
+    {
+        "content": "<p>the allocation itself can't be done through dma_alloc_coherent()</p>",
+        "id": 572400115,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390438
+    },
+    {
+        "content": "<p>Ah, missed that part. So I think you probably need something that is allocated differently, but access-wise is equal to <code>dma::CoherentAllocation</code>.</p>",
+        "id": 572400811,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770390592
+    },
+    {
+        "content": "<p>How bad would it be to implement a custom IoBackend?</p>",
+        "id": 572400839,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390599
+    },
+    {
+        "content": "<p>I'll consider this when desigining the generic I/O API</p>",
+        "id": 572400842,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770390600
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> Boris is likely referring to [1].</p>\n<p>[1] <a href=\"https://elixir.bootlin.com/linux/v6.18.6/source/drivers/gpu/drm/drm_gem_shmem_helper.c#L52\">https://elixir.bootlin.com/linux/v6.18.6/source/drivers/gpu/drm/drm_gem_shmem_helper.c#L52</a></p>",
+        "id": 572401008,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770390641
+    },
+    {
+        "content": "<p>Okay, thanks.</p>",
+        "id": 572401015,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390642
+    },
+    {
+        "content": "<p>(<span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> Please correct me if that's wrong.)</p>",
+        "id": 572401184,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1770390677
+    },
+    {
+        "content": "<blockquote>\n<p>Boris is likely referring to [1].</p>\n</blockquote>\n<p>That's the gem frontend for shmem-based backing, yep, but the actual page allocation happens in mm/shmem.c</p>",
+        "id": 572401435,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390734
+    },
+    {
+        "content": "<p>what's important is that it's regular system memory</p>",
+        "id": 572401570,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390768
+    },
+    {
+        "content": "<p>the CPU mapping we access can be cached or uncached, but it's all done with regular load/store instructions anyway</p>",
+        "id": 572401694,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390802
+    },
+    {
+        "content": "<p>So this is something that's userspace created via memfd and shared with the driver, like dmabuf?</p>",
+        "id": 572401709,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770390805
+    },
+    {
+        "content": "<p>I assume it's the same for dma_coherent memory</p>",
+        "id": 572401735,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390814
+    },
+    {
+        "content": "<blockquote>\n<p>So this is something that's userspace created via memfd and shared with the driver, like dmabuf?</p>\n</blockquote>\n<p>Nope, we have our own shmem_fs mount point behind drm_device objects</p>",
+        "id": 572401885,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770390851
+    },
+    {
+        "content": "<p>I think the same impl would work for both dma coherent and this, the worst case we just duplicate the impl. But to your original question, yes this is doable.</p>",
+        "id": 572402045,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770390897
+    },
+    {
+        "content": "<p>Perfect!</p>",
+        "id": 572402444,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770391015
+    },
+    {
+        "content": "<blockquote>\n<p>Nope, we have our own shmem_fs mount point behind drm_device objects</p>\n</blockquote>\n<p>That, or we use the default shmem_fs mountpoint, when the driver doesn't instantiate a custom one, but it's all happening internally, no need for the user to pass a memfd or a dmabuf</p>",
+        "id": 572403528,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770391256
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> </p>\n<blockquote>\n<p>Do you not even require volatility or atomicity?</p>\n</blockquote>\n<p>Not sure if this was your question, but we need volatile reads and writes, yes, since the memory accesses will have side effects</p>",
+        "id": 572454120,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1770407718
+    },
+    {
+        "content": "<blockquote>\n<p>Not sure if this was your question, but we need volatile reads and writes, yes, since the memory accesses will have side effects</p>\n</blockquote>\n<p>We can do with regular accesses, I think (actually, we do it in C), because the synchronization is done explicitly (when we ring the doorbell). For instance, any writes to the config regs will be flushed by the memory barrier that exists when we write to the register. For reads, it's not a problem is those are elided when the result of the read is not read, because, again, it's not IO, the other end (the FW) doesn't see whether the value has been read or not, and ordering, we can enforce it with acual memory barriers (the the ringbell barrier is not enough).</p>\n<p>That's not to say volatile accesses won't work (and I actually think we should go for volative accesses if the backend exists), but they're not strictly needed most of the time.</p>",
+        "id": 572729869,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770631690
+    },
+    {
+        "content": "<p>IO trait uses &amp;self for access, so if volatile is to be omitted, it needs to be !Sync</p>",
+        "id": 572730510,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770631860
+    },
+    {
+        "content": "<p>Or atomic</p>",
+        "id": 572730615,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770631891
+    },
+    {
+        "content": "<p>I see</p>",
+        "id": 572864750,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770664092
+    },
+    {
+        "content": "<p>Hey Gary, I checked your code for digging the IoView ideas. It seems there has been KnwoSize for comile-time known size. What's the next step for IoView ideas? I am mostly wondering how to cope my PCI capability patches with your ideas. :)</p>",
+        "id": 573224619,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1770798723
+    },
+    {
+        "content": "<p>I plan to add <code>io::View&lt;'a, Base, T&gt;</code> where <code>Base</code> is a type that implements <code>Io</code> and <code>T</code> is a type with <code>KnownSize</code> bound</p>",
+        "id": 573226015,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770799130
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572730615\">said</a>:</p>\n<blockquote>\n<p>Or atomic</p>\n</blockquote>\n<p>Because kernel atomics are volatile?</p>",
+        "id": 573232687,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770800970
+    },
+    {
+        "content": "<p>Because having multiple concurrent reads/writes is safe if they are atomic.</p>",
+        "id": 573232906,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770801031
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/573232906\">said</a>:</p>\n<blockquote>\n<p>Because having multiple concurrent reads/writes is safe if they are atomic.</p>\n</blockquote>\n<p>How is &amp;self: Sync with volatile operations OK?</p>",
+        "id": 573234158,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1770801380
+    },
+    {
+        "content": "<p>For MMIO they're okay.</p>",
+        "id": 573234390,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770801455
+    },
+    {
+        "content": "<p>Even per-reg atomicity wouldn't be enough for our use case anyway, so we'll have locks to protect updates on top. Not to say we don't want that guarantee at the IoBackend, but Tyr won't need it for its FW &lt;-&gt; CPU interfaces.</p>",
+        "id": 573236423,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770802028
+    },
+    {
+        "content": "<p>I see. For capabilities, Io::View would store the offset. And fixed-size caps would be fine. How about the variable-length caps e.g. Vendor-specific VNDR?</p>\n<p>Also curious how io::View will handle field projection, since I/O<br>\naccesses can't use pointer derefs like DMA does, will it be something else?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/573226015\">said</a>:</p>\n<blockquote>\n<p>I plan to add <code>io::View&lt;'a, Base, T&gt;</code> where <code>Base</code> is a type that implements <code>Io</code> and <code>T</code> is a type with <code>KnownSize</code> bound</p>\n</blockquote>",
+        "id": 573238350,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1770802627
+    },
+    {
+        "content": "<p>projection can start with arbitrary pointer without provenance and then only use the offset.</p>",
+        "id": 573247435,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770805110
+    },
+    {
+        "content": "<p>Would like to rebase my patches on your brach asap when it is ready. :)</p>",
+        "id": 573384869,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1770843226
+    },
+    {
+        "content": "<p>It might take a while as I'm currently on holiday</p>",
+        "id": 573408304,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770853267
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572220281\">said</a>:</p>\n<blockquote>\n<p>I've started the work and will be pushing WIP to here: <a href=\"https://github.com/nbdd0121/linux/commits/io_projection/\">https://github.com/nbdd0121/linux/commits/io_projection/</a>. So far I've done some improvement of <code>CoherentAllocation</code> and nothing generic yet.</p>\n</blockquote>\n<p>Just pushed my latest WIP progress. Mostly there, a lot of tidy up and comment writing still needs to follow. <a href=\"https://github.com/nbdd0121/linux/commit/491a1cfb4102341adc7623b0abab6718d1876959\">https://github.com/nbdd0121/linux/commit/491a1cfb4102341adc7623b0abab6718d1876959</a> is the nova-core driver being converted to the new API</p>",
+        "id": 575321480,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1771859659
+    },
+    {
+        "content": "<p>Nice to see these horrible <code>transmute</code> methods in <code>fwres.rs</code> going away!</p>",
+        "id": 575696434,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1771998803
+    },
+    {
+        "content": "<p>Hi folks. I re-worked my previous implementation of PCI capability support on top of this infrastructure. It was posted as RFC here. </p>\n<p><a href=\"https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/T/#t\">https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/T/#t</a></p>",
+        "id": 575839737,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1772042994
+    },
+    {
+        "content": "<p>I/O projection on the list: <a href=\"https://lore.kernel.org/rust-for-linux/20260323153807.1360705-1-gary@kernel.org/\">https://lore.kernel.org/rust-for-linux/20260323153807.1360705-1-gary@kernel.org/</a></p>",
+        "id": 581169944,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1774284615
+    },
+    {
+        "content": "<p>Cool!! Let me rebase my vGPU staging tree and PCI capability patches on top of it.</p>",
+        "id": 581171704,
+        "sender_full_name": "Zhi Wang",
+        "timestamp": 1774285041
+    },
+    {
+        "content": "<p>I noted that rustfmt will format</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">project</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">variant</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"n\">end</span><span class=\"p\">])</span>\n</code></pre></div>\n<p>to</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">project</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">variant</span><span class=\"o\">..</span><span class=\"n\">end</span><span class=\"p\">])</span>\n</code></pre></div>\n<p>Would this change our conclusion on putting variant name inside <code>[]</code> for index projection? <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span>  <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>  <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span></p>",
+        "id": 585460447,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776180986
+    },
+    {
+        "content": "<p>ah because we allow subslicing...</p>",
+        "id": 585462215,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776181372
+    },
+    {
+        "content": "<p>Some ideas:</p>\n<ul>\n<li>there is <a href=\"https://rust-lang.github.io/rustfmt/?version=v1.9.0&amp;search=macro#skip_macro_invocations\">an unstable option</a> to disable this behavior (sadly unstable....)</li>\n<li>we could make people use <code>project! { ... }</code> since that doesn't format (also not really nice, since people might just use normal parens)</li>\n<li>we could change the <code>,</code> to a <code>=&gt;</code> and then it probably won't format it like that anymore, right? (this is probably my current favorite)</li>\n</ul>",
+        "id": 585462487,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776181435
+    },
+    {
+        "content": "<p>Or we just say this is fine :)</p>",
+        "id": 585462825,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776181519
+    },
+    {
+        "content": "<blockquote>\n<p><code>project!(foo, [variant..end])</code></p>\n</blockquote>\n<p>Ick! I think we should look for an alternative syntax, something along the lines of Benno's 3rd point above. But I'm not sure about the arrow.</p>",
+        "id": 585467146,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776182510
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585462825\">said</a>:</p>\n<blockquote>\n<p>Or we just say this is fine :)</p>\n</blockquote>\n<p>I don't want that :)</p>",
+        "id": 585467339,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776182554
+    },
+    {
+        "content": "<p>Can we just add a colon after the variant?</p>",
+        "id": 585467733,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776182644
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585467146\">said</a>:</p>\n<blockquote>\n<p>But I'm not sure about the arrow.</p>\n</blockquote>\n<p>The only other alternatives that are allowed to be after an expression is the <code>;</code></p>\n<p>another option would be to add a sigil after the keyword, so:</p>\n<ul>\n<li><code>project!(foo, [variant! ..end])</code></li>\n<li><code>project!(foo, [variant: ..end])</code></li>\n</ul>",
+        "id": 585467804,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776182661
+    },
+    {
+        "content": "<p><code>project!(foo, [variant; ..end])</code> perhaps?</p>",
+        "id": 585467931,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776182689
+    },
+    {
+        "content": "<p>I like semicolon</p>",
+        "id": 585468016,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1776182710
+    },
+    {
+        "content": "<p>If we can't have the colon, I prefer semicolon over the arrow.</p>",
+        "id": 585468042,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776182718
+    },
+    {
+        "content": "<p>Good thing about semicolon over colon is that <code>rustfmt</code> is able to format the index expression</p>",
+        "id": 585468275,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776182778
+    },
+    {
+        "content": "<p>comma is okay, too</p>",
+        "id": 585468601,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776182849
+    },
+    {
+        "content": "<p>Does rustfmt work with <code>!</code>?</p>",
+        "id": 585468795,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776182894
+    },
+    {
+        "content": "<p>Nope</p>",
+        "id": 585469106,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776182973
+    },
+    {
+        "content": "<p>Actually with the <code>try</code> variant <code>rustfmt</code> cannot format any of the proposals, because <code>try</code> is a lang keyword</p>",
+        "id": 585469410,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776183042
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585467931\">said</a>:</p>\n<blockquote>\n<p><code>project!(foo, [variant; ..end])</code> perhaps?</p>\n</blockquote>\n<p>oh I actually meant:<br>\n<code>project!(foo; [variant ..end])</code></p>",
+        "id": 585470062,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776183189
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585468042\">said</a>:</p>\n<blockquote>\n<p>If we can't have the colon, I prefer semicolon over the arrow.</p>\n</blockquote>\n<p>the colon inside of the <code>[]</code> should work</p>",
+        "id": 585470105,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776183200
+    },
+    {
+        "content": "<p>I think I also like that one best</p>",
+        "id": 585470141,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776183208
+    },
+    {
+        "content": "<ul>\n<li><code>project!(foo =&gt; [variant ..end])</code></li>\n<li><code>project!(foo, [variant: ..end])</code></li>\n</ul>",
+        "id": 585470260,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776183241
+    },
+    {
+        "content": "<p>I want something generally formatable</p>",
+        "id": 585470373,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776183269
+    },
+    {
+        "content": "<p>My general preference would  be <code>project!(foo, [variant: ..end])</code>, but if we can have something that can be processed by rustfmt making a compromise seems reasonable.</p>",
+        "id": 585470653,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776183350
+    },
+    {
+        "content": "<p>I'm adding this as a discussion topic tomorrow</p>",
+        "id": 585470828,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776183398
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/585470373\">said</a>:</p>\n<blockquote>\n<p>I want something generally formatable</p>\n</blockquote>\n<p>oh yeah that'd be good</p>\n<p>I mean the original <code>[variant idx]</code> version also wasn't formattable...</p>\n<p>I know we tried to avoid nesting with another layer, but we could have <code>project!(foo, [variant!(..end)])</code></p>",
+        "id": 585477403,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776185232
+    },
+    {
+        "content": "<p>Actually the field projection syntax with leading dot is also not formatable. So colon is fine</p>",
+        "id": 585477826,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776185377
+    },
+    {
+        "content": "<p>but we could also not have a leading dot?</p>",
+        "id": 585477925,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776185408
+    },
+    {
+        "content": "<p>I put it there for extensibility, so we could add other projection types, e.g. custom projection that is just an expression. I mostly have the register macro in mind when designing the syntax</p>",
+        "id": 585478512,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776185596
+    },
+    {
+        "content": "<p>I can tell you from experience that formattability is pretty important for a macro, I think it's one of the \"mistakes\" we made when designing <code>init!</code>. It's of course a tradeoff, since <code>&lt;-</code> makes it clear when an initializer is used</p>",
+        "id": 585479253,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776185849
+    },
+    {
+        "content": "<p>maybe it's not as bad for the <code>project</code> macro, since there won't be \"big expressions\" put in there, but who knows...</p>",
+        "id": 585479391,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1776185890
+    },
+    {
+        "content": "<p>for <code>project</code> macro the mut keyword also blocks formatting.</p>",
+        "id": 585479612,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776185959
+    },
+    {
+        "content": "<p>Perhaps the long term solution is to have custom formatting plugin for rustfmt so macros can be customize formatted (just thinking out loud)</p>",
+        "id": 585479807,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1776186013
+    },
+    {
+        "content": "<p>Yeah, I think for <code>project!</code> it is probably fine, as the expressions won't get crazy, for <code>init!</code> is a much bigger concern.</p>",
+        "id": 585480231,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776186118
+    },
+    {
+        "content": "<p>Sashiko pointed out issues with alignment of untyped regions in <a href=\"https://sashiko.dev/#/patchset/20260608-io_projection-v3-0-c5cde13a5ec4%40garyguo.net\">https://sashiko.dev/#/patchset/20260608-io_projection-v3-0-c5cde13a5ec4%40garyguo.net</a>, which after some thinking, I think is a more general problem.</p>",
+        "id": 601394780,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781003129
+    },
+    {
+        "content": "<p>I did a quick grep on device trees, there are GPIO drivers which use 1-byte-aligned (or sized) I/O regions too, and I would expect them to want to use the same API that requests <code>IoMem</code></p>",
+        "id": 601395029,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781003195
+    },
+    {
+        "content": "<p>Perhaps it's inevitable that we add custom alignment support for I/O regions? <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span></p>",
+        "id": 601395219,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781003245
+    },
+    {
+        "content": "<p>Does this mean the content might also be accessed unaligned? I.e. what if you have an I/O region of <code>[u32]</code> with an alignment of <code>1</code>?</p>",
+        "id": 601400434,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781004630
+    },
+    {
+        "content": "<p>Misaligned access is still broken at least for MMIO, so this should be forbidden by <code>io_addr_assert</code></p>",
+        "id": 601400797,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004728
+    },
+    {
+        "content": "<p>So if you requested a region with alignment of 1, then you can only use read u8 with non-fallible methods, <code>try_</code> would do a runtime alignment check.</p>",
+        "id": 601400969,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004781
+    },
+    {
+        "content": "<p>But is that a possible access pattern based on what you have seen? Or are all the 1-aligned I/O regions accessing <code>[u8]</code>s?</p>",
+        "id": 601401070,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781004810
+    },
+    {
+        "content": "<p>well if it's C I guess they are all <code>[u8]</code> by definition, but you probably see what I mean. :)</p>",
+        "id": 601401140,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781004829
+    },
+    {
+        "content": "<p>They're just doing byte access</p>",
+        "id": 601401144,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004829
+    },
+    {
+        "content": "<p>There's no atomicity for non-aligned access anyway, so if a driver needs to do misaligned access they'd better just read multiple times :)</p>",
+        "id": 601401391,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004891
+    },
+    {
+        "content": "<p>My point here is that we cannot just say \"untyped region has a fixed alignment\" and satisfy all drivers</p>",
+        "id": 601401530,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004932
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> given this is kinda existing issue, how should I handle this for I/O projection series? I'm inclined to say \"Region\" has 4-byte alignment (and add checks to constructor) so Tyr and Nova are happy, and we can extend it with customizable alignment later on?</p>",
+        "id": 601401728,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781004993
+    },
+    {
+        "content": "<p>Would the alignment become a generic parameter then? I see you are using <code>#[repr(align(x))]</code>so I'm not sure what we can do concretely (sorry, still need to go in depth through the series)</p>",
+        "id": 601401788,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781005010
+    },
+    {
+        "content": "<p>You can do this: <a href=\"https://lore.kernel.org/rust-for-linux/DILXW5AK9O8E.3TESJB45UPTZM@garyguo.net/\">https://lore.kernel.org/rust-for-linux/DILXW5AK9O8E.3TESJB45UPTZM@garyguo.net/</a></p>",
+        "id": 601401903,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781005036
+    },
+    {
+        "content": "<p>I already have a working version of <code>Region</code> type that just adds another parameter</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Region</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">SIZE</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ALIGN</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">4</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">Align</span><span class=\"o\">&lt;</span><span class=\"n\">ALIGN</span><span class=\"o\">&gt;</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ValidAlign</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">align</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Align</span><span class=\"o\">&lt;</span><span class=\"n\">ALIGN</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">],</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but this also needs to be propagated to <code>Bar</code> and <code>IoMem</code> to which point I think it's becoming big enough change that it might deserve its own series and not just fixed inside the projection series :)</p>",
+        "id": 601402429,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781005164
+    },
+    {
+        "content": "<p>(Well, probably not <code>Bar</code>, as I think bars are sufficiently aligned always)</p>",
+        "id": 601402554,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781005204
+    },
+    {
+        "content": "<p>if this can be done as a follow-up then I think I would be grateful. The current series already packs quite a few punches. :)</p>",
+        "id": 601402642,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781005224
+    },
+    {
+        "content": "<p>but yeah if alignment can be an optional generic parameter then it would only become visible when actually needed, so I think I like that.</p>",
+        "id": 601402813,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1781005271
+    },
+    {
+        "content": "<p>Most pointer types imply alignment by having a target type</p>",
+        "id": 601403234,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1781005376
+    },
+    {
+        "content": "<p>Which is why I'm trying to have <code>Region</code> to have the correct alignment, it's the \"Target\" type for untyped regions.</p>",
+        "id": 601403751,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781005491
+    },
+    {
+        "content": "<p>Yes, the current code assumes that the base address is aligned according to the access primitives that are used, which should be sufficient.</p>\n<p>You correctly identified the the gap with qword accesses, which should be fixed by considering the base address, which your patches already do.</p>",
+        "id": 601409407,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781006875
+    },
+    {
+        "content": "<p>Well, the issue is that the base <code>Region</code> type, if made 4-byte aligned, is too restrictive</p>",
+        "id": 601409854,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781006983
+    },
+    {
+        "content": "<p>An example is arch/arm/boot/dts/cirrus/ep7209.dtsi with GPIO address of 0x80000001 and size 1. drivers/gpio/gpio-clps711x.c uses <code>devm_platform_ioremap_resource</code> to map it. If we make <code>Region</code> 4-byte aligned, then our Rust map API needs to reject it</p>",
+        "id": 601410164,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781007048
+    },
+    {
+        "content": "<p>So for this case, it needs to be able to switch to a 1-byte aligned region (or have API available to just do map and get <code>IoMem&lt;u8&gt;</code> perhaps?)</p>",
+        "id": 601410371,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1781007096
+    },
+    {
+        "content": "<p>Yes, I'm well aware, I wasn't done writing (currently on the run). :)</p>",
+        "id": 601410596,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781007155
+    },
+    {
+        "content": "<p>Everything else, i.e. Region being generic over the base alignment can be done subsequently, or rather when it is needed.</p>",
+        "id": 601411026,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781007261
+    },
+    {
+        "content": "<p>I think it is a very uncommon use case and the example you found is already a bit odd, as it creates a driver instance per GPIO bank. If it wouldn't and just handle all banks of the controller in a single driver instance, it would be 4 bytes aligned.</p>",
+        "id": 601411393,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781007349
+    },
+    {
+        "content": "<p>(I found the same example after reading your post.)</p>",
+        "id": 601411822,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781007449
+    }
+]

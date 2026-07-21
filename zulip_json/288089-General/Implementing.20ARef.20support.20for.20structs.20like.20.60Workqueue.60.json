@@ -1,0 +1,302 @@
+[
+    {
+        "content": "<p>A recurring problem I've been noticing that we keep running into w/r/t the DRM bindings is the subclass pattern that DRM interfaces use. For instance:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"o\">&gt;</span>\n</code></pre></div>\n<p><code>drm::Driver</code> has an associated type that represents the driver's private data, <code>Data</code>, which can be accessed through <code>Deref&lt;T::Data&gt;</code>. The problem is it's pretty common for a driver to want to be able to store things like workqueues in <code>Data</code>, but because we can't implement <code>WorkItem</code> for <code>drm::Device</code>. The thing is though, I've seen this issue come up in pretty much every subclassed type like this in DRM.</p>\n<p>With all of this being said - there's no normal case where an object which implements <code>AlwaysRefCounted</code> and does not embed some sort of data in itself would actually need to use workqueues. It's pretty much exclusive to implementors with embedded data, which is why I actually think it would make sense to introduce a new trait: <code>ARefContainer</code>.</p>\n<p>The basic idea is that any type that implements <code>AlwaysRefCounted</code> and has user-specific data embedded in itself (<code>T::Embedded</code>) can implement <code>ARefContainer</code> which provides methods for going from <code>*mut T -&gt; *mut T::Embedded</code> and vice-versa. There, we can start implementing workqueue support for types implementing <code>ARefContainer</code> among other things in the future like <code>HrTimer</code>. Does this seem like a good idea?</p>",
+        "id": 554794695,
+        "sender_full_name": "Lyude",
+        "timestamp": 1762810030
+    },
+    {
+        "content": "<p>I have this problem for <code>block::mq::Request&lt;T: Operations&gt;</code> as well, but <code>Operations::RequestData: HasHrTimer</code>. For now I have </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HrTimerPointer</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Request</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">RequestData</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasHrTimer</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">RequestData</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"o\">..</span><span class=\"p\">.</span>\n</code></pre></div>\n<p>So I think a generic solution would be great.</p>",
+        "id": 554862690,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1762851055
+    },
+    {
+        "content": "<p>I'm pretty sure that <code>drm::Device</code> could implement <code>WorkItem</code> with dispatch to the private data.</p>",
+        "id": 554864518,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762851710
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> how would this look like with multiple workqueues?</p>",
+        "id": 554900812,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762863592
+    },
+    {
+        "content": "<p>I believe there's the ID thingy for that.</p>",
+        "id": 554900913,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762863622
+    },
+    {
+        "content": "<p>Right, but how would you make this work for multiple workqueues at the driver level? It doesn't have any control over drm::Device and it can't add fields. OTOH, drm::Device can't really know how many workqueues the driver needs.</p>",
+        "id": 554902583,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762864144
+    },
+    {
+        "content": "<p>I am not sure about <code>ARefContainer</code> in general, but implementing support for <code>ARef</code> in <a href=\"http://workqueue.rs\">workqueue.rs</a> would be one step in solving this. We need to implement WorkItem for T::Data, but have the pointer type be ARef&lt;drm::Device&gt;</p>",
+        "id": 554903263,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762864373
+    },
+    {
+        "content": "<p>We can implement WorkItem on drm::Device whenever the inner data implements it. And we can add a WorkItemPointer impl for ARef.</p>",
+        "id": 554903457,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762864432
+    },
+    {
+        "content": "<p>I don't understand this tbh. Implementing WorkItem for drm::Device will let it specify a single <code>run()</code> function. But we may have multiple workqueues at the T::Data level, and the IDs won't magically solve this IIUC</p>",
+        "id": 554904020,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762864603
+    },
+    {
+        "content": "<p>Also, even if this works, it would solve the problem for drm::Device. The problem will remain for other subsystems</p>",
+        "id": 554904185,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762864661
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">OFFSET</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">::</span><span class=\"n\">OFFSET</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 554904524,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762864770
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> can you elaborate on this some more when you have the time? I'm trying very hard to make this work, unsuccessfully</p>",
+        "id": 554910126,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762866590
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">OFFSET</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">::</span><span class=\"n\">OFFSET</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 554911096,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762866940
+    },
+    {
+        "content": "<p>And the impl for ARef is identical to the one for Arc</p>",
+        "id": 554911121,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762866947
+    },
+    {
+        "content": "<p>So the Work lives in T::Data, correct? It has to IIUC.</p>\n<p>I don't see a way to implement work_container_of where we have to go back from T::Data::WorkN to drm::Device&lt;T&gt; (i.e.: *mut Self) </p>\n<p>Also what is this OFFSET associated type? It's not a part of the trait</p>",
+        "id": 554916153,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868489
+    },
+    {
+        "content": "<p>Oh, I was doing it on the 6.12 version of the traits.</p>",
+        "id": 554916312,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762868550
+    },
+    {
+        "content": "<p>The idea is to implement the traits as usual for <code>T</code>. And then you provide an implementation of <code>drm::Device</code> that does offset to/from the data field to the <code>drm::Device</code> struct and then calls into the function on <code>T</code>.</p>",
+        "id": 554916860,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762868716
+    },
+    {
+        "content": "<p>To expand a bit, T::Data may be an Arc, like Arc&lt;TyrData&gt;. Hence my comment about going back to *mut Self. </p>\n<p>Piping this to T::Data::work_container_of will get us a pointer to ArcInner::Data IIUC</p>",
+        "id": 554916940,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868740
+    },
+    {
+        "content": "<blockquote>\n<p>offset to/from the data field to the <code>drm::Device</code></p>\n</blockquote>\n<p>There is no way to do the \"from\" part</p>",
+        "id": 554917011,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868761
+    },
+    {
+        "content": "<p>If <code>T::Data</code> is an <code>Arc</code> then you just schedule the <code>Arc</code></p>",
+        "id": 554917107,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762868796
+    },
+    {
+        "content": "<p>To schedule the <code>ARef&lt;drm::Device&gt;</code> then the <code>Work</code> <em>must</em> be stored inline in the same allocation.</p>",
+        "id": 554917193,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762868818
+    },
+    {
+        "content": "<p>that's the whole problem...you need a drm::Device&lt;T&gt; to create gem objects, not T::Data</p>",
+        "id": 554917285,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868839
+    },
+    {
+        "content": "<p>How about e.g. modifying it so that <code>T::Data</code> is a struct containing an <code>Arc&lt;TyrData&gt;</code> and a <code>Work</code>?</p>",
+        "id": 554917354,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762868854
+    },
+    {
+        "content": "<p>you very specifically need access to drm::Device&lt;T&gt; and not anything else</p>",
+        "id": 554917450,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868884
+    },
+    {
+        "content": "<p>just to be clear, the pattern of scheduling the Arc (i.e.: T::Data == Arc&lt;TyrData&gt;) has worked so far, until you need drm::Device inside <code>run()</code>, then you're out of luck</p>",
+        "id": 554917807,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762868990
+    },
+    {
+        "content": "<p>man...we <em>really</em> need this Weak&lt;T&gt; thing</p>",
+        "id": 554918045,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869054
+    },
+    {
+        "content": "<p>It sounds like the <code>Work</code> needs to be in <code>drm::Device</code> directly?</p>",
+        "id": 554918330,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869143
+    },
+    {
+        "content": "<p>IIUC, each workqueue needs its own Work, so we're back to the beginning: how do we dynamically create enough instances of Work at drm::Device if we don't know how many workqueues will be used by the driver?</p>",
+        "id": 554918709,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869244
+    },
+    {
+        "content": "<blockquote>\n<p>man...we <em>really</em> need this Weak&lt;T&gt; thing</p>\n</blockquote>\n<p>This OTOH would trivially solve everything: you simply go back from T::Data to drm::Device by upgrading the Weak. Requires 0 changes to everything else other than adding Weak&lt;T&gt; itself of course</p>",
+        "id": 554918857,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869289
+    },
+    {
+        "content": "<p>You put the Work items in your driver data type, not in the drm::Device abstraction.</p>",
+        "id": 554918993,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869325
+    },
+    {
+        "content": "<p>Like I mentioned, you make it so that your data type is not <code>Arc&lt;TyrData&gt;</code>, but a struct containing the number of <code>Work</code> items you need and an <code>Arc&lt;TyrData&gt;</code></p>",
+        "id": 554919074,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869346
+    },
+    {
+        "content": "<p>How do you get drm::Device&lt;T&gt; from this? ^</p>",
+        "id": 554919331,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869418
+    },
+    {
+        "content": "<p>drm::Device needs an impl of the workqueue traits that dispatches to the Data type</p>",
+        "id": 554919473,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869458
+    },
+    {
+        "content": "<p>So the driver ends up writing</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">WorkItem</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">MyDrmData</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">drm</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">MyDrmData</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n<span class=\"w\">   </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">run</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.)</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>where <code>MyDrmData</code> is the struct I mentioned</p>",
+        "id": 554919786,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869536
+    },
+    {
+        "content": "<p>ah, wait, I think I finally understand now, you want to keep everything you said so far, <em>plus</em>  this:</p>\n<blockquote>\n<p>Like I mentioned, you make it so that your data type is not <code>Arc&lt;TyrData&gt;</code>, but a struct containing the number of <code>Work</code> items you need and an <code>Arc&lt;TyrData&gt;</code></p>\n</blockquote>\n<p>So that the data lives inline in drm::Device, and we can implement HasData::work_container_of() here:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n</code></pre></div>",
+        "id": 554921107,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869874
+    },
+    {
+        "content": "<p>that looks right</p>",
+        "id": 554921312,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869941
+    },
+    {
+        "content": "<p>By first using T::Data::work_container_of to get *mut T::Data, and then using another container_of to go from *mut T::Data to drm::Device&lt;T&gt;, now that they are inline.</p>\n<p>Correct?</p>",
+        "id": 554921313,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869941
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 554921325,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762869946
+    },
+    {
+        "content": "<p>you have 0 guarantees that T::Data is stored inline. Someone can trivially do the Arc thing and break this code.</p>",
+        "id": 554921435,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869976
+    },
+    {
+        "content": "<p>because it's legal in the type system for T::Data to be Arc&lt;Something&gt;</p>",
+        "id": 554921496,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762869993
+    },
+    {
+        "content": "<p>If <code>T::Data</code> is <code>Arc&lt;_&gt;</code> then it does not implement <code>HasWork</code> and the impl will not apply.</p>",
+        "id": 554921643,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762870032
+    },
+    {
+        "content": "<p>so that's not a problem</p>",
+        "id": 554921696,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762870046
+    },
+    {
+        "content": "<blockquote>\n<p>If <code>T::Data</code> is <code>Arc&lt;_&gt;</code> then it does not implement <code>HasWork</code> and the impl will not apply.</p>\n</blockquote>\n<p>hmm, are you sure? there are so many traits at play here that I am a bit confused</p>",
+        "id": 554923123,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762870448
+    },
+    {
+        "content": "<p>Yes <code>Arc&lt;MyStruct&gt;</code> does not implement <code>HasWork</code>. Only <code>MyStruct</code> can/should implement it.</p>",
+        "id": 554923276,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762870496
+    },
+    {
+        "content": "<p><code>HasWork</code> and <code>WorkItem</code> go on the item inside the pointer. <code>WorkItemPointer</code> and <code>RawWorkItem</code> go on the pointer type.</p>",
+        "id": 554923380,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1762870523
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> are you happy with this solution?</p>",
+        "id": 554930721,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762872452
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">HasWork</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">Work</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">WorkItem</span><span class=\"p\">;</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">raw_get_work</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">raw</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">ptr</span><span class=\"p\">).</span><span class=\"n\">data</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">raw_get_work</span><span class=\"p\">(</span><span class=\"n\">data_ptr</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">work_container_of</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">work_container_of</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">container_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">data_ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 554931115,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1762872550
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/288089-General/topic/Implementing.20ARef.20support.20for.20structs.20like.20.60Workqueue.60/near/554931115\">said</a>:</p>\n<blockquote>\n<p><div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">HasWork</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">Work</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">workqueue</span><span class=\"p\">::</span><span class=\"n\">WorkItem</span><span class=\"p\">;</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">WorkItem</span><span class=\"o\">&lt;</span><span class=\"n\">ID</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">type</span><span class=\"w\"> </span><span class=\"nc\">Pointer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">;</span>\n\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">run</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"k\">where</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HasWork</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">raw_get_work</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">raw</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">ptr</span><span class=\"p\">).</span><span class=\"n\">data</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">raw_get_work</span><span class=\"p\">(</span><span class=\"n\">data_ptr</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">work_container_of</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"o\">&lt;</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">data_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"p\">::</span><span class=\"n\">work_container_of</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"k\">crate</span><span class=\"p\">::</span><span class=\"n\">container_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">data_ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Yeah I'm fine with this! Though we will need to do similar implementations for gem objects, KMS and such, etc. - which was the reason I was curious whether or not we could do this for <code>ARef</code> objects in general</p>",
+        "id": 554973394,
+        "sender_full_name": "Lyude",
+        "timestamp": 1762885585
+    },
+    {
+        "content": "<p>I don't feel too strongly either way though</p>",
+        "id": 554973579,
+        "sender_full_name": "Lyude",
+        "timestamp": 1762885655
+    },
+    {
+        "content": "<p>Oh - one thing we should also consider here: if we go along with the <code>DeviceCtx</code> idea I've been working on, we'll definitely want to make sure this works with it as well. I think it should be fine, as long as we're able to define <code>WorkItem::Pointer</code> as <code>ARef&lt;drm::Device&lt;Self, C&gt;&gt;</code> (where <code>C</code> can be any <code>DeviceCtx</code> value)</p>",
+        "id": 555649771,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763144015
+    }
+]

@@ -1,0 +1,332 @@
+[
+    {
+        "content": "<p>We have <code>ARef::from_raw()</code>, which doesn't increase the refcount itself, i.e. it takes away the reference count of the input pointer. However, <code>Device::from_raw()</code> will increase the refcount of device, i.e. it uses its own reference count.</p>\n<p>I find this may be a bit confusing in the future, hence bring this up. Thoughts? <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 450324501,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720576577
+    },
+    {
+        "content": "<p>I would say that for <code>from_raw</code>, it shouldn't increment the refcount for consistency with te standard library <code>Arc::from_raw</code>.</p>",
+        "id": 450437708,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1720614428
+    },
+    {
+        "content": "<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>",
+        "id": 450493371,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720626754
+    },
+    {
+        "content": "<p>Yes, so a <code>-&gt; ARef&lt;_&gt;</code> function may have at least two semantics: 1) using the reference count provided by the caller, or 2) using an own reference count. I feel we better have some general naming rule to separate these two cases.</p>",
+        "id": 450504050,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720629053
+    },
+    {
+        "content": "<p>For example, case <a href=\"https://github.com/Rust-for-Linux/linux/issues/2\">#2</a> could have a <code>get_</code> prefix indicating the refcount increased.</p>",
+        "id": 450504577,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720629178
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450493371\">said</a>:</p>\n<blockquote>\n<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>\n</blockquote>\n<p>I am a bit confused, you said that you agree with Alice, but you say that you want <code>from_raw</code> to increment the refcount?</p>",
+        "id": 450507063,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720630041
+    },
+    {
+        "content": "<p>another alternative for your current situation would be to use <code>let r = Device::as_ref(..);</code> and then <code>ARef::from(r)</code></p>",
+        "id": 450507308,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720630140
+    },
+    {
+        "content": "<p>then we could avoid having a <code>from_raw</code> function.</p>",
+        "id": 450507357,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720630159
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450507063\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450493371\">said</a>:</p>\n<blockquote>\n<p>I agree with Alice, but for a different reason. I'd argue that <code>ARef::from_raw</code> takes ownership of the reference that is passed in. In <code>Device</code> we need an extra increment of the refcount, because we don't own the reference of the raw device pointer that is passed to us, but instead are only guaranteed that it's valid for the duration of the function to increase the reference count to take our own one.</p>\n</blockquote>\n<p>I am a bit confused, you said that you agree with Alice, but you say that you want <code>from_raw</code> to increment the refcount?</p>\n</blockquote>\n<p>AFAICS, I did not. I said that in <code>Device::from_raw</code> we need to increment the ref-count by one, because we don't own a reference to the <code>Device</code> yet. <code>ARef::from_raw</code> expects us to own the reference to the thing we pass the <code>ARef::from_raw</code> though.</p>",
+        "id": 450507581,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720630229
+    },
+    {
+        "content": "<p>I understood Alice in that all <code>from_raw</code> functions should take control of a refcount</p>",
+        "id": 450507704,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720630276
+    },
+    {
+        "content": "<p>Oh, you mean as in every method named <code>from_raw</code>?</p>",
+        "id": 450508017,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720630380
+    },
+    {
+        "content": "<p>that's how I understood it, yes, but I don't know if Alice also meant it that way</p>",
+        "id": 450508092,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720630406
+    },
+    {
+        "content": "<p>I understood it as the semantics of <code>ARef::from_raw</code> should be aligned to upstream <code>Arc::from_raw</code>.</p>\n<p>I don't think that <code>Device::from_raw</code> and <code>ARef::from_raw</code> should have the same semantics, actually for <code>Device::from_raw</code> that'd be a bug.</p>",
+        "id": 450508326,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720630482
+    },
+    {
+        "content": "<p><code>Device::from_raw</code> doesn't consume the reference, that is passed in.</p>",
+        "id": 450508402,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720630514
+    },
+    {
+        "content": "<p>I’d suggest we change the name of Device::from_raw() instead of the implementation</p>",
+        "id": 450510280,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720631076
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450507308\">said</a>:</p>\n<blockquote>\n<p>another alternative for your current situation would be to use <code>let r = Device::as_ref(..);</code> and then <code>ARef::from(r)</code></p>\n</blockquote>\n<p>can't we just do this and avoid the <code>from_raw</code> function alltogether?</p>",
+        "id": 450510326,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720631099
+    },
+    {
+        "content": "<p>We can, but having a function doing the above doesn’t hurt, right? Plus if users have to repeat this again and again, they would introduce their version of a helper function.</p>",
+        "id": 450510717,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720631220
+    },
+    {
+        "content": "<p>but to some degree, you are right, the implementation of that function (whose name now is Device::from_raw()) should use as_ref() + from(), instead of directly calling get_device()</p>",
+        "id": 450511789,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720631496
+    },
+    {
+        "content": "<p>e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"sd\">/// Gets a refcounted reference to [`Self`]</span>\n<span class=\"w\">    </span><span class=\"sd\">///</span>\n<span class=\"w\">    </span><span class=\"sd\">/// # Safety</span>\n<span class=\"w\">    </span><span class=\"sd\">/// `ptr` must be a valid pointer with at least one reference count until the function return.</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">get_from_raw</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">device</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: Per function safety requirement, `ptr` is a valid pointer and has at least one</span>\n<span class=\"w\">        </span><span class=\"c1\">// reference count until the function return, which is larger then the scope of the `&amp;Device`</span>\n<span class=\"w\">        </span><span class=\"c1\">// created by `Device::as_ref(ptr)`.</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 450515636,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720632397
+    },
+    {
+        "content": "<p>Sounds reasonable, I'd call it <code>from_raw_get</code> though.</p>",
+        "id": 450518895,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720633128
+    },
+    {
+        "content": "<p>I wouldn't create such a function in the first place. How many times do you need to call it anyways? I think writing</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>instead of</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">from_raw_get</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n</code></pre></div>\n<p>doesnt really hurt. and creating the additional function increases the total number of <code>unsafe</code> by 2</p>",
+        "id": 450522332,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720634044
+    },
+    {
+        "content": "<p>I should say I'm OK with removing the function if no real user, I was more worried about the inconsistency.</p>",
+        "id": 450567600,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720646494
+    },
+    {
+        "content": "<p>but we certainly need more document on the usage of the \".into()\" above.</p>",
+        "id": 450567734,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720646532
+    },
+    {
+        "content": "<p>Generally, I'm fine with just doing</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>but I think we need to consider new people looking at the API of <code>Device</code> only finding <code>Device::as_ref</code>.</p>\n<p>Having a dedicated <code>Device::from_raw_get</code> makes it obvious  to new  people that this is an option.</p>",
+        "id": 450672635,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720693388
+    },
+    {
+        "content": "<p>we could add this as an example on the docs on debice and/or on as_ref</p>",
+        "id": 450680777,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720696422
+    },
+    {
+        "content": "<p>Would you like to submit a patch doing that or guide someone else (via a first good issue maybe)?  :)</p>",
+        "id": 450750167,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720714150
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span>  Sounds reasonable, adding an example might be tricky though, since we can't create a valid <code>Device</code> in the example. I made the <code>Firmware</code> example no_run for that purpose and did hide the <code>Device</code> creation, since it's not relevant for the <code>Firmware</code> example.</p>\n<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span>  Do you mean Benno or me?</p>",
+        "id": 450750751,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720714295
+    },
+    {
+        "content": "<p>I meant Benno</p>",
+        "id": 450751850,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720714535
+    },
+    {
+        "content": "<p>I currently don't have the bandwidth, but if you want to create a good-first-issue, then go ahead</p>",
+        "id": 450752264,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720714610
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450751850\">said</a>:</p>\n<blockquote>\n<p>I meant Benno</p>\n</blockquote>\n<p>Because like I said, I would just rename the <code>Device::from_raw()</code> into <code>Device::from_raw_get()</code>, and I I take it Danilo you are OK with it. But if Benno thinks it's important to avoid <code>Device::from_raw_get()</code> at all, I'm happy to see a patch from him ;-)</p>",
+        "id": 450753347,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720714842
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450752264\">said</a>:</p>\n<blockquote>\n<p>I currently don't have the bandwidth, but if you want to create a good-first-issue, then go ahead</p>\n</blockquote>\n<p>Done: <a href=\"https://github.com/Rust-for-Linux/linux/issues/1088\">https://github.com/Rust-for-Linux/linux/issues/1088</a></p>\n<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> let me know if I should change anything ;-)</p>",
+        "id": 450756654,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720715673
+    },
+    {
+        "content": "<p>By the way, I copied and pasted the \"This requires ...\" paragraph from other first good issues, it's very handy ;-)</p>",
+        "id": 450757014,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720715796
+    },
+    {
+        "content": "<p>looks good!</p>\n<p>IIUC the device abstractions aren't upstreamed yet, right? in that case it might be easier for Danilo to just change the next version</p>",
+        "id": 450757678,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720716044
+    },
+    {
+        "content": "<p>It's already in Greg's tree</p>",
+        "id": 450757773,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720716081
+    },
+    {
+        "content": "<p>and it's already rc7, so likely we cannot make it.</p>",
+        "id": 450758245,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720716246
+    },
+    {
+        "content": "<p>but if Danilo has his own plan, I'm happy to close the issue.</p>",
+        "id": 450758457,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720716323
+    },
+    {
+        "content": "<p>did Greg say that he picked the patches? I don't see such a mail</p>",
+        "id": 450758628,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1720716378
+    },
+    {
+        "content": "<p>I don't think he mentioned this at the exact time he picked it up (he said he was going to at v3, and he picked at v4), it's now sitting in device-core tree:</p>\n<p><a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/commit/?h=driver-core-next&amp;id=a674fefd17324fc467f043568e738b80ca22f2b4\">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/commit/?h=driver-core-next&amp;id=a674fefd17324fc467f043568e738b80ca22f2b4</a></p>",
+        "id": 450759332,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1720716635
+    },
+    {
+        "content": "<p>When Greg applies something to his tree, only the submitter (and maybe tags) get notified by a bot.</p>",
+        "id": 450777151,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1720722004
+    },
+    {
+        "content": "<p>Yeah, I would just call it something else than <code>from_raw</code>. E.g., you can call it <code>get_device</code> to reuse the name of the existing C function of the same name.</p>",
+        "id": 450811041,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1720731913
+    },
+    {
+        "content": "<p>Hello! I have tried to solve this issue as my first contribution and im having a little trouble with replacing</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">from_raw_get</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n</code></pre></div>\n<p>with</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>The <code>Device</code> struct does not implement the necessary traits for the <code>as_ref()</code> call. From what I understand this is to be submitted in this patch:<br>\n<code>https://lore.kernel.org/rust-for-linux/20240618234025.15036-10-dakr@redhat.com/</code>.<br>\nHow should i proceed?</p>",
+        "id": 451734039,
+        "sender_full_name": "Panagiotis Foliadis",
+        "timestamp": 1721127549
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"736615\">@Panagiotis Foliadis</span> <code>Device</code> implements a method <code>as_ref</code>.</p>\n<p>In rust/kernel/pci.c you can call it like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">device</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">pdev</span><span class=\"p\">).</span><span class=\"n\">dev</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>If we go for removing <code>Device::from_raw</code> entirely, then a patch would only need to do exactly this, remove the function.</p>\n<p>If we go for a better implementation (which I personally still prefer), namely <code>Device::from_raw_get</code>, you do something similar to the above in that method.</p>",
+        "id": 451741900,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1721130729
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/451741900\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"736615\">Panagiotis Foliadis</span> <code>Device</code> implements a method <code>as_ref</code>.</p>\n</blockquote>\n<p>Does <code>Device::as_ref</code> exist on any of the rust-for-linux upstream branches?</p>",
+        "id": 451769826,
+        "sender_full_name": "Charalampos Mitrodimas",
+        "timestamp": 1721139649
+    },
+    {
+        "content": "<p>Ah, this is on it's way upstream (Linus' tree) and sits in Greg's tree until it's merged in the next days.</p>\n<p>Use this tree as base: <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next\">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a></p>",
+        "id": 451770666,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1721139869
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/451770666\">said</a>:</p>\n<blockquote>\n<p>Ah, this is on it's way upstream (Linus' tree) and sits in Greg's tree until it's merged in the next days.</p>\n<p>Use this tree as base: <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next\">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a></p>\n</blockquote>\n<p>Oh woah some of your work got upstream? Nice :D</p>",
+        "id": 454011363,
+        "sender_full_name": "Lyude",
+        "timestamp": 1721929410
+    },
+    {
+        "content": "<p>Yeah, baby steps we take. :)</p>",
+        "id": 454011560,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1721929465
+    },
+    {
+        "content": "<p>Ok so im having a couple of issues in understanding what this issue needs exactly.</p>\n<p>From what I understand, the <code>Device::from_raw</code> function returns a mutable reference to a <code>Device(Opaque&lt;bindings::phy_device)</code> struct by passing a <code>bindings::phy_device</code> mutable pointer.<br>\nThe <code>as_ref</code> function (which needs the implementation of the AsRef trait in the <code>Device</code> struct) is a reference to reference conversion, therefore it has a different functionality.</p>\n<p>Also the <code>as_ref</code> method does not exist in the <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next\">https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/driver-core.git/log/?h=driver-core-next</a> branch for the <code>Device(Opaque&lt;bindings&gt;::phy_device)</code> struct and im still not sure if i need to implement this or just remove the <code>from_raw</code> function (since just removing the <code>from_raw</code> function will not compile).</p>",
+        "id": 454288718,
+        "sender_full_name": "Panagiotis Foliadis",
+        "timestamp": 1721996667
+    },
+    {
+        "content": "<p>You're looking at <code>phy::Device</code>. We're talking about the generic <code>device::Device</code> though.</p>\n<p>The code also just hit Linus' tree, you can find <code>device::Device::from_raw</code> here: <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/device.rs#n54\">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/device.rs#n54</a></p>",
+        "id": 454295155,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1721999127
+    },
+    {
+        "content": "<p>Sorry for the late response!<br>\nI have a question about the examples that I need to add to the documentation.<br>\nFor the case of the <code>Device::as_ref</code> I believe the </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>is enough, however im struggling to find a correct example to add to the <code>ARef</code> struct that connects to the removal of the <code>Device::from_raw</code> function  (since the github issues specifies that an example should be added to the <code>ARef</code> struct).<br>\nThe <code>Device::as_ref</code> + <code>into()</code> doesnt have anything to do with the <code>ARef</code> struct right?</p>",
+        "id": 464358099,
+        "sender_full_name": "Panagiotis Foliadis",
+        "timestamp": 1724329536
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/450510717\">said</a>:</p>\n<blockquote>\n<p>We can, but having a function doing the above doesn’t hurt, right? Plus if users have to repeat this again and again, they would introduce their version of a helper function.</p>\n</blockquote>\n<p>I degree with <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span>   when he say that if users have to repeat this again, again and again ... Some people will create the help function. <br>\nI think that we should rename this function for <code>get_from_raw()</code> for difference between <code>Arch::from_raw()</code> and inside this function only call <code>Device::as_ref().into()</code>, how already suggest for <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span></p>\n<p>I'm a started in the linux kernel contributor, and I can sent a patch for this... My change is anything like </p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/device.rs b/rust/kernel/device.rs</span>\n<span class=\"gh\">index 851018eef885..915abc9e7616 100644</span>\n<span class=\"gd\">--- a/rust/kernel/device.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/device.rs</span>\n<span class=\"gu\">@@ -41,28 +41,15 @@</span>\n<span class=\"w\"> </span>pub struct Device(Opaque&lt;bindings::device&gt;);\n\n<span class=\"w\"> </span>impl Device {\n<span class=\"gd\">-    /// Creates a new reference-counted abstraction instance of an existing `struct device` pointer.</span>\n<span class=\"gi\">+    /// Gets a refcounted reference to [`Self`]</span>\n<span class=\"w\"> </span>    ///\n<span class=\"w\"> </span>    /// # Safety\n<span class=\"gd\">-    ///</span>\n<span class=\"gd\">-    /// Callers must ensure that `ptr` is valid, non-null, and has a non-zero reference count,</span>\n<span class=\"gd\">-    /// i.e. it must be ensured that the reference count of the C `struct device` `ptr` points to</span>\n<span class=\"gd\">-    /// can't drop to zero, for the duration of this function call.</span>\n<span class=\"gd\">-    ///</span>\n<span class=\"gd\">-    /// It must also be ensured that `bindings::device::release` can be called from any thread.</span>\n<span class=\"gd\">-    /// While not officially documented, this should be the case for any `struct device`.</span>\n<span class=\"gd\">-    pub unsafe fn from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>\n<span class=\"gd\">-        // SAFETY: By the safety requirements, ptr is valid.</span>\n<span class=\"gd\">-        // Initially increase the reference count by one to compensate for the final decrement once</span>\n<span class=\"gd\">-        // this newly created `ARef&lt;Device&gt;` instance is dropped.</span>\n<span class=\"gd\">-        unsafe { bindings::get_device(ptr) };</span>\n<span class=\"gd\">-</span>\n<span class=\"gd\">-        // CAST: `Self` is a `repr(transparent)` wrapper around `bindings::device`.</span>\n<span class=\"gd\">-        let ptr = ptr.cast::&lt;Self&gt;();</span>\n<span class=\"gd\">-</span>\n<span class=\"gd\">-        // SAFETY: `ptr` is valid by the safety requirements of this function. By the above call to</span>\n<span class=\"gd\">-        // `bindings::get_device` we also own a reference to the underlying `struct device`.</span>\n<span class=\"gd\">-        unsafe { ARef::from_raw(ptr::NonNull::new_unchecked(ptr)) }</span>\n<span class=\"gi\">+    /// `ptr` must be a valid pointer with at least one reference count until the function return.</span>\n<span class=\"gi\">+    pub unsafe fn get_from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>\n<span class=\"gi\">+        // SAFETY: Per function safety requirement, `ptr` is a valid pointer and has at least one</span>\n<span class=\"gi\">+        // reference count until the function return, which is larger then the scope of the `&amp;Device`</span>\n<span class=\"gi\">+        // created by `Device::as_ref(ptr)`.</span>\n<span class=\"gi\">+        unsafe { Device::as_ref(ptr) }.into()</span>\n<span class=\"w\"> </span>    }\n\n<span class=\"w\"> </span>    /// Obtain the raw `struct device *`.\n<span class=\"gh\">diff --git a/rust/kernel/firmware.rs b/rust/kernel/firmware.rs</span>\n<span class=\"gh\">index dee5b4b18aec..23a0a758fc72 100644</span>\n<span class=\"gd\">--- a/rust/kernel/firmware.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/firmware.rs</span>\n<span class=\"gu\">@@ -44,7 +44,7 @@ fn request_nowarn() -&gt; Self {</span>\n<span class=\"w\"> </span>///\n<span class=\"w\"> </span>/// # fn no_run() -&gt; Result&lt;(), Error&gt; {\n<span class=\"w\"> </span>/// # // SAFETY: *NOT* safe, just for the example to get an `ARef&lt;Device&gt;` instance\n<span class=\"gd\">-/// # let dev = unsafe { Device::from_raw(core::ptr::null_mut()) };</span>\n<span class=\"gi\">+/// # let dev = unsafe { Device::get_from_raw(core::ptr::null_mut()) };</span>\n<span class=\"w\"> </span>///\n<span class=\"w\"> </span>/// let fw = Firmware::request(c_str!(\"path/to/firmware.bin\"), &amp;dev)?;\n<span class=\"w\"> </span>/// let blob = fw.data();\n</code></pre></div>",
+        "id": 473354490,
+        "sender_full_name": "Guilherme Giácomo Simões",
+        "timestamp": 1727534328
+    },
+    {
+        "content": "<p>In the truth, I'm confused, because in the example showing by <span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> , he  removed the line that increment refcount. But if function don't increment refcount, then your name don't need changed, becuase will be equal the Arc::from_raw that don't increment refcount too .. . </p>\n<p>I think that the function Device::from_raw() only need change your name for Device::get_from_raw() or Device::get_device().  And I prefer Device::get_device() for be equal de get_device() in .c file. </p>\n<p>Then, this change is anything like this: </p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/device.rs b/rust/kernel/device.rs</span>\n<span class=\"gh\">index 851018eef885..5dfbe7c0824c 100644</span>\n<span class=\"gd\">--- a/rust/kernel/device.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/device.rs</span>\n<span class=\"gu\">@@ -51,7 +51,7 @@ impl Device {</span>\n<span class=\"w\"> </span>    ///\n<span class=\"w\"> </span>    /// It must also be ensured that `bindings::device::release` can be called from any thread.\n<span class=\"w\"> </span>    /// While not officially documented, this should be the case for any `struct device`.\n<span class=\"gd\">-    pub unsafe fn from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>\n<span class=\"gi\">+    pub unsafe fn get_from_raw(ptr: *mut bindings::device) -&gt; ARef&lt;Self&gt; {</span>\n<span class=\"w\"> </span>        // SAFETY: By the safety requirements, ptr is valid.\n<span class=\"w\"> </span>        // Initially increase the reference count by one to compensate for the final decrement once\n<span class=\"w\"> </span>        // this newly created `ARef&lt;Device&gt;` instance is dropped.\n<span class=\"gh\">diff --git a/rust/kernel/firmware.rs b/rust/kernel/firmware.rs</span>\n<span class=\"gh\">index dee5b4b18aec..23a0a758fc72 100644</span>\n<span class=\"gd\">--- a/rust/kernel/firmware.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/firmware.rs</span>\n<span class=\"gu\">@@ -44,7 +44,7 @@ fn request_nowarn() -&gt; Self {</span>\n<span class=\"w\"> </span>///\n<span class=\"w\"> </span>/// # fn no_run() -&gt; Result&lt;(), Error&gt; {\n<span class=\"w\"> </span>/// # // SAFETY: *NOT* safe, just for the example to get an `ARef&lt;Device&gt;` instance\n<span class=\"gd\">-/// # let dev = unsafe { Device::from_raw(core::ptr::null_mut()) };</span>\n<span class=\"gi\">+/// # let dev = unsafe { Device::get_from_raw(core::ptr::null_mut()) };</span>\n<span class=\"w\"> </span>///\n<span class=\"w\"> </span>/// let fw = Firmware::request(c_str!(\"path/to/firmware.bin\"), &amp;dev)?;\n<span class=\"w\"> </span>/// let blob = fw.data();\n</code></pre></div>\n<p>For this way, your implementation will be equal before. But your name is differente so as not to confuse with Arc::from_raw().</p>",
+        "id": 473377195,
+        "sender_full_name": "Guilherme Giácomo Simões",
+        "timestamp": 1727550543
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"736615\">Panagiotis Foliadis</span> <a href=\"#narrow/stream/291566-Library/topic/Inconsistency.20of.20.60from_raw.60.2E/near/464358099\">said</a>:</p>\n<blockquote>\n<p>Sorry for the late response!<br>\nI have a question about the examples that I need to add to the documentation.<br>\nFor the case of the <code>Device::as_ref</code> I believe the </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">as_ref</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}.</span><span class=\"n\">into</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>is enough, however im struggling to find a correct example to add to the <code>ARef</code> struct that connects to the removal of the <code>Device::from_raw</code> function  (since the github issues specifies that an example should be added to the <code>ARef</code> struct).<br>\nThe <code>Device::as_ref</code> + <code>into()</code> doesnt have anything to do with the <code>ARef</code> struct right?</p>\n</blockquote>\n<p>Note that in my example, into()’s return type is ARef&lt;Device&gt;</p>",
+        "id": 473389384,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1727561494
+    },
+    {
+        "content": "<p>I'm a started in the linux kernel development... <br>\nI sent this patchs:</p>\n<p>I sent this patch<br>\n[1/2] <a href=\"https://lore.kernel.org/rust-for-linux/CAM_RzfavjM9VPJhTi1czOSC0BFOc3FUHRMdzFrU9fJE+WJMKbw@mail.gmail.com/T/#u\">https://lore.kernel.org/rust-for-linux/CAM_RzfavjM9VPJhTi1czOSC0BFOc3FUHRMdzFrU9fJE+WJMKbw@mail.gmail.com/T/#u</a></p>\n<p>[2/2] <a href=\"https://lore.kernel.org/rust-for-linux/CAM_RzfbQK5fzqXQN89JCEzD1Bz5ZtQdAz3xD0yaYFx_GC7Pm0Q@mail.gmail.com/T/#u\">https://lore.kernel.org/rust-for-linux/CAM_RzfbQK5fzqXQN89JCEzD1Bz5ZtQdAz3xD0yaYFx_GC7Pm0Q@mail.gmail.com/T/#u</a> </p>\n<p>I don't know if is right, but I think that yes.</p>",
+        "id": 473452071,
+        "sender_full_name": "Guilherme Giácomo Simões",
+        "timestamp": 1727618563
+    },
+    {
+        "content": "<p>The ultimate PATCH<br>\n<a href=\"https://lore.kernel.org/rust-for-linux/20240930194637.98260-1-trintaeoitogc@gmail.com/T/#u\">https://lore.kernel.org/rust-for-linux/20240930194637.98260-1-trintaeoitogc@gmail.com/T/#u</a></p>",
+        "id": 473898402,
+        "sender_full_name": "Guilherme Giácomo Simões",
+        "timestamp": 1727744001
+    },
+    {
+        "content": "<p>the last PATCH v3<br>\n<a href=\"https://lore.kernel.org/rust-for-linux/20241001205603.106278-1-trintaeoitogc@gmail.com/T/#u\">https://lore.kernel.org/rust-for-linux/20241001205603.106278-1-trintaeoitogc@gmail.com/T/#u</a></p>",
+        "id": 474313899,
+        "sender_full_name": "Guilherme Giácomo Simões",
+        "timestamp": 1727879344
+    }
+]

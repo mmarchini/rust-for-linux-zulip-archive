@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p>The structure that I need to supply when registering my module with the kernel has an embedded name field that is just a fixed-size character array. It was a bit of a pain to convert a <code>CStr</code> into the fitting type. I currently do it like that:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">to_name_field</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">N</span>: <span class=\"kt\">usize</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span>-&gt; <span class=\"p\">[</span><span class=\"kt\">i8</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">name_field</span>: <span class=\"p\">[</span><span class=\"kt\">i8</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"mi\">0</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">];</span>\n\n<span class=\"w\">    </span><span class=\"n\">build_assert</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">T</span>::<span class=\"n\">NAME</span><span class=\"p\">.</span><span class=\"n\">len_with_nul</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&lt;=</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"c1\">// SAFETY: We just checked that it fits and it is impossible for `T::NAME`</span>\n<span class=\"w\">    </span><span class=\"c1\">// to overlap with a local variable.</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">ptr</span>::<span class=\"n\">copy_nonoverlapping</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"n\">T</span>::<span class=\"n\">NAME</span><span class=\"p\">.</span><span class=\"n\">as_bytes_with_nul</span><span class=\"p\">().</span><span class=\"n\">as_ptr</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">name_field</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">(),</span>\n<span class=\"w\">            </span><span class=\"n\">T</span>::<span class=\"n\">NAME</span><span class=\"p\">.</span><span class=\"n\">len_with_nul</span><span class=\"p\">(),</span>\n<span class=\"w\">        </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n\n<span class=\"w\">    </span><span class=\"n\">name_field</span>\n<span class=\"p\">}</span>\n\n<span class=\"n\">ops</span><span class=\"p\">.</span><span class=\"n\">name</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span>::<span class=\"n\">to_name_field</span>::<span class=\"o\">&lt;</span><span class=\"mi\">16</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>There are a couple of things I dislike about this:</p>\n<ul>\n<li>as it is a common problem, it fells like a method like this should be on <code>CStr</code>; abstractions for a particular subsystems are not the right place.</li>\n<li><code>build_assert</code> fails at the linking stage, but I would like to fail it when compiling; tried <code>static_assert</code>, but it can not deal with the generics.</li>\n<li>it feels wrong to hard-code the size in the const generic parameter at the call site but I did not find an easy way to get the size of the structure field.</li>\n<li>it requires an unstable feature to use <code>*mut</code> in const contexts</li>\n</ul>\n<p>Did someone here already bump into this kind of problem, is there maybe even a clean solution for that I missed?</p>",
+        "id": 418787807,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706603324
+    },
+    {
+        "content": "<p>Instead of <code>copy_nonoverlapping</code>, you should be able to manually copy <code>T::NAME.as_bytes_with_nul()</code> over. A loop that copies one byte at the time should work in const.</p>",
+        "id": 418790172,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706604332
+    },
+    {
+        "content": "<p>Do you mean like this?</p>\n<div class=\"codehilite\" data-code-language=\"Bash Session\"><pre><span></span><code><span class=\"go\">error[E0658]: `for` is not allowed in a `const fn`</span>\n<span class=\"go\">   --&gt; rust/kernel/net/tcp_cong.rs:157:9</span>\n<span class=\"go\">    |</span>\n<span class=\"go\">157 | /         for i in 0..T::NAME.len() {</span>\n<span class=\"go\">158 | |             name_field[i] = T::NAME.as_bytes()[i] as i8;</span>\n<span class=\"go\">159 | |         }</span>\n<span class=\"go\">    | |_________^</span>\n<span class=\"go\">    |</span>\n<span class=\"go\">    = note: see issue #87575 &lt;https://github.com/rust-lang/rust/issues/87575&gt; for more information</span>\n<span class=\"go\">    = help: add `#![feature(const_for)]` to the crate attributes to enable</span>\n</code></pre></div>",
+        "id": 418792971,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706605341
+    },
+    {
+        "content": "<p>Use a while loop.</p>",
+        "id": 418793006,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706605358
+    },
+    {
+        "content": "<p>Thanks, that works, however, I still need the <code>build_assert</code> or else</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.557013</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">rust_kernel</span>: <span class=\"nc\">panicked</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"o\">/</span><span class=\"n\">mnt</span><span class=\"o\">/</span><span class=\"n\">build</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">-</span><span class=\"k\">for</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"o\">/</span><span class=\"n\">rust4lx</span><span class=\"o\">/</span><span class=\"n\">rust</span><span class=\"o\">/</span><span class=\"n\">kernel</span><span class=\"o\">/</span><span class=\"n\">net</span><span class=\"o\">/</span><span class=\"n\">tcp_cong</span><span class=\"p\">.</span><span class=\"n\">rs</span>:<span class=\"mi\">157</span>:<span class=\"mi\">13</span>:\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.557013</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"w\"> </span><span class=\"n\">out</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">bounds</span>: <span class=\"nc\">the</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"mi\">16</span><span class=\"w\"> </span><span class=\"n\">but</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"mi\">16</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.557695</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"o\">------------</span><span class=\"p\">[</span><span class=\"w\"> </span><span class=\"n\">cut</span><span class=\"w\"> </span><span class=\"n\">here</span><span class=\"w\"> </span><span class=\"p\">]</span><span class=\"o\">------------</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.557902</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"w\"> </span><span class=\"n\">BUG</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"n\">rust</span><span class=\"o\">/</span><span class=\"n\">helpers</span><span class=\"p\">.</span><span class=\"n\">c</span>:<span class=\"mi\">37</span><span class=\"o\">!</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.558086</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">invalid</span><span class=\"w\"> </span><span class=\"n\">opcode</span>: <span class=\"mi\">0000</span><span class=\"w\"> </span><span class=\"p\">[</span>#<span class=\"mi\">1</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">PREEMPT</span><span class=\"w\"> </span><span class=\"n\">SMP</span><span class=\"w\"> </span><span class=\"n\">NOPTI</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.558298</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">CPU</span>: <span class=\"mi\">2</span><span class=\"w\"> </span><span class=\"n\">PID</span>: <span class=\"mi\">188</span><span class=\"w\"> </span><span class=\"n\">Comm</span>: <span class=\"nc\">insmod</span><span class=\"w\"> </span><span class=\"n\">Not</span><span class=\"w\"> </span><span class=\"n\">tainted</span><span class=\"w\"> </span><span class=\"mf\">6.8.0</span><span class=\"o\">-</span><span class=\"n\">rc1</span><span class=\"o\">-</span><span class=\"mi\">42</span><span class=\"n\">rust</span><span class=\"o\">-</span><span class=\"k\">for</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"o\">-</span><span class=\"n\">g3de23aacc021</span><span class=\"o\">-</span><span class=\"n\">dirty</span><span class=\"w\"> </span>#<span class=\"mi\">29</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.558670</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">Hardware</span><span class=\"w\"> </span><span class=\"n\">name</span>: <span class=\"nc\">QEMU</span><span class=\"w\"> </span><span class=\"n\">Standard</span><span class=\"w\"> </span><span class=\"n\">PC</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">i440FX</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"n\">PIIX</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">1996</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"n\">BIOS</span><span class=\"w\"> </span><span class=\"n\">Arch</span><span class=\"w\"> </span><span class=\"n\">Linux</span><span class=\"w\"> </span><span class=\"mf\">1.16.3</span><span class=\"o\">-</span><span class=\"mi\">1</span><span class=\"o\">-</span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"mi\">04</span><span class=\"o\">/</span><span class=\"mi\">01</span><span class=\"o\">/</span><span class=\"mi\">2014</span>\n<span class=\"p\">[</span><span class=\"w\">   </span><span class=\"mf\">20.559093</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">RIP</span>: <span class=\"mi\">0010</span>:<span class=\"nc\">rust_helper_BUG</span><span class=\"o\">+</span><span class=\"mh\">0x5</span><span class=\"o\">/</span><span class=\"mh\">0x10</span>\n</code></pre></div>\n<p>when the name is too long...</p>",
+        "id": 418794961,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706606120
+    },
+    {
+        "content": "<p>The function is const, but you're not evaluating it until runtime?</p>",
+        "id": 418796463,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706606661
+    },
+    {
+        "content": "<p>This surprised me as well. I am using it in a closure passed to <code>try_ffi_init</code> inside a <code>try_pin_init</code>. Is there some way I can ensure it is evaluated at compile time?</p>",
+        "id": 418799715,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706607871
+    },
+    {
+        "content": "<p>Yes, like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">MY_CONST</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">Self</span>::<span class=\"n\">to_name_field</span>::<span class=\"o\">&lt;</span><span class=\"mi\">16</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n<span class=\"n\">ops</span><span class=\"p\">.</span><span class=\"n\">name</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">MY_CONST</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 418799831,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706607915
+    },
+    {
+        "content": "<p>Thanks, I'll see if I get that to work. With the current design it is a</p>\n<div class=\"codehilite\" data-code-language=\"Bash Session\"><pre><span></span><code><span class=\"go\">error[E0401]: can't use generic parameters from outer item</span>\n<span class=\"go\">   --&gt; rust/kernel/net/tcp_cong.rs:129:46</span>\n<span class=\"go\">    |</span>\n<span class=\"go\">102 | impl&lt;T: Algorithm + ?Sized&gt; Registration&lt;T&gt; {</span>\n<span class=\"go\">    | ---- `Self` type implicitly declared here, by this `impl`</span>\n<span class=\"go\">...</span>\n<span class=\"go\">129 |                 const name_field: [i8; 16] = Self::to_name_field::&lt;16&gt;();</span>\n<span class=\"go\">    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"go\">    |                                              |</span>\n<span class=\"go\">    |                                              use of generic parameter from outer item</span>\n<span class=\"go\">    |                                              refer to the type directly here instead</span>\n</code></pre></div>\n<p>But it might anyway be better to change the design.</p>",
+        "id": 418801688,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706608591
+    },
+    {
+        "content": "<p>You can use an associated constant instead, that should work.</p>",
+        "id": 418801808,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706608632
+    },
+    {
+        "content": "<p>It does, fails at compile time without an assert, and does not require the unstable feature, great! Any chance something like that might be generalizable to the core library?</p>",
+        "id": 418802455,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706608859
+    },
+    {
+        "content": "<p>Where are you thinking to generalize it to?</p>",
+        "id": 418802716,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706608949
+    },
+    {
+        "content": "<p>Maybe a method/associated function on <code>CStr</code>? S.t. not every abstraction that needs to deal with a kernel struct with embedded name fields needs to define such a helper construct.</p>",
+        "id": 418802962,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706609048
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/291565-Help/topic/initializing.20name.20fields/near/418796463\">said</a>:</p>\n<blockquote>\n<p>The function is const, but you're not evaluating it until runtime?</p>\n</blockquote>\n<p>const fn only means that the function can be used in places where a const fn is expected, so in other const fn's, const variables and array lengths.</p>\n<p>just because a function is const does not mean that it will be evaluated at CT</p>",
+        "id": 418867239,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1706629696
+    },
+    {
+        "content": "<p>Indeed. But I had assumed it was const because they <em>were</em> evaluating it at runtime.</p>",
+        "id": 418867619,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706629785
+    },
+    {
+        "content": "<p>The intention was indeed to evaluate it at compile time (e.g. to catch overly long names). I was just assuming that it would always be evaluated at compile time. Still not quite clear to me why it isn't when there is nothing preventing the compiler from knowing everything necessary to do so.</p>",
+        "id": 418886779,
+        "sender_full_name": "Valentin Obst",
+        "timestamp": 1706635505
+    },
+    {
+        "content": "<p>Const functions are only evaluated at compile time when forced to.</p>",
+        "id": 418912234,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1706645456
+    }
+]

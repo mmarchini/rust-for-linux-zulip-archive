@@ -1,0 +1,80 @@
+[
+    {
+        "content": "<p>When you enable CONFIG_RUST, this also implicitly enables CONFIG_CONSTRUCTORS due to a <code>select</code> in the Kconfig. Why do we have this?</p>",
+        "id": 424908838,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709656082
+    },
+    {
+        "content": "<p>See commit 4b9a68f2e59a0 (\"rust: add support for static synchronisation primitives\") in the old <code>rust</code> branch:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>    rust: add support for static synchronisation primitives\n\n    This allows drivers to declare global shared variables (`static`) that\n    can be mutated when the synchronisation primitive is held.\n\n    Although we want to discourage the use of globals, some drivers still\n    need them. For example, a driver that needs to allocate an id to each\n    instance of a device that is attached (and free it up when it's\n    detached) may have a global variable to manage ids, access to which\n    needs to synchronised.\n\n    We use constructors to implement this, so we select\n    `CONFIG_CONSTRUCTORS` automatically when `RUST` is selected.\n</code></pre></div>\n<p>i.e. <code>init_static_sync!</code> used <code>.ctors</code> (later <code>.init_array</code>): <a href=\"https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/sync.rs#L135\">https://github.com/Rust-for-Linux/linux/blob/rust/rust/kernel/sync.rs#L135</a></p>\n<p><span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span></p>",
+        "id": 424925549,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1709660996
+    },
+    {
+        "content": "<p>Okay, but we don't actually support that right now.</p>",
+        "id": 424926441,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709661312
+    },
+    {
+        "content": "<p>Perhaps it would make more sense to remove the select and gate such features behind <code>#[cfg(CONFIG_CONSTRUCTORS)]</code>?</p>",
+        "id": 424928304,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709661900
+    },
+    {
+        "content": "<p>I mean, in general, I do not think that CONFIG_CONSTRUCTORS is the right choice for global mutexes. We can replicate the C macro for global mutexes, and code-before-main is in general fraught with issues. For example, it looks like the <code>init_static_sync!</code> macro is unsound because one global could access another global during initialization, which will lead to issues depending on the order in which they are initialized.</p>",
+        "id": 424937929,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709665409
+    },
+    {
+        "content": "<p>Unless I hear any objections, I'm going to submit a patch that removes <code>select CONSTRUCTORS</code>.</p>",
+        "id": 425347326,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709829119
+    },
+    {
+        "content": "<p>No objections from me. if we still need something like this in the future, we can discuss then what to do.</p>\n<p><span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> , I think we briefly discussed this in some forum but I don't remember which anymore, so restarting the discussion here. How can we use <code>pin_init</code> to initialise static instances of pinned structures like locks?</p>",
+        "id": 425362878,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1709834033
+    },
+    {
+        "content": "<p>the only thing we need to do would be to first construct a <code>impl PinInit</code> value and then call <code>PinInit::__pinned_init()</code> from the initializer code.</p>",
+        "id": 425497572,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709896402
+    },
+    {
+        "content": "<p>I think that we should not be using initializers unless it is absolutely necessary. It is not necessary for locks; there's nothing preventing us from replicating the DEFINE_SPINLOCK macro in Rust.</p>",
+        "id": 425503498,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709898918
+    },
+    {
+        "content": "<p>of course we can just have a macro that wraps that, I think <span class=\"user-mention\" data-user-id=\"531558\">@Wedson Almeida Filho</span> was after how the internals would work</p>",
+        "id": 425510143,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709901469
+    },
+    {
+        "content": "<p>If you replicate the DEFINE_SPINLOCK macro to avoid needing initializers, then you probably can't use pin-init since traits are not const.</p>",
+        "id": 425510351,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709901542
+    },
+    {
+        "content": "<p>the question is what are the use cases for statics? I personally do not use them at all, but in userspace that might be easier. If they can be avoided most of the time, then having a solution that only allows simple use-cases might be better than a general mechanism to initialize statics via pin-init. But if people want to e.g. initialize structures with nested locks etc. then we should probably use pin-init.</p>",
+        "id": 425514105,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1709902842
+    },
+    {
+        "content": "<p>My only use of globals is a mutex containing a linked list of all binder contexts.</p>",
+        "id": 425519436,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1709904751
+    }
+]

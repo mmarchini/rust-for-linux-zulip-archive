@@ -1,0 +1,457 @@
+<html>
+<head><meta charset="utf-8"><title>Passing a DevRes to a miscdev · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html">Passing a DevRes to a miscdev</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="494553814"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494553814" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494553814">(Jan 18 2025 at 20:58)</a>:</h4>
+<p>Hi I've been trying the miscdev and platform abstraction.</p>
+<p>I wanted to know what the best way to use a DevRes&lt;IoMem&gt; in the miscdevice is?<br>
+I've got it working using container_of!, but I was wondering if there is a way to achieve that without unsafe.</p>
+
+
+
+<a name="494554376"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494554376" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494554376">(Jan 18 2025 at 21:05)</a>:</h4>
+<p>Can you explain more closely what you are trying to do? Where are you using container_of?</p>
+
+
+
+<a name="494554846"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494554846" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494554846">(Jan 18 2025 at 21:10)</a>:</h4>
+<p>I've got a PlatformDriver struct that contains the miscdev and a <code>Arc&lt;Devres&lt;IoMem&gt;&gt;</code>.<br>
+In the <code>MiscDevice</code> open function I use <code>container_of</code>to get a clone of the <code>DevRes</code>.</p>
+<p>I was hoping to have better way to access that.</p>
+<p>Code:<br>
+<a href="https://github.com/onestacked/linux/blob/rust_ledpwm_driver/drivers/misc/ledpwm.rs">https://github.com/onestacked/linux/blob/rust_ledpwm_driver/drivers/misc/ledpwm.rs</a></p>
+<p>Not intended to go upstream, I was mostly trying out if a University exercise would be possible to do with the Rust abstractions.</p>
+
+
+
+<a name="494557272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494557272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494557272">(Jan 18 2025 at 21:37)</a>:</h4>
+<p>I guess the miscdevice stuff is missing a feature you need ... it's tricky because <code>container_of</code> isn't really correct here. If the <code>LedPwmDriver</code> gets unplugged, the destructor could run in parallel with <code>open</code>, which could result in a UAF on <code>mapping</code> since the destructors of struct fields run in declaration order.</p>
+
+
+
+<a name="494557772"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494557772" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494557772">(Jan 18 2025 at 21:38)</a>:</h4>
+<p>One way to fix it is to make <code>MiscDeviceRegistration</code> into a container type instead, so that you store the <code>struct miscdevice</code> <em>and</em> some custom Rust data inside the registration.</p>
+
+
+
+<a name="494565853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494565853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494565853">(Jan 18 2025 at 22:08)</a>:</h4>
+<p>I've looked around the code a bit and don't really know how to implement that, since <code>MiscDeviceRegistration</code> is <code>#[repr(transparent)]</code>.</p>
+<p>It would be good to be able to do something like this in safe code and I think that most non-example drivers would that.</p>
+
+
+
+<a name="494589305"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494589305" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494589305">(Jan 19 2025 at 01:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="682956">Christian Schrefl</span> <a href="#narrow/channel/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev/near/494565853">said</a>:</p>
+<blockquote>
+<p>I've looked around the code a bit and don't really know how to implement that, since <code>MiscDeviceRegistration</code> is <code>#[repr(transparent)]</code>.</p>
+<p>It would be good to be able to do something like this in safe code and I think that most non-example drivers would that.</p>
+</blockquote>
+<p>We can store driver’s data in registration, I do same thing in my  <a href="https://github.com/JCKeep/linux/blob/99b1634455e15e50e1f387e18ec003ccdf83e912/rust/kernel/uio.rs#L106">uio abstraction</a></p>
+
+
+
+<a name="494625024"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494625024" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494625024">(Jan 19 2025 at 09:40)</a>:</h4>
+<p>The miscdevice struct doesn't have a private data field.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">miscdevice</span><span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="n">int</span><span class="w"> </span><span class="n">minor</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">file_operations</span><span class="w"> </span><span class="o">*</span><span class="n">fops</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">list_head</span><span class="w"> </span><span class="n">list</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">device</span><span class="w"> </span><span class="o">*</span><span class="n">parent</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">device</span><span class="w"> </span><span class="o">*</span><span class="n">this_device</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">attribute_group</span><span class="w"> </span><span class="o">**</span><span class="n">groups</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">nodename</span><span class="p">;</span>
+<span class="w">    </span><span class="n">umode_t</span><span class="w"> </span><span class="n">mode</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div>
+
+
+
+<a name="494631905"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494631905" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494631905">(Jan 19 2025 at 11:16)</a>:</h4>
+<p>We can store it on the Rust side after the <code>struct miscdevice</code></p>
+
+
+
+<a name="494632545"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494632545" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494632545">(Jan 19 2025 at 11:25)</a>:</h4>
+<p>The MiscDeviceRegistration currently has a <code>#[repr(transparent)]</code> currently:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(transparent)]</span>
+<span class="cp">#[pin_data(PinnedDrop)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MiscDeviceRegistration</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">miscdevice</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_t</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomData</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>So storing additional data here is not currently possible, but I don't think that the <code>#[repr(transparent)]</code> is really necessary.</p>
+<p>So it should be possible to do:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// A registration of a miscdevice.</span>
+<span class="sd">///</span>
+<span class="sd">/// # Invariants</span>
+<span class="sd">///</span>
+<span class="sd">/// `inner` is a registered misc device.</span>
+<span class="cp">#[pin_data(PinnedDrop)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MiscDeviceRegistration</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">D</span><span class="p">:</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">miscdevice</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">D</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_t</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomData</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Not sure what bounds are requied for D, or if it should be a associated type of the <code>MiscDevice</code> trait.</p>
+
+
+
+<a name="494635401"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494635401" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494635401">(Jan 19 2025 at 12:03)</a>:</h4>
+<p>I've implemented it here: <a href="https://github.com/onestacked/linux/commit/50532522415082ffa260d3fbbe136ccb77567701">https://github.com/onestacked/linux/commit/50532522415082ffa260d3fbbe136ccb77567701</a></p>
+<p>Added <code>RegistrationData</code> as a assoc type of <code>MiscDevice</code>, requiring Send + Sync.<br>
+And storing it in <code>MiscDeviceRegistration</code>, allowing <code>open()</code> to take a (shared) reference to it.</p>
+<p>It will need some changes to some safety comments and rework the <code>rust_misc_device.rs</code> sample,<br>
+but it seems to work.</p>
+
+
+
+<a name="494636119"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494636119" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494636119">(Jan 19 2025 at 12:13)</a>:</h4>
+<p>Yep, that's pretty much what I was thinking.</p>
+
+
+
+<a name="494636231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494636231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494636231">(Jan 19 2025 at 12:14)</a>:</h4>
+<p>I would let <code>register</code> take <code>data: impl PinInit&lt;T::RegistrationData&gt;</code> to allow for pin-initialization of the extra data.</p>
+
+
+
+<a name="494636256"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494636256" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494636256">(Jan 19 2025 at 12:14)</a>:</h4>
+<p>Also, <code>RegistrationData</code> only needs to be <code>Sync</code>. <code>Send</code> isn't necessary.</p>
+
+
+
+<a name="494640972"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494640972" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494640972">(Jan 19 2025 at 13:17)</a>:</h4>
+<p>Do you want to submit a patch for this?</p>
+
+
+
+<a name="494641000"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494641000" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494641000">(Jan 19 2025 at 13:18)</a>:</h4>
+<p>I'm also happy to contribute with motivation for the commit message.</p>
+
+
+
+<a name="494645380"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494645380" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494645380">(Jan 19 2025 at 14:18)</a>:</h4>
+<p>Yeah I can submit a patch, do you want me to add a sugested-by tag for you?</p>
+
+
+
+<a name="494648904"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494648904" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494648904">(Jan 19 2025 at 15:01)</a>:</h4>
+<p>okay</p>
+
+
+
+<a name="494657397"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494657397" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494657397">(Jan 19 2025 at 16:48)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> In case you want to look over the changes before I send them to the Mailing list:<br>
+<a href="https://github.com/onestacked/linux/commits/b4/rust_miscdevice_registrationdata/">https://github.com/onestacked/linux/commits/b4/rust_miscdevice_registrationdata/</a></p>
+
+
+
+<a name="494657459"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494657459" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494657459">(Jan 19 2025 at 16:49)</a>:</h4>
+<p>The patches you say it depend on are already in Greg's driver-core-next tree, so you can just say you depend on that.</p>
+
+
+
+<a name="494660041"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494660041" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494660041">(Jan 19 2025 at 17:22)</a>:</h4>
+<p>I've updated the message (and rebased on driver-core-next).</p>
+
+
+
+<a name="494660506"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494660506" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494660506">(Jan 19 2025 at 17:28)</a>:</h4>
+<p>Don't you need to put <code>data</code> into a <code>UnsafePinned</code> or <code>Opaque</code> similar to <a href="https://lore.kernel.org/rust-for-linux/CAH5fLgj6Wnrn6Ois+MbX16j2szRsBEgqVyArcGwhjEK52JnD3Q@mail.gmail.com/"><code>irq::Registration::handler</code></a>?</p>
+
+
+
+<a name="494660642"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494660642" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494660642">(Jan 19 2025 at 17:30)</a>:</h4>
+<p>there is no Aliasing, because the data can only be accessed through shared references once it is given to <code>MiscDeviceRegistration</code>.</p>
+
+
+
+<a name="494660735"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494660735" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494660735">(Jan 19 2025 at 17:31)</a>:</h4>
+<p>It's not really possible to give a mutable reference because <code>open</code> might be called from multiple threads at the same time.</p>
+
+
+
+<a name="494660864"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494660864" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494660864">(Jan 19 2025 at 17:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="682956">Christian Schrefl</span> <a href="#narrow/channel/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev/near/494660642">said</a>:</p>
+<blockquote>
+<p>there is no Aliasing, because the data can only be accessed through shared references once it is given to <code>MiscDeviceRegistration</code>.</p>
+</blockquote>
+<p>But the owner of <code>MiscDeviceRegistration</code> has the mutable reference to the whole struct, right?</p>
+
+
+
+<a name="494661078"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494661078" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494661078">(Jan 19 2025 at 17:35)</a>:</h4>
+<p>Right. That's probably not allowed, even though it's impossible to get a mutable reference to get a mutable reference to the data itself.</p>
+
+
+
+<a name="494661264"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494661264" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494661264">(Jan 19 2025 at 17:37)</a>:</h4>
+<p>I.e. there could exist two references at the same time:</p>
+<ol>
+<li><code>Pin&lt;&amp;mut MiscDeviceRegistration&gt;</code> &lt;- the owner of  the registration.</li>
+<li><code>&amp;T::RegistrationData</code> &lt;- in <code>open()</code> function.</li>
+</ol>
+<p>And some discussion between me and <span class="user-mention" data-user-id="413824">@Gary Guo</span> seems to suggest that compilers could assume a <code>&amp;mut T::RegistrationData</code> from a <code>Pin&lt;&amp;mut MiscDeviceRegstration&gt;</code> if <code>data</code> is not <code>!Unpin</code>.</p>
+
+
+
+<a name="494661526"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494661526" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494661526">(Jan 19 2025 at 17:40)</a>:</h4>
+<p>Yeah I probably need to put it into a UnsafeCell.</p>
+<p>Probably best to do something like Aliased&lt;T&gt; that Alice suggested <a href="https://lore.kernel.org/rust-for-linux/CAH5fLgiOASgjoYKFz6kWwzLaH07DqP2ph+3YyCDh2+gYqGpABA@mail.gmail.com/">here</a>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Aliased</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="nc">UnsafeCell</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_pin</span><span class="p">:</span><span class="w"> </span><span class="nc">PhantomPinned</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="494667129"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494667129" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494667129">(Jan 19 2025 at 18:52)</a>:</h4>
+<p>I don't know if <code> UnsafeCell</code> even changes this situation, since <code>UnsafeCell</code> only changes the aliasing rules for <code>&amp;UnsafeCell</code> and not <code>&amp;mut UnsafeCell</code>.</p>
+
+
+
+<a name="494667146"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494667146" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494667146">(Jan 19 2025 at 18:53)</a>:</h4>
+<p>No, but <code>PhantomPinned</code> makes it <code>!Unpin</code>, which does do what we want.</p>
+
+
+
+<a name="494667170"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494667170" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494667170">(Jan 19 2025 at 18:53)</a>:</h4>
+<p>And !Unpin allows sharing like this?</p>
+
+
+
+<a name="494667188"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494667188" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494667188">(Jan 19 2025 at 18:53)</a>:</h4>
+<p>yeah</p>
+
+
+
+<a name="494670928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494670928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494670928">(Jan 19 2025 at 19:36)</a>:</h4>
+<p>ideally this should be UnsafePinned, after that gets stabilized</p>
+
+
+
+<a name="494674605"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494674605" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494674605">(Jan 19 2025 at 20:22)</a>:</h4>
+<p>I've implemented it <a href="https://github.com/onestacked/linux/commit/bd8e8d40a718de339a21b3c99dde0e8e4102bee2">here</a>.</p>
+
+
+
+<a name="494674870"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494674870" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494674870">(Jan 19 2025 at 20:25)</a>:</h4>
+<p>I think  we could also make <code>Opaque&lt;T&gt;</code> a type alias to <code>Aliased&lt;MaybeUninit&lt;T&gt;&gt;</code>.</p>
+
+
+
+<a name="494674902"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494674902" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494674902">(Jan 19 2025 at 20:25)</a>:</h4>
+<p>Maybe, but I don't think there's any advantage in that.</p>
+
+
+
+<a name="494674967"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494674967" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494674967">(Jan 19 2025 at 20:26)</a>:</h4>
+<p>It would reduce code duplication, but probably not really worth it.</p>
+
+
+
+<a name="494675099"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494675099" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494675099">(Jan 19 2025 at 20:27)</a>:</h4>
+<p>I think the code would be easier to understand if they're just separate. We can explicitly document that Opaque is for wrapping C structs without complicating the explanation of Opaque with Aliased.</p>
+
+
+
+<a name="494676921"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494676921" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494676921">(Jan 19 2025 at 20:48)</a>:</h4>
+<p>Checkpatch complains that a line is to long, but rustfmt formats it like that.<br>
+Should I just ignore it?</p>
+<p>And it complains that the link line is to long, I don't think that I should wrap the Link?</p>
+<p>Sorry, not that used to the kernel workflow.</p>
+
+
+
+<a name="494677085"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494677085" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494677085">(Jan 19 2025 at 20:50)</a>:</h4>
+<p>Minor spelling fix in the <a href="https://github.com/onestacked/linux/commit/0b3fa5af37d30f55068f2847ca72d6fa6c60e583">commit message</a>.</p>
+
+
+
+<a name="494677109"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494677109" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494677109">(Jan 19 2025 at 20:50)</a>:</h4>
+<p>Usually there would not be an empty line between Link and the rest of the tags</p>
+
+
+
+<a name="494677123"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494677123" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494677123">(Jan 19 2025 at 20:50)</a>:</h4>
+<p>Also, there usually isn't a # symbol in links</p>
+
+
+
+<a name="494677174"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494677174" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494677174">(Jan 19 2025 at 20:51)</a>:</h4>
+<p>So just:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="o">....</span>
+<span class="n">This</span><span class="w"> </span><span class="n">was</span><span class="w"> </span><span class="n">origianally</span><span class="w"> </span><span class="n">proposed</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">IRQ</span><span class="w"> </span><span class="n">abstractions</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="n">also</span><span class="w"> </span><span class="n">useful</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="n">cases</span><span class="w"> </span><span class="k">where</span>
+<span class="n">Data</span><span class="w"> </span><span class="n">may</span><span class="w"> </span><span class="n">be</span><span class="w"> </span><span class="n">aliased</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="n">always</span><span class="w"> </span><span class="n">valid</span><span class="p">.</span>
+
+<span class="n">Link</span><span class="p">:</span><span class="w"> </span><span class="nc">https</span><span class="p">:</span><span class="c1">//lore.kernel.org/rust-for-linux/CAH5fLgiOASgjoYKFz6kWwzLaH07DqP2ph+3YyCDh2+gYqGpABA@mail.gmail.com [0]</span>
+<span class="n">Suggested</span><span class="o">-</span><span class="n">by</span><span class="p">:</span><span class="w"> </span><span class="nc">Alice</span><span class="w"> </span><span class="n">Ryhl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">aliceryhl</span><span class="o">@</span><span class="n">google</span><span class="p">.</span><span class="n">com</span><span class="o">&gt;</span>
+<span class="n">Signed</span><span class="o">-</span><span class="n">off</span><span class="o">-</span><span class="n">by</span><span class="p">:</span><span class="w"> </span><span class="nc">Christian</span><span class="w"> </span><span class="n">Schrefl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">chrisi</span><span class="p">.</span><span class="n">schrefl</span><span class="o">@</span><span class="n">gmail</span><span class="p">.</span><span class="n">com</span><span class="o">&gt;</span>
+</code></pre></div>
+
+
+
+<a name="494677249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494677249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494677249">(Jan 19 2025 at 20:52)</a>:</h4>
+<p>Yes.</p>
+<p>But more generally, the commit message should explain why the change is being made, not just what it does.</p>
+
+
+
+<a name="494678488"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494678488" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494678488">(Jan 19 2025 at 21:06)</a>:</h4>
+<blockquote>
+<p>And it complains that the link line is to long, I don't think that I should wrap the Link?</p>
+</blockquote>
+<p>I just wrapped the text wrong sorry.</p>
+
+
+
+<a name="494678659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494678659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494678659">(Jan 19 2025 at 21:08)</a>:</h4>
+<p>Here's the motivation I would give for the main change</p>
+<div class="codehilite" data-code-language="Text only"><pre><span></span><code>rust: miscdevice: Add additional data to MiscDeviceRegistration
+
+When using the Rust miscdevice bindings, you generally embed the
+MiscDeviceRegistration within another struct:
+
+struct MyDriverData {
+    data: SomeOtherData,
+    misc: MiscDeviceRegistration&lt;MyMiscFile&gt;
+}
+
+In the `fops-&gt;open` callback of the miscdevice, you are given a
+reference to the registration, which allows you to access its fields.
+For example, as of commit 284ae0be4dca ("rust: miscdevice: Provide
+accessor to pull out miscdevice::this_device") you can access the
+internal `struct device`. However, there is still no way to access the
+`data` field in the above example, because you only have a reference to
+the registration.
+
+Using container_of is also not possible to do safely. For example, if
+the destructor of `MyDriverData` runs, then the destructor of `data`
+would run before the miscdevice is deregistered, so using container_of
+to access `data` from `fops-&gt;open` could result in a UAF. A similar
+problem can happen on initialization if `misc` is not the last field to
+be initialized.
+
+To provide a safe way to access user-defined data stored next to the
+`struct miscdevice`, make `MiscDeviceRegistration` into a container that
+can store a user-provided piece of data. This way, `fops-&gt;open` can
+access that data via the registration, since the data is stored inside
+the registration.
+
+The container enforces that the additional user data is initialized
+before the miscdevice is registered, and that the miscdevice is
+deregistered before the user data is destroyed. This ensures that access
+to the userdata is safe.
+
+For the same reasons as in commit 88441d5c6d17 ("rust: miscdevice:
+access the `struct miscdevice` from fops-&gt;open()"), you cannot access
+the user data in any other fops callback than open. This is because a
+miscdevice can be deregistered while there are still open files.
+</code></pre></div>
+
+
+
+<a name="494681693"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494681693" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494681693">(Jan 19 2025 at 21:36)</a>:</h4>
+<p>Thank you, for both the motivation and the implementation help!</p>
+<p>Is it usual to use `` for marking types/code in the mailing list, I think I've seen it done both ways?</p>
+<p>I've added a bit at the end talking about my issue in particular.</p>
+<p>Do you want any acknowledgement other than the Suggested-by tag?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="o">....</span>
+<span class="n">miscdevice</span><span class="w"> </span><span class="n">can</span><span class="w"> </span><span class="n">be</span><span class="w"> </span><span class="n">deregistered</span><span class="w"> </span><span class="k">while</span><span class="w"> </span><span class="n">there</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">still</span><span class="w"> </span><span class="n">open</span><span class="w"> </span><span class="n">files</span><span class="p">.</span>
+
+<span class="n">A</span><span class="w"> </span><span class="n">situation</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="n">might</span><span class="w"> </span><span class="n">be</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">when</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">platform</span><span class="w"> </span><span class="n">driver</span>
+<span class="n">acquires</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="err">`</span><span class="n">probe</span><span class="err">`</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">wants</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="k">use</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">the</span>
+<span class="err">`</span><span class="n">fops</span><span class="err">`</span><span class="w"> </span><span class="n">implementation</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="err">`</span><span class="n">MiscDevice</span><span class="err">`</span><span class="p">.</span>
+
+<span class="n">Suggested</span><span class="o">-</span><span class="n">by</span><span class="p">:</span><span class="w"> </span><span class="nc">Alice</span><span class="w"> </span><span class="n">Ryhl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">aliceryhl</span><span class="o">@</span><span class="n">google</span><span class="p">.</span><span class="n">com</span><span class="o">&gt;</span>
+<span class="n">Signed</span><span class="o">-</span><span class="n">off</span><span class="o">-</span><span class="n">by</span><span class="p">:</span><span class="w"> </span><span class="nc">Christian</span><span class="w"> </span><span class="n">Schrefl</span><span class="w"> </span><span class="o">&lt;</span><span class="n">chrisi</span><span class="p">.</span><span class="n">schrefl</span><span class="o">@</span><span class="n">gmail</span><span class="p">.</span><span class="n">com</span><span class="o">&gt;</span>
+</code></pre></div>
+
+
+
+<a name="494681791"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494681791" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494681791">(Jan 19 2025 at 21:37)</a>:</h4>
+<p>Using backticks in the commit message is a thing that some people do. You can choose to do it or not.</p>
+
+
+
+<a name="494681832"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494681832" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494681832">(Jan 19 2025 at 21:38)</a>:</h4>
+<p>The Suggested-by tag is fine.</p>
+
+
+
+<a name="494682101"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494682101" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Christian Schrefl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494682101">(Jan 19 2025 at 21:41)</a>:</h4>
+<p>Do you want me to send it out or are you still looking it over?</p>
+
+
+
+<a name="494684414"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Passing%20a%20DevRes%20to%20a%20miscdev/near/494684414" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Passing.20a.20DevRes.20to.20a.20miscdev.html#494684414">(Jan 19 2025 at 22:06)</a>:</h4>
+<p>I'm done looking for today, so go ahead and send. If I notice anything further, I can comment on the list.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

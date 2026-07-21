@@ -1,0 +1,140 @@
+[
+    {
+        "content": "<p>I just realized that there is no support for module ID tables yet, so modules don't autoload. I tried to implement it but I ended up giving up... <code>modpost</code> wants a static symbol containing the raw ID table, and the <code>IdTable</code> stuff in <code>driver.rs</code> doesn't really have any obvious way of getting a sized array out, since the size information is statically lost as it only keeps a reference to the first element, and <code>modpost</code> wants a correctly sized object (integer multiple of single ID size).</p>\n<p>I ended up manually encoding the module aliases (where I also had to add support for more than one module <code>alias</code>, because that's a multivalued property)... ^^;</p>\n<p>Does anyone have any idea of how this ought to be implemented / is anything planned here? I get the feeling the whole <code>IdTable</code> mechanism needs a significant refactor to make this possible, but I don't know what direction it should go in. It might be that part of the answer involves changing <code>modpost</code> to play more nicely with what Rust is doing?</p>\n<p>I did figure out how to get the right symbol name generated for <code>modpost</code> (just with the wrong data). In case it's useful, here's the magic incantation: </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">module_id_table</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$table_name</span>:<span class=\"nc\">ident</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$table_type</span>:<span class=\"nc\">literal</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"cp\">#[export_name = concat!(</span><span class=\"s\">\"__mod_\"</span><span class=\"cp\">, $table_type, </span><span class=\"s\">\"__\"</span><span class=\"cp\">, stringify!($table_name), </span><span class=\"s\">\"_device_table\"</span><span class=\"cp\">)]</span><span class=\"w\"></span>\n<span class=\"w\">        </span><span class=\"k\">static</span><span class=\"w\"> </span><span class=\"cp\">$table_name</span>: <span class=\"nc\">type</span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.;</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"p\">};</span><span class=\"w\"></span>\n<span class=\"p\">}</span><span class=\"w\"></span>\n\n<span class=\"c1\">// Sample call: module_id_table!(some_id_table, \"of\", ...);</span>\n</code></pre></div>",
+        "id": 314059620,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670254059
+    },
+    {
+        "content": "<p>For the magic incantations part: for <code>module!</code> I thought several times about getting rid of the manual mimicking of the C <code>MODULE_*</code> macros and just generating a C file to do that work for us. It was nice to see what we could do manually in Rust etc., but a single implementation would be better. Perhaps it is time to move to that approach...</p>",
+        "id": 314110402,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1670269070
+    },
+    {
+        "content": "<p>The original reason not to (way back when) was that it required a proc-macro. But we have those now :-)</p>",
+        "id": 314138438,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1670279918
+    },
+    {
+        "content": "<p>Proc macros shouldn't write files, run a compiler or anything of that sort. That doesn't work well with IDE's and will break if rustc gets proc macro sandboxing.</p>",
+        "id": 314216484,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1670326007
+    },
+    {
+        "content": "<p>Yeah, it could be an independent build step to avoid that, at least for <code>module!</code>, so I don't think that would be a problem.</p>\n<p>In any case, side effects or external inputs may be sometimes useful even if the vast majority of proc macros should be pure or have no other inputs. Has there been any decision regarding that in <code>rustc</code> finally? Will it be considered breaking backwards compatibility? I guess proc macros could have an API to communicate with the external world explicitly somehow, and disallow it by default. Then one could provide a way to record/playback that as needed (e.g. for IDEs), etc. etc.</p>",
+        "id": 314264714,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1670341678
+    },
+    {
+        "content": "<p>External file inputs may be provided through a dedicated api which adds it to the depinfo emitted by rustc. As for side effects or non-file external inputs you should probably use a build script instead.</p>",
+        "id": 314424272,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1670409365
+    },
+    {
+        "content": "<p>No decisions have been made yet at all. We don't even have a concrete proposal yet.</p>",
+        "id": 314424431,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1670409430
+    },
+    {
+        "content": "<blockquote>\n<p>Will it be considered breaking backwards compatibility?</p>\n</blockquote>\n<p>It will probably need to be opt-in. Especially because the idea is to compile for wasm and not every proc macro can be compiled for it.</p>",
+        "id": 314424647,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1670409513
+    },
+    {
+        "content": "<p>In the case of ID tables specifically, the way C does it the same structures get used at runtime and for modpost. So while it could be done by generating a C file, you'd have to have that link back to Rust somehow for the Rust-side driver_data machinery attached to device IDs to work, which sounds painful.</p>\n<p>In general, the current Rust abstraction doesn't really work generally for device tables. In C, you can define an arbitrary number of global device tables, you can reference them from explicit lookup functions, you can pick <em>one</em> to be the DT match table for a specific driver (I think similarly for other ID types), and you can mark an arbitrary number of them to be picked up by modpost to generate module aliases. Rust at the very least needs to support decoupling ID tables from the driver, which means the macros that generate tables should be stand-alone (not attached to the device driver associated const), and then the driver should probably just take a reference to the table instead. I started implementing this and that part works fine, but then I ran into not being able to get the actual table struct out as a stand-alone symbol the way the table machinery works.</p>\n<p>One way out would be to just change modpost to not care about the overall symbol size, and just look for a terminating entry the same way the runtime code does. Then we could pass the raw Rust table object directly (which has some appended stuff) and it would work. But then we still need to figure out how to attach a symbol to the real table object. Right now Rust ID tables have an indirection, and I'm not sure how practical it would be to make modpost follow pointers (across relocations and all that...).</p>\n<p>If folks think this direction is good I can try implementing it again, though it's probably going to need turning the ID table stuff on its head quite a bit...</p>",
+        "id": 314608393,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670478805
+    },
+    {
+        "content": "<p>Okay, it's not as bad as I thought. Here's an attempt that actually works:</p>\n<p><a href=\"https://github.com/AsahiLinux/linux/commit/9a1421d9cb54d778424802f1dcb335e798fef496\">https://github.com/AsahiLinux/linux/commit/9a1421d9cb54d778424802f1dcb335e798fef496</a></p>\n<p>I think it could probably be made a bit more ergonomic with some more work, but it's not too bad. One disadvantage is you end up with two copies of the ID table, one just for modpost. I think avoiding that would require one of 1) changing modpost to stop checking symbol lengths so we can just declare the whole <code>IdArray</code> as static (hopefully the compiler is smart enough to alias it when a <code>const</code> gets assigned, and not copy it then?) or changing the ID data mechanism to not rely on offsets, but rather explicit pointers to a static array (which then introduces the problem of what scope to declare that in and how to name it...). The fact that Rust does not support macro invocations when declaring variables hurts here, since it means we can't play <code>concat_idents()</code> names to declare internal names, the user has to specify everything explicitly... (same reason I ended up having to pass <code>MOD_TABLE</code> above)</p>\n<p>Thoughts? ^^</p>",
+        "id": 314614650,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670482778
+    },
+    {
+        "content": "<p>Sorry if I'm always late to the party, I can ask if there is some docs to know more about this module id tables? and also in there is any pointer to the C implementation?</p>\n<p>I read just in a quick way and my screen reader is not doing a great job in the last days, but I feel that the concern of <span class=\"user-mention\" data-user-id=\"522295\">@Asahi Lina</span> sounds right? why we need a different API (that imply from C side to read the rust code and understand it) in rust? why we can not just start with a monkey API translation? and maybe improve it later?</p>",
+        "id": 315051404,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1670666898
+    },
+    {
+        "content": "<p>modpost expects symbols with a specific name to contain ID match tables, then extracts them and converts them to textual module aliases and generates the <code>alias=</code> modinfo fields. So the Rust side has to generate those symbols. The tables are the same the Rust code already generates for runtime APIs, they are just not exported the right way for modpost to work right now.</p>\n<p>The patch I proposed doesn't need any C side changes, but it has the disadvantage that you end up with two copies of the table, one for just modpost, because the way Rust currently handles ID tables has it appending its own metadata into the same constant symbol, and modpost expects the table symbol to be exactly sized. To avoid the duplication would require either telling modpost to not check sizes strictly for Rust (for example, we could have a convention that all the Rust modpost tables start with <code>_rust</code> and skip the length check for those), or refactoring the Rust table handling not to require directly appended metadata but instead reference that some other way.</p>\n<p>This is about compile-time generation, so you can't just call the C APIs (they're macros, not APIs)!</p>",
+        "id": 315059535,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670670641
+    },
+    {
+        "content": "<p>I'm currently trying to implement the i2c device tables. But what I don't unterstand, what is the offset in the <code>RawDeviceId</code> type? and also those context things. OF and the other both have a pointer field, where the offset is stored, but <code>i2c_device_id</code> does not have it. Does it mean, I need a whole different set of macros?</p>",
+        "id": 315067091,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1670673967
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Finn Behrens</span> <a href=\"#narrow/stream/288089-General/topic/Module.20ID.20tables/near/315067091\">said</a>:</p>\n<blockquote>\n<p>I'm currently trying to implement the i2c device tables. But what I don't unterstand, what is the offset in the <code>RawDeviceId</code> type? and also those context things. OF and the other both have a pointer field, where the offset is stored, but <code>i2c_device_id</code> does not have it. Does it mean, I need a whole different set of macros?</p>\n</blockquote>\n<p>It has <code>driver_data</code> which you can use for the same purpose!</p>",
+        "id": 315076671,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670678322
+    },
+    {
+        "content": "<p>Great, than I will just see, to cherry pick the stuff from your commit, looks rather good, makes it easier for me :)</p>",
+        "id": 315079292,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1670679480
+    },
+    {
+        "content": "<blockquote>\n<p>This is about compile-time generation, so you can't just call the C APIs (they're macros, not APIs)!</p>\n</blockquote>\n<p>There is any pointer to look inside the code?</p>",
+        "id": 315106600,
+        "sender_full_name": "Vincenzo Palazzo",
+        "timestamp": 1670692524
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412307\">Finn Behrens</span> <a href=\"#narrow/stream/288089-General/topic/Module.20ID.20tables/near/315079292\">said</a>:</p>\n<blockquote>\n<p>Great, than I will just see, to cherry pick the stuff from your commit, looks rather good, makes it easier for me :)</p>\n</blockquote>\n<p>Sadly you patch does not apply to rust/rust, and I don't fully understand the <code>IdArray</code> and the field that got added, so not totally sure how I would cherry pick that macro.</p>",
+        "id": 315338958,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1670842948
+    },
+    {
+        "content": "<p>I just can't read, nevermind</p>",
+        "id": 315339213,
+        "sender_full_name": "Fiona Behrens",
+        "timestamp": 1670843041
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"545090\">Vincenzo Palazzo (vincenzopalazzo)</span> <a href=\"#narrow/stream/288089-General/topic/Module.20ID.20tables/near/315106600\">said</a>:</p>\n<blockquote>\n<p>There is any pointer to look inside the code?</p>\n</blockquote>\n<p>The macros are in <code>include/linux/module.h</code> and <code>include/linux/mod_devicetable.h</code> and modpost is in <code>scripts/mod/modpost.c</code></p>",
+        "id": 315503346,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1670900809
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/Module.20ID.20tables/near/315059535\">said</a>:</p>\n<blockquote>\n<p>modpost expects symbols with a specific name to contain ID match tables, then extracts them and converts them to textual module aliases and generates the <code>alias=</code> modinfo fields. So the Rust side has to generate those symbols. The tables are the same the Rust code already generates for runtime APIs, they are just not exported the right way for modpost to work right now.</p>\n<p>The patch I proposed doesn't need any C side changes, but it has the disadvantage that you end up with two copies of the table, one for just modpost, because the way Rust currently handles ID tables has it appending its own metadata into the same constant symbol, and modpost expects the table symbol to be exactly sized. To avoid the duplication would require either telling modpost to not check sizes strictly for Rust (for example, we could have a convention that all the Rust modpost tables start with <code>_rust</code> and skip the length check for those), or refactoring the Rust table handling not to require directly appended metadata but instead reference that some other way.</p>\n<p>This is about compile-time generation, so you can't just call the C APIs (they're macros, not APIs)!</p>\n</blockquote>\n<p>Has giving <code>rustc</code> the ability to compile C code ever been considered?  The D compilers now support compiling C code via a bespoke C frontend written in D, which (if I understand correctly) was less than 6000 lines of code.  Rust could theoretically do what Zig does and bundle libtooling.</p>",
+        "id": 315728664,
+        "sender_full_name": "Demi Obenour",
+        "timestamp": 1670987719
+    },
+    {
+        "content": "<p>How would that work with rustc backends that don't have an associated C compiler like the Cranelift backend?</p>",
+        "id": 315795461,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1671017457
+    },
+    {
+        "content": "<p>Creating our own C frontend for rustc would risk abi and other incompatibilities. Linux doesn't allow mixing gcc and clang compiled objects within the same kernel image either despite the fact that clang is meant to be as close to gcc as possible.</p>",
+        "id": 315796282,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1671017714
+    },
+    {
+        "content": "<blockquote>\n<p>Has giving rustc the ability to compile C code ever been considered? </p>\n</blockquote>\n<p>At least for parsing C headers, yeah, we have talked about it a few times. I have pushed for it in the past, and recently I saw comex support it too.</p>",
+        "id": 315800270,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1671018952
+    }
+]

@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>Hi folks! I was wondering if you guys could help me with a problem I'm having. I have a code like the one below:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">Object</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">a</span>: <span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">A</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">b</span>: <span class=\"nc\">B</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">function</span><span class=\"p\">(</span><span class=\"n\">ptr</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">A</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">obj</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">container_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">timer</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Object</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This code doesn't return the proper object from A. I wondered how I could get the obj from A, if A is boxed in the struct.</p>",
+        "id": 340350450,
+        "sender_full_name": "Maíra Canal",
+        "timestamp": 1678279614
+    },
+    {
+        "content": "<p>I don't think you can, <code>container_of</code> needs to be able to compute the offset from where the ptr is to the start of the struct. If you have a pointer to somewhere _else_, then there's no relationship between them. <code>&amp;ptr</code> there is returning the address of somewhere on teh stack, so it's not correct.</p>",
+        "id": 340358820,
+        "sender_full_name": "Alex Gaynor",
+        "timestamp": 1678281720
+    },
+    {
+        "content": "<p>Is this our own macro or is it from the compiler? It would be nice if it threw a compile error.</p>",
+        "id": 340532470,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1678347901
+    },
+    {
+        "content": "<p><code>container_of</code> has the following safety requirement: </p>\n<div class=\"codehilite\"><pre><span></span><code>/// Callers must ensure that the pointer to the field is in fact a pointer to the specified field,\n/// as opposed to a pointer to another object of the same type. If this condition is not met,\n/// any dereference of the resulting pointer is UB.\n</code></pre></div>\n<p>As Alex pointed out, a pointer to <code>A</code> has no relationship to <code>Object</code>. Using <code>container_of</code> this way violates the requirement above; this isn't specific to Rust, it wouldn't work in C either.</p>",
+        "id": 340621811,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1678372251
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/340532470\">said</a>:</p>\n<blockquote>\n<p>Is this our own macro or is it from the compiler? It would be nice if it threw a compile error.</p>\n</blockquote>\n<p>If we could detect such errors at compile time, this wouldn't have to be unsafe :)</p>",
+        "id": 340621938,
+        "sender_full_name": "Wedson Almeida Filho",
+        "timestamp": 1678372274
+    },
+    {
+        "content": "<p>The macro is less safe than it should be though, I don't think it's even trying to assert the type of the field? But even if it did, it might run into the auto-Deref soundness issue I ran into with <code>place!()</code> (where a <code>Box&lt;T&gt;</code> looks like a T).</p>",
+        "id": 346534424,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680521141
+    },
+    {
+        "content": "<p>This is the best I can come up with:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[macro_export]</span>\n<span class=\"fm\">macro_rules!</span><span class=\"w\"> </span><span class=\"n\">container_of</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"cp\">$ptr</span>:<span class=\"nc\">expr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$type</span>:<span class=\"nc\">ty</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$($f</span>:<span class=\"nc\">tt</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cp\">$ptr</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">offset</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"cp\">$crate</span>::<span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"cp\">$type</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"cp\">$($f</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">outer</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">wrapping_offset</span><span class=\"p\">(</span><span class=\"o\">-</span><span class=\"n\">offset</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"cp\">$type</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">ptr</span>::<span class=\"n\">addr_of</span><span class=\"o\">!</span><span class=\"p\">((</span><span class=\"o\">*</span><span class=\"n\">outer</span><span class=\"p\">).</span><span class=\"cp\">$($f</span><span class=\"p\">)</span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"n\">build_assert</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"cp\">$ptr</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"n\">outer</span>\n<span class=\"w\">    </span><span class=\"p\">}}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>It does the typecheck via the <code>==</code> comparison, but it still has the <code>Box&lt;T&gt;</code> hole:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Bar</span><span class=\"p\">(</span><span class=\"kt\">u16</span><span class=\"p\">);</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">Baz</span><span class=\"p\">(</span><span class=\"nb\">Box</span><span class=\"o\">&lt;</span><span class=\"n\">Bar</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">foo</span><span class=\"p\">(</span><span class=\"n\">a</span>: <span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"kt\">u16</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"o\">*</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">Baz</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">container_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Baz</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mf\">0.0</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Since doing the Deref through Box on an uninit struct is immediately UB even with it inside <code>addr_of!()</code>, it's not reliable. I got it to panic on the Rust playground in Release and segfault in Debug, but on arm64 in the kernel it just seems to return nothing (I guess the compiler notices what I'm doing is UB and decides it can do anything...), and no build error.</p>",
+        "id": 346550690,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680524757
+    },
+    {
+        "content": "<p>The memoffset crate uses <code>let $type { $field: _, .. };</code> to check that the field exists.</p>",
+        "id": 346552372,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1680525138
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412316\">bjorn3</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346552372\">said</a>:</p>\n<blockquote>\n<p>The memoffset crate uses <code>let $type { $field: _, .. };</code> to check that the field exists.</p>\n</blockquote>\n<p>But then that doesn't work for nested fields without calling the macro several times, right?</p>",
+        "id": 346554104,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680525499
+    },
+    {
+        "content": "<p>Indeed</p>",
+        "id": 346554458,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1680525580
+    },
+    {
+        "content": "<p>how often do you need it with multiple fields?</p>",
+        "id": 346575917,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680530216
+    },
+    {
+        "content": "<p>also can we make this macro <code>unsafe</code> by adding</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">container_of_is_unsafe</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"w\">        </span><span class=\"n\">container_of_is_unsafe</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>since the caller still needs to guarantee that the supplied pointer is actually pointing to the field of the given type.</p>",
+        "id": 346576566,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680530376
+    },
+    {
+        "content": "<p>I have a solution in mind but that requires a few unstable features (and not quite sound).</p>",
+        "id": 346606203,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1680535993
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346575917\">said</a>:</p>\n<blockquote>\n<p>how often do you need it with multiple fields?</p>\n</blockquote>\n<p>I have a use case for it in DRM GEM shmem (which I actually noticed after switching to the typechecked version above, since I was using <code>container_of!()</code> wrong but it was working by accident because the field was first in the object layout).</p>",
+        "id": 346688186,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680560021
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346576566\">said</a>:</p>\n<blockquote>\n<p>also can we make this macro <code>unsafe</code> by adding</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">container_of_is_unsafe</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"w\">        </span><span class=\"n\">container_of_is_unsafe</span><span class=\"p\">();</span>\n</code></pre></div>\n<p>since the caller still needs to guarantee that the supplied pointer is actually pointing to the field of the given type.</p>\n</blockquote>\n<p>Yeah, I was thinking the same. The macro should be unsafe. Not because of the pointer requirement (since operating on pointers is safe, it's the deref after <code>container_of!()</code> that would be unsafe), but because of the <code>Box&lt;T&gt;</code> hole and the general ability for the macro to invoke arbitrary code on arbitrary pointers via auto-<code>Deref</code>.</p>",
+        "id": 346688224,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680560042
+    },
+    {
+        "content": "<p>Does your use case not work with multiple <code>container_of</code> calls?</p>",
+        "id": 346753644,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1680593191
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346688224\">said</a>:</p>\n<blockquote>\n<p>Not because of the pointer requirement (since operating on pointers is safe, it's the deref after <code>container_of!()</code> that would be unsafe), but because of the <code>Box&lt;T&gt;</code> hole and the general ability for the macro to invoke arbitrary code on arbitrary pointers via auto-<code>Deref</code>.</p>\n</blockquote>\n<p>I do not agree, the pointer requirement is definitely needed at the moment, since <code>addr_of!((*ptr).field)</code> is only allowed if <code>ptr</code> is a valid pointer. <br>\nWe should fix the <code>Box&lt;T&gt;</code>/<code>Deref</code> hole before we put this upstream.</p>",
+        "id": 346776259,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680598304
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346688186\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346575917\">said</a>:</p>\n<blockquote>\n<p>how often do you need it with multiple fields?</p>\n</blockquote>\n<p>I have a use case for it in DRM GEM shmem (which I actually noticed after switching to the typechecked version above, since I was using <code>container_of!()</code> wrong but it was working by accident because the field was first in the object layout).</p>\n</blockquote>\n<p>I have looked at the uses in this branch: <a href=\"https://github.com/AsahiLinux/linux/tree/gpu/rust-drm\">https://github.com/AsahiLinux/linux/tree/gpu/rust-drm</a> but I was not able to find any usages that have multiple fields. Is this the wrong branch?</p>",
+        "id": 346813004,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680606872
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346753644\">said</a>:</p>\n<blockquote>\n<p>Does your use case not work with multiple <code>container_of</code> calls?</p>\n</blockquote>\n<p>It does, it's just longer...</p>",
+        "id": 346834952,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680611450
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346813004\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346688186\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"546447\">y86</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346575917\">said</a>:</p>\n<blockquote>\n<p>how often do you need it with multiple fields?</p>\n</blockquote>\n<p>I have a use case for it in DRM GEM shmem (which I actually noticed after switching to the typechecked version above, since I was using <code>container_of!()</code> wrong but it was working by accident because the field was first in the object layout).</p>\n</blockquote>\n<p>I have looked at the uses in this branch: <a href=\"https://github.com/AsahiLinux/linux/tree/gpu/rust-drm\">https://github.com/AsahiLinux/linux/tree/gpu/rust-drm</a> but I was not able to find any usages that have multiple fields. Is this the wrong branch?</p>\n</blockquote>\n<p>It <em>should</em> have been multiple fields but it wasn't and the lack of type safety hid the mistake.</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/drm/gem/shmem.rs b/rust/kernel/drm/gem/shmem.rs</span>\n<span class=\"gh\">index 8f17eba0be99..0d039ad1d0dd 100644</span>\n<span class=\"gd\">--- a/rust/kernel/drm/gem/shmem.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/drm/gem/shmem.rs</span>\n<span class=\"gu\">@@ -115,7 +115,7 @@ unsafe extern \"C\" fn gem_create_object&lt;T: DriverObject&gt;(</span>\n\n<span class=\"w\"> </span>unsafe extern \"C\" fn free_callback&lt;T: DriverObject&gt;(obj: *mut bindings::drm_gem_object) {\n<span class=\"w\"> </span>    // SAFETY: All of our objects are Object&lt;T&gt;.\n<span class=\"gd\">-    let p = crate::container_of!(obj, Object&lt;T&gt;, obj) as *mut Object&lt;T&gt;;</span>\n<span class=\"gi\">+    let p = crate::container_of!(obj, Object&lt;T&gt;, obj.base) as *mut Object&lt;T&gt;;</span>\n\n<span class=\"w\"> </span>    // SAFETY: p is never used after this\n<span class=\"w\"> </span>    unsafe {\n<span class=\"gu\">@@ -239,7 +239,7 @@ impl&lt;T: DriverObject&gt; gem::IntoGEMObject for Object&lt;T&gt; {</span>\n<span class=\"w\"> </span>    }\n\n<span class=\"w\"> </span>    fn from_gem_obj(obj: *mut bindings::drm_gem_object) -&gt; *mut Object&lt;T&gt; {\n<span class=\"gd\">-        crate::container_of!(obj, Object&lt;T&gt;, obj) as *mut Object&lt;T&gt;</span>\n<span class=\"gi\">+        crate::container_of!(obj, Object&lt;T&gt;, obj.base) as *mut Object&lt;T&gt;</span>\n<span class=\"w\"> </span>    }\n<span class=\"w\"> </span>}\n<span class=\"w\"> </span>```\n</code></pre></div>",
+        "id": 346835556,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680611572
+    },
+    {
+        "content": "<p>If you syntactically limit it to a single field, I think my version is already free of the <code>Box</code> issue: the type check catches the Box case since auto-deref does not get invoked there. I was thinking of playing recursive macro games to support nested fields safely, but I only use that in two places so it's not a big deal if I have to call <code>container_of!()</code> twice either...</p>",
+        "id": 346836639,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680611805
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346835556\">said</a>:</p>\n<blockquote>\n<p>It <em>should</em> have been multiple fields but it wasn't and the lack of type safety hid the mistake.</p>\n</blockquote>\n<p>Oh that makes sense.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/291565-Help/topic/container_of.20using.20Box/near/346836639\">said</a>:</p>\n<blockquote>\n<p>If you syntactically limit it to a single field, I think my version is already free of the <code>Box</code> issue: the type check catches the Box case since auto-deref does not get invoked there. I was thinking of playing recursive macro games to support nested fields safely, but I only use that in two places so it's not a big deal if I have to call <code>container_of!()</code> twice either...</p>\n</blockquote>\n<p>I think we should just fix <code>offset_of!</code> like bjorn suggested (and only allow a single field), since that might be also used elsewhere.<br>\nWe <em>could</em> support multiple fields in <code>offset_of!</code> if we also require all field types to be given, i.e.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span> <span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">bar</span>: <span class=\"nc\">Bar</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n<span class=\"k\">struct</span> <span class=\"nc\">Bar</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">baz</span>: <span class=\"nc\">Baz</span>\n<span class=\"p\">}</span>\n<span class=\"k\">struct</span> <span class=\"nc\">Baz</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">data</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n<span class=\"n\">offset_of</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">Bar</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">Baz</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">.</span><span class=\"n\">baz</span><span class=\"p\">.</span><span class=\"n\">data</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>Then we could just use <code>let _: $type { $field: _, ..} = ...;</code> to typecheck.</p>\n<p>Another thing you could do is to create your own macro for this case only that calls <code>container_of!</code> twice.</p>",
+        "id": 346839756,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680612514
+    },
+    {
+        "content": "<p>I think for now it makes sense to just limit both macros to a single field, and then I think with my type check assert we should be good?</p>",
+        "id": 347019179,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1680669197
+    },
+    {
+        "content": "<p>I think we only need to adjust <code>offset_of!</code>, because if that is correct <code>container_of!</code> should also be correct. Not sure if your fix works with that though? If not, we can just use the <code>let _: $type { $f: _, .. }</code> trick.</p>",
+        "id": 347162310,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1680704490
+    }
+]

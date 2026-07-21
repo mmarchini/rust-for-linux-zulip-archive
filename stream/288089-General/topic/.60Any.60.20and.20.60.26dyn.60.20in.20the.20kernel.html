@@ -1,0 +1,40 @@
+<html>
+<head><meta charset="utf-8"><title>`Any` and `&amp;dyn` in the kernel · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60Any.60.20and.20.60.26dyn.60.20in.20the.20kernel.html">`Any` and `&amp;dyn` in the kernel</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="514451765"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60Any%60%20and%20%60%26dyn%60%20in%20the%20kernel/near/514451765" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60Any.60.20and.20.60.26dyn.60.20in.20the.20kernel.html#514451765">(Apr 25 2025 at 19:55)</a>:</h4>
+<p>Hi! So to provide context to start off: in the KMS bindings I've been working on, we have two different types of most modesetting objects:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Crtc</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">DriverCrtc</span><span class="o">&gt;</span>
+<span class="n">OpaqueCrtc</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">KmsDriver</span><span class="o">&gt;</span>
+</code></pre></div>
+<p>Where <code>T</code> as <code>DriverCrtc</code> can hold private data specific to the driver, and <code>OpaqueCrtc</code> is the "opaque" variant of a <code>Crtc</code> that doesn't know the specific <code>DriverCrtc</code> being implemented and cannot access the private data. Both of these implement <code>AsRawCrtc</code> which implements <code>RawCrtc</code> for them, which allows both of them to use a common subset of methods that don't rely on knowing what <code>DriverCrtc</code> is being used. We do this same pattern for pretty much every modesetting object (so, also <code>Encoder</code>, <code>Connector</code>, and <code>Plane</code>). And, you can fallibly cast from a <code>OpaqueCrtc</code> to a <code>Crtc</code>.</p>
+<p>Now - when I posted these patches last one of the questions I got was why we didn't use <code>&amp;dyn</code> and to be honest, I don't actually know why! Which brings me to ask: with the kernel, would it actually be possible for us to implement a similar scheme where instead of having <code>OpaqueCrtc</code> we just replace it with some sort of <code>&amp;dyn</code> type? And would we need to use <code>Any</code> for enabling casting like this?</p>
+
+
+
+<a name="516610489"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%60Any%60%20and%20%60%26dyn%60%20in%20the%20kernel/near/516610489" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ozgur Karatas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.60Any.60.20and.20.60.26dyn.60.20in.20the.20kernel.html#516610489">(May 07 2025 at 08:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/288089-General/topic/.60Any.60.20and.20.60.26dyn.60.20in.20the.20kernel/near/514451765">dedi</a>:</p>
+<blockquote>
+<p>Hi! So to provide context to start off: in the KMS bindings I've been working on, we have two different types of most modesetting objects:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">Crtc</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">DriverCrtc</span><span class="o">&gt;</span>
+<span class="n">OpaqueCrtc</span><span class="o">&lt;</span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">KmsDriver</span><span class="o">&gt;</span>
+</code></pre></div>
+<p>Where <code>T</code> as <code>DriverCrtc</code> can hold private data specific to the driver, and <code>OpaqueCrtc</code> is the "opaque" variant of a <code>Crtc</code> that doesn't know the specific <code>DriverCrtc</code> being implemented and cannot access the private data. Both of these implement <code>AsRawCrtc</code> which implements <code>RawCrtc</code> for them, which allows both of them to use a common subset of methods that don't rely on knowing what <code>DriverCrtc</code> is being used. We do this same pattern for pretty much every modesetting object (so, also <code>Encoder</code>, <code>Connector</code>, and <code>Plane</code>). And, you can fallibly cast from a <code>OpaqueCrtc</code> to a <code>Crtc</code>.</p>
+<p>Now - when I posted these patches last one of the questions I got was why we didn't use <code>&amp;dyn</code> and to be honest, I don't actually know why! Which brings me to ask: with the kernel, would it actually be possible for us to implement a similar scheme where instead of having <code>OpaqueCrtc</code> we just replace it with some sort of <code>&amp;dyn</code> type? And would we need to use <code>Any</code> for enabling casting like this?</p>
+</blockquote>
+<p>Hello,  I think yes you can make a similar abstraction with &amp;dyn trait but trait objects use runtime dispatch and compile-time dispatch problem arises i guess and if you use &amp;dyn again and return to t again you need to downcast in rust. in my opinion this may cause problems with kernel-level bindings and again i think &amp;dyn is a runtime dispatch, which will cause complexity.</p>
+<p>again, this doesnt prevent writing Crtc&lt;T&gt; and OpaqueCrtc structure with &amp;dyn and Any.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

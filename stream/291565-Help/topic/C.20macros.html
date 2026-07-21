@@ -1,0 +1,120 @@
+<html>
+<head><meta charset="utf-8"><title>C macros · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html">C macros</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="243203608"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243203608" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jose Teuttli <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243203608">(Jun 18 2021 at 20:12)</a>:</h4>
+<p>My understanding is that bindgen does not translate macros, therefore if we wanted to use something like virt_mb() or barrier() is there somewhere those are available? If they aren't where should I place them? Rust supports in-line assembly so I could just have my own macro, but I think something like virt_mb() would be something others would also want.</p>
+
+
+
+<a name="243203673"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243203673" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alex Gaynor <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243203673">(Jun 18 2021 at 20:13)</a>:</h4>
+<p>Take a look at helpers.c -- we re-expose macros there as regular functions.</p>
+
+
+
+<a name="243241960"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243241960" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wei Liu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243241960">(Jun 19 2021 at 10:10)</a>:</h4>
+<p>The problem with exporting a macro like virt_mb or barrier to regular functions will be too heavy weight. We don't want to pay for the extra function call overhead.</p>
+
+
+
+<a name="243242286"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243242286" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243242286">(Jun 19 2021 at 10:17)</a>:</h4>
+<p>Cross-language LTO should mostly take care of that.</p>
+
+
+
+<a name="243242302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243242302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243242302">(Jun 19 2021 at 10:17)</a>:</h4>
+<p>But yeah, eventually, it is likely we may end up with some duplicate functionality to improve that.</p>
+
+
+
+<a name="243242352"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/243242352" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#243242352">(Jun 19 2021 at 10:18)</a>:</h4>
+<p>However, for the moment, I think avoiding duplicate implementations on both sides is best.</p>
+
+
+
+<a name="268660397"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268660397" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Pankaj Raghav <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268660397">(Jan 20 2022 at 08:55)</a>:</h4>
+<p>Hello everyone,<br>
+I have been playing with the rust support in Linux but I am having trouble using Macros. I am always getting a linking error.<br>
+Minimal reproduction scenario:</p>
+<div class="codehilite"><pre><span></span><code>diff --git a/rust/kernel/miscdev.rs b/rust/kernel/miscdev.rs
+index ccbd4f4cfe28..a460935523cc 100644
+--- a/rust/kernel/miscdev.rs
++++ b/rust/kernel/miscdev.rs
+@@ -7,6 +7,7 @@
+ //! Reference: &lt;https://www.kernel.org/doc/html/latest/driver-api/misc_devices.html&gt;
+
+ use crate::bindings;
++use crate::bindings::BUG;
+ use crate::error::{Error, Result};
+ use crate::file_operations::{FileOpenAdapter, FileOperations, FileOperationsVtable};
+ use crate::{str::CStr, KernelModule, ThisModule};
+@@ -73,6 +74,10 @@ impl&lt;T: FileOperations&gt; Registration&lt;T&gt; {
+             return Err(Error::EINVAL);
+         }
+
++        let _ = unsafe {
++            BUG();
++        };
++
+         // SAFETY: The adapter is compatible with `misc_register`.
+         this.mdev.fops = unsafe { FileOperationsVtable::&lt;Self, T&gt;::build() };
+         this.mdev.name = name.as_char_ptr();
+</code></pre></div>
+<p>Error:</p>
+<div class="codehilite"><pre><span></span><code>  OBJCOPY arch/x86/boot/compressed/vmlinux.bin
+ERROR: modpost: &quot;rust_helper_BUG&quot; [samples/rust/rust_random.ko] undefined!
+ERROR: modpost: &quot;rust_helper_BUG&quot; [samples/rust/rust_semaphore.ko] undefined!
+ERROR: modpost: &quot;rust_helper_BUG&quot; [samples/rust/rust_miscdev.ko] undefined!
+make[1]: *** [scripts/Makefile.modpost:134: modules-only.symvers] Error 1
+</code></pre></div>
+<p>Should I enable some setting or am I missing something? <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span></p>
+
+
+
+<a name="268705864"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268705864" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wei Liu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268705864">(Jan 20 2022 at 15:09)</a>:</h4>
+<p>That function is not exported. You need to add <code>EXPORT_SYMBOL_GPL(rust_helper_BUG);</code> to <code>rust/helpers.c</code></p>
+
+
+
+<a name="268707334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268707334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Pankaj Raghav <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268707334">(Jan 20 2022 at 15:18)</a>:</h4>
+<p>Ahh! Of course, I don't know how I missed that! Thanks <span class="user-mention" data-user-id="412106">@Wei Liu</span></p>
+
+
+
+<a name="268707363"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268707363" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268707363">(Jan 20 2022 at 15:18)</a>:</h4>
+<p>Yeah. <span class="user-mention" data-user-id="464112">@Pankaj Raghav</span>  please note <code>BUG</code> is not a macro in the Rust side (and using C macros in Rust code is not possible in general).</p>
+
+
+
+<a name="268707980"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268707980" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Wei Liu <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268707980">(Jan 20 2022 at 15:21)</a>:</h4>
+<p>I found a few more and thought I'd open a PR <a href="https://github.com/Rust-for-Linux/linux/pull/637">https://github.com/Rust-for-Linux/linux/pull/637</a> .</p>
+
+
+
+<a name="268708015"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/C%20macros/near/268708015" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Pankaj Raghav <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/C.20macros.html#268708015">(Jan 20 2022 at 15:21)</a>:</h4>
+<p>Thanks <span class="user-mention" data-user-id="411477">@Miguel Ojeda</span>! <br>
+Yeah, I understood that. I actually was trying something with PCI and trying to expose a macro. I forgot to add EXPORT_SYMBOL. I used BUG here as an example. :)</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

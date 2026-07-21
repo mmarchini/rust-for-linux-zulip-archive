@@ -1,0 +1,308 @@
+[
+    {
+        "content": "<p>I'm stuck on updating this and other C structs which worked on v6.14, but doesn't work on Linus' current tree (with rust-next):</p>\n<p>unsafe impl init::Zeroable for bindings::drm_gem_shmem_object {}</p>\n<p>Changing init to pin_init didn't work. I'm getting E0117.</p>\n<p>What's the new way to do this? <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> ?</p>",
+        "id": 509711564,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1743603644
+    },
+    {
+        "content": "<p>I think we should put those kinds of things into the bindings crate itself, but not 100% sure.</p>",
+        "id": 509776619,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1743621763
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span></p>",
+        "id": 509776636,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1743621769
+    },
+    {
+        "content": "<p>Is that the orphan rule? Then, yeah, one way would be putting them there. Alternatively, could we use a transparent wrapping type?</p>\n<p>If we are going with the <code>bindings</code> approach, then I think ideally we would have <code>bindgen</code> annotate things like this automatically. Could we perhaps use <code>--with-derive-custom</code> to annotate those?</p>",
+        "id": 509981143,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1743696239
+    },
+    {
+        "content": "<p>I would think Zeroable for C structs would be the rule rather than exception.</p>",
+        "id": 509982764,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1743696682
+    },
+    {
+        "content": "<p>Is there a way to make Zeroable not foreign (as it wasn't in 6.14 I guess since this worked then)?</p>",
+        "id": 509983457,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1743696876
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/291565-Help/topic/Zeroable.20trait.20for.20C.20structs/near/509981143\">said</a>:</p>\n<blockquote>\n<p>Is that the orphan rule? Then, yeah, one way would be putting them there. Alternatively, could we use a transparent wrapping type?</p>\n</blockquote>\n<p>Yeah it's the orphan rule. A transparent wrapper type is probably very annoying and won't scale. (If the bindings type is only used in <code>Opaque</code>, then there isn't a problem, as <code>Opaque</code> already should implement <code>Zeroable</code>. if it doesn't, it's an easy fix)</p>\n<blockquote>\n<p>If we are going with the <code>bindings</code> approach, then I think ideally we would have <code>bindgen</code> annotate things like this automatically. Could we perhaps use <code>--with-derive-custom</code> to annotate those?</p>\n</blockquote>\n<p>Yeah, I think such an option would be nice (after all, we have the <code>derive(Zeroable)</code> macro). Maybe we need a <code>derive(MaybeZeroable)</code> that doesn't error when it can't implement <code>Zeroable</code> due to not all fields being <code>Zeroable</code> (IIRC the normal one does error).</p>",
+        "id": 510179173,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1743767428
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"758058\">Rob Herring</span> <a href=\"#narrow/channel/291565-Help/topic/Zeroable.20trait.20for.20C.20structs/near/509983457\">said</a>:</p>\n<blockquote>\n<p>Is there a way to make Zeroable not foreign (as it wasn't in 6.14 I guess since this worked then)?</p>\n</blockquote>\n<p>I moved all of the items that belong to <code>pin-init</code> into their own crate for better maintainability, see <a href=\"https://lore.kernel.org/all/20250308110339.2997091-1-benno.lossin@proton.me\">https://lore.kernel.org/all/20250308110339.2997091-1-benno.lossin@proton.me</a></p>\n<p>I don't think there is a way to make it not foreign, as the pin-init crate also depends on it.</p>\n<p>We asked the rust folks about relaxing the orphan rule, but there hasn't been a lot of progress there.</p>",
+        "id": 510186832,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1743769236
+    },
+    {
+        "content": "<p>For the moment, if we do the <code>impl</code>s manually in <code>rust/bindings/lib.rs</code> as Benno suggested, then I guess we will need:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/Makefile b/rust/Makefile</span>\n<span class=\"gh\">index 2a8342e9c5b5..33eb3d0c55af 100644</span>\n<span class=\"gd\">--- a/rust/Makefile</span>\n<span class=\"gi\">+++ b/rust/Makefile</span>\n<span class=\"gu\">@@ -501,9 +501,10 @@ $(obj)/ffi.o: private skip_gendwarfksyms = 1</span>\n<span class=\"w\"> </span>$(obj)/ffi.o: $(src)/ffi.rs $(obj)/compiler_builtins.o FORCE\n<span class=\"w\"> </span>       +$(call if_changed_rule,rustc_library)\n\n<span class=\"gd\">-$(obj)/bindings.o: private rustc_target_flags = --extern ffi</span>\n<span class=\"gi\">+$(obj)/bindings.o: private rustc_target_flags = --extern ffi --extern pin_init</span>\n<span class=\"w\"> </span>$(obj)/bindings.o: $(src)/bindings/lib.rs \\\n<span class=\"w\"> </span>    $(obj)/ffi.o \\\n<span class=\"gi\">+    $(obj)/pin_init.o \\</span>\n<span class=\"w\"> </span>    $(obj)/bindings/bindings_generated.rs \\\n<span class=\"w\"> </span>    $(obj)/bindings/bindings_helpers_generated.rs FORCE\n<span class=\"w\"> </span>       +$(call if_changed_rule,rustc_library)\n</code></pre></div>\n<p>And then Rob can write e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/bindings/lib.rs b/rust/bindings/lib.rs</span>\n<span class=\"gh\">index 014af0d1fc70..5553056a66ab 100644</span>\n<span class=\"gd\">--- a/rust/bindings/lib.rs</span>\n<span class=\"gi\">+++ b/rust/bindings/lib.rs</span>\n<span class=\"gu\">@@ -55,3 +55,5 @@ mod bindings_helper {</span>\n<span class=\"w\"> </span>}\n\n<span class=\"w\"> </span>pub use bindings_raw::*;\n<span class=\"gi\">+</span>\n<span class=\"gi\">+unsafe impl pin_init::Zeroable for drm_gem_shmem_object {}</span>\n</code></pre></div>\n<p>If that works for you, Rob, for the moment, then that is great, and we can work on perhaps automating it better in the future (or discussing a way with upstream Rust to do this better).</p>\n<p>If it does not work for you, could you please give us your branch so that we play with it?</p>",
+        "id": 510264158,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1743790697
+    },
+    {
+        "content": "<p>I will try this on the gem shmem branch, since this move unfortunately broke both that and the kms bindings</p>",
+        "id": 512897222,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744916967
+    },
+    {
+        "content": "<p>if it works there could we get this into a patch so we could get this onto the mailing list? Just want to make sure this isn't going to block work since Rob is right: zeroable structs are the rule in C rather than exceptions</p>",
+        "id": 512897906,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744917221
+    },
+    {
+        "content": "<p>also - this solution doesn't work</p>",
+        "id": 512921088,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926393
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/291565-Help/topic/Zeroable.20trait.20for.20C.20structs/near/512921088\">said</a>:</p>\n<blockquote>\n<p>also - this solution doesn't work</p>\n</blockquote>\n<p>It compiled for me, it must... Or maybe it didn't with the other errors I'm still sorting out.</p>",
+        "id": 512921223,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1744926470
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"758058\">@Rob Herring</span> wait are you working on the gem shmem branch right now?</p>",
+        "id": 512921394,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926541
+    },
+    {
+        "content": "<p>What branch? I'm rebasing tyr to 6.15 with latest nova branch.</p>",
+        "id": 512921586,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1744926622
+    },
+    {
+        "content": "<p>Gotcha. sorry - I forgot it's not a branch as well but a patch series, I've just been here trying to rebase the patches that daniel sent for gem shmem support in rust</p>",
+        "id": 512921665,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926658
+    },
+    {
+        "content": "<p>I'd like a branch with everything as we discussed a while back...</p>",
+        "id": 512921799,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1744926720
+    },
+    {
+        "content": "<p>tbh I dont remember much of that conversation :S, would have to ask danilo about that. I've been kind of focused on trying to get all of these dependencies upstream</p>",
+        "id": 512921969,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926804
+    },
+    {
+        "content": "<p><a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/commit/040c3a2b34e4dd48d2a25133e46f40c1f60100de\">https://gitlab.freedesktop.org/lyudess/linux/-/commit/040c3a2b34e4dd48d2a25133e46f40c1f60100de</a> is the workaround that I have on my branch right now that doesn't seem to work. It complains that Zeroable is a safe trait which, doesn't really make any sense since it's not</p>",
+        "id": 512922007,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926832
+    },
+    {
+        "content": "<p>You need to drop 'bindings::' I think</p>",
+        "id": 512922281,
+        "sender_full_name": "Rob Herring",
+        "timestamp": 1744926908
+    },
+    {
+        "content": "<p>doesn't seem to work either...</p>",
+        "id": 512922411,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744926953
+    },
+    {
+        "content": "<p>i'm unconvinced this isn't just rust lsp being broken so I'm going to ignore it for the time being and come back if it ends up still being a problem.<br>\nwould be really nice to get this fixed upstream though since this is going to be a problem for quite a lot of bindings</p>",
+        "id": 512922826,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744927093
+    },
+    {
+        "content": "<blockquote>\n<p>i'm unconvinced this isn't just rust lsp being broken</p>\n</blockquote>\n<p>Do you mean it compiles fine and it is just rust-analyzer complaining? IIRC I built the diff above and it seemed fine.</p>",
+        "id": 513017276,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1744976038
+    },
+    {
+        "content": "<p>What if we add <code>#[derive(MaybeZeroable)]</code> onto every struct in <code>bindings</code>? Ie after invoking bindgen do some <code>sed</code> to add  the above derive.</p>\n<p>the <code>MaybeZeroable</code> derive macro will then only implement <code>Zeroable</code> if all fields implement <code>Zeroable</code>.</p>",
+        "id": 513030113,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1744981625
+    },
+    {
+        "content": "<p>we can ask bindgen to provide the <code>--with-derive-custom</code> Miguel suggested above, but we probably want to have a solution now</p>",
+        "id": 513030166,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1744981665
+    },
+    {
+        "content": "<p>yeah it might be - I'm trying to clean up the rest of this code so i can actually figure that out today</p>",
+        "id": 513073660,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744999303
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/291565-Help/topic/Zeroable.20trait.20for.20C.20structs/near/513030113\">said</a>:</p>\n<blockquote>\n<p>What if we add <code>#[derive(MaybeZeroable)]</code> onto every struct in <code>bindings</code>? Ie after invoking bindgen do some <code>sed</code> to add  the above derive.</p>\n<p>the <code>MaybeZeroable</code> derive macro will then only implement <code>Zeroable</code> if all fields implement <code>Zeroable</code>.</p>\n</blockquote>\n<p>I think this sounds good.<br>\nBTW though - I think bindgen does provide a way to ask it to derive a trait for a specific type, I think I use it once or twice in the KMS bindings</p>",
+        "id": 513073950,
+        "sender_full_name": "Lyude",
+        "timestamp": 1744999379
+    },
+    {
+        "content": "<p><span aria-label=\"man facepalming\" class=\"emoji emoji-1f926-200d-2642\" role=\"img\" title=\"man facepalming\">:man_facepalming:</span> I misread Miguel's message above and didn't realize that the option already existed, I'll add it to my list of patch ideas, maybe I get to sooner, since it's simple :)</p>",
+        "id": 513147301,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1745050033
+    },
+    {
+        "content": "<p>got some good news for you <span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> &amp; <span class=\"user-mention\" data-user-id=\"758058\">@Rob Herring</span> : <a href=\"https://github.com/y86-dev/linux/commits/bindgen-zeroable/\">https://github.com/y86-dev/linux/commits/bindgen-zeroable/</a></p>",
+        "id": 513256744,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1745141296
+    },
+    {
+        "content": "<p><span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>  ah not so fast:</p>\n<div class=\"codehilite\" data-code-language=\"Text only\"><pre><span></span><code>error[E0277]: the trait bound `bindings::qspinlock__bindgen_ty_1: pin_init::Zeroable` is not satisfied\n   --&gt; rust/kernel/lib.rs:246:23\n    |\n246 |     assert_zeroable::&lt;bindings::drm_gem_shmem_object&gt;();\n    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `pin_init::Zeroable` is not implemented for `bindings::qspinlock__bindgen_ty_1`\n    |\n    = help: the following other types implement trait `pin_init::Zeroable`:\n              ()\n              (A, B, C, D, E, F, G, H, I, J)\n              (B, C, D, E, F, G, H, I, J)\n              (C, D, E, F, G, H, I, J)\n              (D, E, F, G, H, I, J)\n              (E, F, G, H, I, J)\n              (F, G, H, I, J)\n              (G, H, I, J)\n            and 3773 others\n    = note: required for `bindings::qspinlock` to implement `pin_init::Zeroable`\n    = note: 5 redundant requirements hidden\n    = note: required for `drm_gem_shmem_object` to implement `pin_init::Zeroable`\nnote: required by a bound in `assert_zeroable`\n   --&gt; rust/kernel/lib.rs:243:23\n    |\n243 | fn assert_zeroable&lt;T: pin_init::Zeroable&gt;() {}\n    |                       ^^^^^^^^^^^^^^^^^^ required by this bound in `assert_zeroable`\n</code></pre></div>",
+        "id": 513257112,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1745141617
+    },
+    {
+        "content": "<p>fixed it now &amp; pushed a TEST commit that checks if <code>drm_gem_shmem_object</code> implements <code>Zeroable</code> :)</p>",
+        "id": 513257805,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1745142118
+    },
+    {
+        "content": "<p>oh cool! I'll check it out today or tomorrow</p>",
+        "id": 513678008,
+        "sender_full_name": "Lyude",
+        "timestamp": 1745346616
+    },
+    {
+        "content": "<p>sorry I forgot to get to this! going to check it today</p>",
+        "id": 515535649,
+        "sender_full_name": "Lyude",
+        "timestamp": 1746115890
+    },
+    {
+        "content": "<p>it works btw :)</p>",
+        "id": 515580336,
+        "sender_full_name": "Lyude",
+        "timestamp": 1746132871
+    },
+    {
+        "content": "<p>thanks for checking :)</p>",
+        "id": 515580361,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1746132882
+    },
+    {
+        "content": "<p>BTW - does this patch need any reviews?</p>",
+        "id": 519450073,
+        "sender_full_name": "Lyude",
+        "timestamp": 1747765654
+    },
+    {
+        "content": "<p>ah I haven't sent this to the list yet</p>",
+        "id": 519456094,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1747767796
+    },
+    {
+        "content": "<p>happy to help review when you do (I've also got some patch series that depend on it now)</p>",
+        "id": 519456145,
+        "sender_full_name": "Lyude",
+        "timestamp": 1747767822
+    },
+    {
+        "content": "<p>just make sure to add me to the cc</p>",
+        "id": 519456171,
+        "sender_full_name": "Lyude",
+        "timestamp": 1747767832
+    },
+    {
+        "content": "<p>or rather, the <code>MaybeZeroable</code> part already is there, only the buildsystem stuff is missing</p>",
+        "id": 519456177,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1747767834
+    },
+    {
+        "content": "<p>sent: <a href=\"https://lore.kernel.org/rust-for-linux/20250520192307.259142-1-lossin@kernel.org/\">https://lore.kernel.org/rust-for-linux/20250520192307.259142-1-lossin@kernel.org/</a></p>",
+        "id": 519459188,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1747769028
+    },
+    {
+        "content": "<p>I'm going over v2 of this patchset and noticed that I'm not actually implmenting <code>Zeroable</code>  for <code>Option&lt;fn()&gt;</code>. I fixed this and then also replaced some usages of <code>mem::zeroed</code> that we already had.</p>",
+        "id": 520063852,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748009623
+    },
+    {
+        "content": "<p>but now my question is how many parameters do C functions have at a maximum in the kernel?</p>",
+        "id": 520063890,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748009638
+    },
+    {
+        "content": "<p>It's easy to add more and use a high number from the get-go, but I'd like to know if let's say 20 is a good starting number that would suffice for almost every function there is :)</p>",
+        "id": 520064051,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748009672
+    },
+    {
+        "content": "<p><a href=\"https://elixir.bootlin.com/linux/v6.15-rc7/source/drivers/gpu/drm/amd/display/dc/dml/dcn314/display_mode_vba_314.c#L831\">https://elixir.bootlin.com/linux/v6.15-rc7/source/drivers/gpu/drm/amd/display/dc/dml/dcn314/display_mode_vba_314.c#L831</a></p>\n<p>:)</p>",
+        "id": 520115635,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1748027934
+    },
+    {
+        "content": "<p>okay let me get <code>wc</code> for that...</p>",
+        "id": 520115705,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748027974
+    },
+    {
+        "content": "<p>61!</p>",
+        "id": 520115710,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748027980
+    },
+    {
+        "content": "<p>That is just in a C file, I was pointing it out for fun</p>",
+        "id": 520115816,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1748028015
+    },
+    {
+        "content": "<p>yeah :)</p>",
+        "id": 520115825,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748028019
+    },
+    {
+        "content": "<p>the person who has to write abstractions for that will have to add a couple letters to my macro then :)</p>",
+        "id": 520115856,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1748028035
+    },
+    {
+        "content": "<p>Really, the most I could find in <code>include/</code> are about 15: <a href=\"https://elixir.bootlin.com/linux/v6.15-rc7/source/include/linux/ceph/osdmap.h#L275\">https://elixir.bootlin.com/linux/v6.15-rc7/source/include/linux/ceph/osdmap.h#L275</a></p>",
+        "id": 520115896,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1748028057
+    }
+]

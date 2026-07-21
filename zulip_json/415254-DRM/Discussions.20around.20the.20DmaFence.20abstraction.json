@@ -1,0 +1,1292 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> has recently proposed bindings for the dma_fence object. I started reviewing those and pointed a couple things that I thought were important to address, but I'm sometimes lost in how things should be expressed/done in rust, so I thought it'd be good to have a public thread to discuss rust things around DmaFence. The first set of people I can see interested in this would be <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> and <span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span>.</p>",
+        "id": 572732944,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770632511
+    },
+    {
+        "content": "<p>First concern I'd like to raise that's not raised on the ML yet, is the fact the observer dma_fence callback (in C) is called with the dma_fence::lock (a spinlock) held, which implies that, if we want to let rust code observe dma_fence the same way we do in C: with some observer registration, who has a ::signaled() method called when the fence is signaled, we need to make it very clear what the constraints are (no sleep, no possibility of registering the same observer to a different fence, because that's a nested lock from lockdep perspective, ...)</p>",
+        "id": 572733924,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770632754
+    },
+    {
+        "content": "<p>the other option is to simply not allow that, and instead have generic observers that would:</p>\n<ul>\n<li>\n<p>queue a WorkItem, from which the actual ::signaled() event would be processed<br>\nand/or</p>\n</li>\n<li>\n<p>complete a Completion object</p>\n</li>\n</ul>",
+        "id": 572734443,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770632896
+    },
+    {
+        "content": "<p>Can you ellaborate some more what an observer is for you? Link to some code?</p>\n<p>So far I had understood that the observers you had in mind are objects which shall solve the problem of how to ensure that a fence getting droped unsignaled gets signaled with an error. (for the others: that's impossible right now because all Rust callback objects take a reference to the fence)</p>",
+        "id": 572734531,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770632920
+    },
+    {
+        "content": "<p>the downside is that it might imply some scheduling round-trips, but it sounds safer</p>",
+        "id": 572734554,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770632925
+    },
+    {
+        "content": "<p>sure, I can share the WIP branch I shared with you last week</p>",
+        "id": 572734668,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770632960
+    },
+    {
+        "content": "<p>I mean in C. You say we have that in C already.<br>\nBut the problems that I am aware of mostly don't get addressed in C, so…</p>",
+        "id": 572734795,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770632992
+    },
+    {
+        "content": "<p><a href=\"https://gitlab.freedesktop.org/bbrezillon/linux/-/commit/210ef70af2fcc331ec4a57ee2c51aeb57d6a527b\">https://gitlab.freedesktop.org/bbrezillon/linux/-/commit/210ef70af2fcc331ec4a57ee2c51aeb57d6a527b</a></p>",
+        "id": 572734857,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633005
+    },
+    {
+        "content": "<blockquote>\n<p>But the problems that I am aware of mostly don't get addressed in C, so…</p>\n</blockquote>\n<p>Yeah, but that's the paradigm in C, you can do everything you want, at your own risk...</p>",
+        "id": 572735138,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633069
+    },
+    {
+        "content": "<p>We can allow the same in rust, but then what's the point if we have an API which is super tricky to use</p>",
+        "id": 572735289,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633112
+    },
+    {
+        "content": "<p>so I think we're on the same page, we don't want to expose stuff we might regret</p>",
+        "id": 572735344,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633128
+    },
+    {
+        "content": "<p>which is why I'm asking about fence callbacks, and how we should expose them</p>",
+        "id": 572735468,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633159
+    },
+    {
+        "content": "<p>We should first write down the requirements. Which of the mysterious dma_fence rules does my RFC not cover yet?</p>\n<p>I'm aware of:</p>\n<ul>\n<li>fence.begin_signalling()</li>\n<li>No fence must drop unsignaled / must signal itself with an error if droped unsignaled</li>\n</ul>",
+        "id": 572735664,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770633210
+    },
+    {
+        "content": "<blockquote>\n<p>No fence must drop unsignaled / must signal itself with an error if droped unsignaled</p>\n</blockquote>\n<p>No <strong>public</strong> fence should be dropped unsignaled</p>",
+        "id": 572735994,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633286
+    },
+    {
+        "content": "<p>by public I mean fences exposed to the outside world</p>",
+        "id": 572736071,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633304
+    },
+    {
+        "content": "<p>In Tyr, we have cases where we create fences, for jobs, and at some point, an error occurs on some job initialization, meaning we have to destroy all the jobs we created so far (created, not submitted), and drop the fences we had attached to them</p>",
+        "id": 572736442,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633391
+    },
+    {
+        "content": "<p>in that case, that's fine to drop a fence unsignalled, because no one has seen that fence yet</p>",
+        "id": 572736515,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633409
+    },
+    {
+        "content": "<p>on the other hand, it's not a big deal if we force its signalling either</p>",
+        "id": 572736582,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633428
+    },
+    {
+        "content": "<blockquote>\n<p>fence.begin_signalling()</p>\n</blockquote>\n<p>You mean forcing devs to annotate sections that are needed to signal a fence?</p>",
+        "id": 572736785,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633478
+    },
+    {
+        "content": "<p>What about already-registered fence callbacks? Aren't those essential for kicking off forward progress and the like?</p>\n<p>And what about fence context sequence numbers when you throw away fences, doesn't that create holes of unsignaled fences?</p>\n<p>That's important because the idea of forcing people to always signal through the fence context has also been floating around for months now:</p>\n<p><code>fctx.signal_up_to_seqno(5032)?;</code></p>",
+        "id": 572737045,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770633552
+    },
+    {
+        "content": "<blockquote>\n<p>You mean forcing devs to annotate sections that are needed to signal a fence?</p>\n</blockquote>\n<p>\"force\" is up for debate.<br>\nI mean that the feature is currently not even implemented in Rust.</p>",
+        "id": 572737156,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770633583
+    },
+    {
+        "content": "<blockquote>\n<p>on the other hand, it's not a big deal if we force its signalling either</p>\n</blockquote>\n<p>the problem is that you can't force signalling in ::drop() if the fence is referenced by some external user (being wait on somewhere). So, the only way to force that is to somehow have a FenceProxy that doesn't take a ref on the real fence (some sort of WeakRef) but gets informed when the driver releases the last ref it has on the DriverDmaFence object.</p>",
+        "id": 572737606,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633696
+    },
+    {
+        "content": "<p>Or any other tricks I couldn't think of</p>",
+        "id": 572737657,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633713
+    },
+    {
+        "content": "<blockquote>\n<p>What about already-registered fence callbacks? Aren't those essential for kicking off forward progress and the like?</p>\n</blockquote>\n<p>The C world stays unchanged. It will have the same freedom/inherent-risks it already has</p>",
+        "id": 572737896,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633774
+    },
+    {
+        "content": "<blockquote>\n<p>And what about fence context sequence numbers when you throw away fences, doesn't that create holes of unsignaled fences?</p>\n</blockquote>\n<p>It doesn't matter as long as the number increases</p>",
+        "id": 572738026,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633803
+    },
+    {
+        "content": "<p>what you can't do is go back</p>",
+        "id": 572738049,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633810
+    },
+    {
+        "content": "<p>Yes, that was my idea as well. Another layer of refcounting for all those who could signal the fence.</p>\n<p>IMO that's a point where one might ask himself how much effort you want to spend to guarantee absolute 100% correctness.</p>\n<p>Currently, the C backend fires WARN_ONs on that anyways.<br>\nAnd such problems need to be noticed and fixed, because it effectively means that your driver is broken. What good  would it be if Rust signals with an error?<br>\nI suppose userspace would get unblocked. But then applications would crash instead of hanging. So it still needs to be fixed.</p>",
+        "id": 572738214,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770633852
+    },
+    {
+        "content": "<blockquote>\n<p>That's important because the idea of forcing people to always signal through the fence context has also been floating around for months now:<br>\n<code>fctx.signal_up_to_seqno(5032)?;</code></p>\n</blockquote>\n<p>That implies having a list/array of fences at the context level, but I think that's okay</p>",
+        "id": 572738471,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770633912
+    },
+    {
+        "content": "<blockquote>\n<p>I suppose userspace would get unblocked. But then applications would crash instead of hanging. So it still needs to be fixed.</p>\n</blockquote>\n<p>You have a point. If fences are dropped while the underlying job is running, we could be introducing security holes (for instance, we claim the buffer is ready to be re-used, but it's actually being used by a process, that might have put sensitive data there that are supposed to be zeroed-out before the end of the job), thus causing more harm than a system hang.</p>",
+        "id": 572739290,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770634118
+    },
+    {
+        "content": "<p>Maybe a WARN_ON() when the driver relinquishes the last ref it has on this DriverDmaFence&lt;T&gt; if the fence is not signalled is better than automatically signaling the fence</p>",
+        "id": 572739658,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770634203
+    },
+    {
+        "content": "<blockquote>\n<p>I'm aware of:<br>\n* fence.begin_signalling()<br>\n* No fence must drop unsignaled / must signal itself with an error if droped unsignaled</p>\n</blockquote>\n<p>?* make sure the fence info are not accessed after the fence is signaled (C side takes care of this now, so maybe there's nothing for us to do anymore)</p>",
+        "id": 572741569,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770634639
+    },
+    {
+        "content": "<ul>\n<li>Find a solution for drivers to be removed even if external objects (dma_buf) have a ref to their fences: no custom allocation, have a way to invalidate the ops (or make it so they are no longer accessed), or, add a  FenceProxy like drm_sched had, meaning drivers won't expose their fences directly</li>\n</ul>",
+        "id": 572742350,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770634842
+    },
+    {
+        "content": "<p>I think the C side had that last bullet sorted out (that's what Christian was working on), so maybe that's a non-issue too</p>",
+        "id": 572742906,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770634990
+    },
+    {
+        "content": "<p>If \"fence info\" means the driver backend ops then:<br>\nYes, Christian is solving this for us, though it's not yet upstream. Which is cool, since we then have to do less in Rust.</p>\n<p>Note that in my current implementation, that problem is solved through us simply not implementing the backend ops callbacks; and those which are mandatory are implemented as dummies, relying only on the dma_fence code not being unloaded.</p>",
+        "id": 572742911,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770634991
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"929978\">Boris Brezillon</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572733924\">said</a>:</p>\n<blockquote>\n<p>First concern I'd like to raise that's not raised on the ML yet, is the fact the observer dma_fence callback (in C) is called with the dma_fence::lock (a spinlock) held, which implies that, if we want to let rust code observe dma_fence the same way we do in C: with some observer registration, who has a ::signaled() method called when the fence is signaled, we need to make it very clear what the constraints are (no sleep, no possibility of registering the same observer to a different fence, because that's a nested lock from lockdep perspective, ...)</p>\n</blockquote>\n<p>Having callbacks that run in atomic context seems fine to me as long as it's properly documented. We have the same situation in the irq abstractions.</p>",
+        "id": 572749911,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770636698
+    },
+    {
+        "content": "<blockquote>\n<p>Having callbacks that run in atomic context seems fine to me as long as it's properly documented. We have the same situation in the irq abstractions.</p>\n</blockquote>\n<p>Okay. I was just wondering since the use-case is likely that some work will be scheduled anyway, because of the limitation that exist in an atomic context, and the stuff that are usually done when progress is reported (either wake up some other thread, or schedule a work to take further action without being limited by the atomic context)</p>",
+        "id": 572771725,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770642345
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"929978\">Boris Brezillon</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572737606\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>on the other hand, it's not a big deal if we force its signalling either</p>\n</blockquote>\n<p>the problem is that you can't force signalling in ::drop() if the fence is referenced by some external user (being wait on somewhere). So, the only way to force that is to somehow have a FenceProxy that doesn't take a ref on the real fence (some sort of WeakRef) but gets informed when the driver releases the last ref it has on the DriverDmaFence object.</p>\n</blockquote>\n<p>We should split the single type into a DmaFenceSignaler type a DmaFenceReceiver type. Signaler can be a linear type, dropping of which will trigger to error signaling.</p>\n<p>It feels to me that DMA fence is just a one shot broadcasting channel, and crossbeam/tokio are mature Rust userspace impls of these pattern</p>",
+        "id": 572894456,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770674022
+    },
+    {
+        "content": "<p>Oh that's an interesting way to split them. I also thought they should be split, but the receiver naming is interesting. </p>\n<p>I guess the signaller has the generic param, and the receiver does not.</p>",
+        "id": 572967460,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770710594
+    },
+    {
+        "content": "<p>For that to work you'd need a rawpointer to the receiver, though. If the two types were holding references to each other, none could drop</p>",
+        "id": 572970085,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770711367
+    },
+    {
+        "content": "<blockquote>\n<p>I guess the signaller has the generic param, and the receiver does not.</p>\n</blockquote>\n<p>The receiver should still be able to register callbacks. A callback needs access to driver-specific data</p>",
+        "id": 572970538,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770711485
+    },
+    {
+        "content": "<p>Are you sure? It looks like it just calls <code>dma_fence_add_callback</code></p>",
+        "id": 572970747,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770711554
+    },
+    {
+        "content": "<p>I don't see any use of the generic parameter in your patch</p>",
+        "id": 572970832,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770711575
+    },
+    {
+        "content": "<blockquote>\n<p>It feels to me that DMA fence is just a one shot broadcasting channel</p>\n</blockquote>\n<p>That's definitely what they are.</p>",
+        "id": 572972083,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770711899
+    },
+    {
+        "content": "<blockquote>\n<p>I don't see any use of the generic parameter in your patch</p>\n</blockquote>\n<p>I confirm the callback registration process doesn't need to know anything about the fence signaler implem</p>",
+        "id": 572972377,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770711969
+    },
+    {
+        "content": "<p>just to be clear, we need both the event-based model (sending/receiving \"signaled\" events), and the stateful model (Signaler holds a signaled/unsignaled state that can be checked without registering a receiver)</p>",
+        "id": 572973639,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770712322
+    },
+    {
+        "content": "<p>but I guess that's orthogonal</p>",
+        "id": 572973704,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770712337
+    },
+    {
+        "content": "<p>Actually, I'm not too sure. What would we store in the dma_resv array? It has to be a dma_fence pointer, because that's what the C-side expects, but I have a hard time connecting the dots with this Sender/Receiver model</p>",
+        "id": 572974872,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770712697
+    },
+    {
+        "content": "<p>Would the Receiver still be backed by an Opaque&lt;dma_fence&gt;?</p>",
+        "id": 572974953,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770712718
+    },
+    {
+        "content": "<p>Would the Receiver just be the thing we use for Callback registration, and how does it solve the problem of one dma_resv holding on those driver dma_fences, thus preventing it from being dropped, which would lead to it being automatically signaled.</p>",
+        "id": 572975343,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770712840
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"929978\">Boris Brezillon</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572975343\">said</a>:</p>\n<blockquote>\n<p>and how does it solve the problem of one dma_resv holding on those driver dma_fences</p>\n</blockquote>\n<p>Can you elaborate on what this problem is?</p>",
+        "id": 572975443,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770712866
+    },
+    {
+        "content": "<p>So, drivers emit <code>dma_fence</code>s that are exposed to the outside world. Those fences are usually attached to buffers (GEM objects, or dma_buf objects) through their <code>dma_resv</code>. The fences in dma_resv::fences are automatically evicted every time the buffer idleness is checked. But, there are cases where no one checks for idleness for a long period of time. This means that fences emitted by drivers, even if they are signaled, can stay around, and block the driver unloading.</p>",
+        "id": 572976118,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713065
+    },
+    {
+        "content": "<p>drm_sched was solving this problem (don't know if it was intentional) by having the concept of fence proxy I keep talking about</p>",
+        "id": 572976297,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713117
+    },
+    {
+        "content": "<p>Hrm. What does it mean for a fence to be attached to a <code>dma_resv</code>? That the fence is signalled if the object is evicted?</p>",
+        "id": 572976350,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713138
+    },
+    {
+        "content": "<p>instead of directly exposing the driver fences, we expose a fence coming from drm_sched_fence::completed, which gets signaled when the driver fence is signaled (through the  dma_fence_callback mechanism)</p>",
+        "id": 572976471,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713168
+    },
+    {
+        "content": "<blockquote>\n<p>Hrm. What does it mean for a fence to be attached to a <code>dma_resv</code>? That the fence is signalled if the object is evicted?</p>\n</blockquote>\n<p>No, it means that the fence is watched, and only when it's signaled does the buffer this resv belongs to can be considered idle</p>",
+        "id": 572976665,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713237
+    },
+    {
+        "content": "<blockquote>\n<p>drm_sched was solving this problem (don't know if it was intentional) by having the concept of fence proxy I keep talking about</p>\n</blockquote>\n<p>You mean the sched_fence, with scheduled and finished subfences?</p>",
+        "id": 572976674,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713239
+    },
+    {
+        "content": "<p>It's a fence observer</p>",
+        "id": 572976690,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713243
+    },
+    {
+        "content": "<blockquote>\n<p>You mean the sched_fence, with scheduled and finished subfences?</p>\n</blockquote>\n<p>Yep, sorry, s/completed/finished/</p>",
+        "id": 572976744,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713259
+    },
+    {
+        "content": "<p>Yoah, that separation is also supported by Christian and Matthew. Probably for that reason.</p>",
+        "id": 572976900,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713298
+    },
+    {
+        "content": "<p>yep, so that's what I mean when I'm talking about the concept of fence proxy</p>",
+        "id": 572976986,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713329
+    },
+    {
+        "content": "<p>Right, I remember there was something with fence indirection like that. What problem does the indirection solve?</p>",
+        "id": 572977014,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713339
+    },
+    {
+        "content": "<p>it's a fence implementation that reflects the state of a another fence</p>",
+        "id": 572977043,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713348
+    },
+    {
+        "content": "<p>That way the fences emitted by the driver are decoupled from userspace / higher layers</p>",
+        "id": 572977154,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713380
+    },
+    {
+        "content": "<blockquote>\n<p>Right, I remember there was something with fence indirection like that. What problem does the indirection solve?</p>\n</blockquote>\n<p>It lets you drop the driver fence, and thus unload the driver, even if other components are observing this fence</p>",
+        "id": 572977212,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713396
+    },
+    {
+        "content": "<p>I see.</p>",
+        "id": 572977238,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713404
+    },
+    {
+        "content": "<p>because observers don't observer this fence directly, they do it through the fence proxy</p>",
+        "id": 572977293,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713419
+    },
+    {
+        "content": "<p>But how relevant is that for the Rust design?<br>\nWe can still do that, with or without DmaFence being implemented as Signaller and Receiver</p>",
+        "id": 572977431,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713459
+    },
+    {
+        "content": "<p>this fence proxy implementation should ideally be part of a component that's build statically, or we should accept that the module won't be able to be unloaded most of the time</p>",
+        "id": 572977521,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713475
+    },
+    {
+        "content": "<p>From my POV the splitting is only about preventing unauthorized parties from signalling foreign fences</p>",
+        "id": 572977532,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713478
+    },
+    {
+        "content": "<blockquote>\n<p>We can still do that, with or without DmaFence being implemented as Signaller and Receiver</p>\n</blockquote>\n<p>I'm just trying to understand what the Receiver is in that case</p>",
+        "id": 572977652,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713509
+    },
+    {
+        "content": "<p>Is it backed by a dma_fence so it can be added to a resv?</p>",
+        "id": 572977764,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713537
+    },
+    {
+        "content": "<p>or is it just the thing that we use for the callback registration</p>",
+        "id": 572977842,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713554
+    },
+    {
+        "content": "<p>I'm guessing that <code>struct DmaFenceReceiver(Opaque&lt;bindings::dma_fence);</code> yes</p>",
+        "id": 572977860,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713558
+    },
+    {
+        "content": "<p>And that'd you can have an <code>ARef&lt;DmaFenceReceiver&gt;</code> and register callbacks on it</p>",
+        "id": 572977933,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713570
+    },
+    {
+        "content": "<p>Well, IMO you should still be able to register callbacks on a receiver – so you need to access the underlying dma_fence somehow</p>",
+        "id": 572977953,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713574
+    },
+    {
+        "content": "<p>or add it to resv etc</p>",
+        "id": 572977964,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713577
+    },
+    {
+        "content": "<p>okay, and the DmaFenceReceiver and DmaFenceSender are two distinct objects</p>",
+        "id": 572978203,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713628
+    },
+    {
+        "content": "<p>right?</p>",
+        "id": 572978249,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713638
+    },
+    {
+        "content": "<p>The sender would then be:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">DmaFenceSender</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">DriverFence</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">dma_fence</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 572978394,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713662
+    },
+    {
+        "content": "<p>I would say so.. otherwise it'll get complicated with decoupling their life times</p>",
+        "id": 572978405,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713664
+    },
+    {
+        "content": "<p>okay, so it definitely matches my mental model and the concept of fence proxy :D</p>",
+        "id": 572978569,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713694
+    },
+    {
+        "content": "<p>Yes, agreed. You'd have to access the raw dma_fence below, without association with the Sender fence</p>",
+        "id": 572978576,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713696
+    },
+    {
+        "content": "<p>seems we're all on the same page then</p>",
+        "id": 572978609,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713701
+    },
+    {
+        "content": "<p>I mean, I think the sender and receiver could reference the same <code>struct dma_fence</code></p>",
+        "id": 572978693,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713720
+    },
+    {
+        "content": "<p>ah?</p>",
+        "id": 572978747,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713730
+    },
+    {
+        "content": "<p>They have to, don't they? How else could a Sender signal the correct Receiver?</p>",
+        "id": 572978900,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713757
+    },
+    {
+        "content": "<p>(seems my thinking just moved the problem from one layer to the other)</p>",
+        "id": 572979028,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770713782
+    },
+    {
+        "content": "<p>so, if they do, that's basically what I have in the branch I shared</p>",
+        "id": 572979043,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713786
+    },
+    {
+        "content": "<p>But the receiver does not let you access the <code>T</code>.</p>",
+        "id": 572979148,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713806
+    },
+    {
+        "content": "<p>Well ... I suppose there could be ops function pointers stored in the <code>bindings::dma_fence</code> that know how to access the <code>T</code>. But the receiver does not know what <code>T</code> is, so it can only call such ops methods.</p>",
+        "id": 572979280,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713830
+    },
+    {
+        "content": "<p>it doesn't let you do that in the branch I shared either, does it?</p>",
+        "id": 572979317,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713837
+    },
+    {
+        "content": "<p>Not sure which brancht that is</p>",
+        "id": 572979354,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713849
+    },
+    {
+        "content": "<p>I mean, naming is different, but the challenges stay the same</p>",
+        "id": 572979387,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713857
+    },
+    {
+        "content": "<p><a class=\"message-link\" href=\"/#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572734857\">#DRM &gt; Discussions around the DmaFence abstraction @ 💬</a></p>",
+        "id": 572979436,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713870
+    },
+    {
+        "content": "<p>what are the challenges?</p>",
+        "id": 572979507,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713886
+    },
+    {
+        "content": "<p>If you want a fence proxy, we can always let you create one and hook them up</p>",
+        "id": 572979541,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713897
+    },
+    {
+        "content": "<p>Perhaps there's even a helper for doing exactly that</p>",
+        "id": 572979575,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713906
+    },
+    {
+        "content": "<p>If a receiver holds on the sender dma_fence object, how can its refcnt drop to zero and the underlying fence be auto-signaled, which I think was one of the things <span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> wanted to achieve</p>",
+        "id": 572979684,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770713943
+    },
+    {
+        "content": "<p>Yeah that branch is exactly the same, except <code>DmaFence</code> renamed to receiver, and <code>DriverDmaFence</code> renamed to sender.</p>",
+        "id": 572979744,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713959
+    },
+    {
+        "content": "<p>I probably would not signal on refcount == 0?</p>",
+        "id": 572979862,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770713986
+    },
+    {
+        "content": "<p>Okay, in that case yes.</p>",
+        "id": 572979945,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770714008
+    },
+    {
+        "content": "<p>You can have a wrapper around <code>ARef&lt;DriverDmaFence&gt;</code> that signals on drop and can't be cloned.</p>",
+        "id": 572979976,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770714016
+    },
+    {
+        "content": "<p>kind of similar to my <code>GpuVmCore</code> that wraps <code>ARef&lt;GpuVm&lt;T&gt;&gt;</code></p>",
+        "id": 572980047,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770714033
+    },
+    {
+        "content": "<p>Well, see above – I'm not so sure anymore whether we really want that.<br>\n<em>Probably</em> yes, since a dying application is better than an infinitely-hanging app</p>",
+        "id": 572980054,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770714036
+    },
+    {
+        "content": "<p>I think we have better ways to auto-signal if we tie fences to their context anyway</p>",
+        "id": 572980156,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770714061
+    },
+    {
+        "content": "<p>I think I need an answer to <a href=\"https://lore.kernel.org/all/aYruaIxn8sMXVI0r@google.com/\">this question</a> before I can give an opinion on how we should signal fences.</p>",
+        "id": 572980225,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770714081
+    },
+    {
+        "content": "<p>Like, DmaFenceContext has an XArray of currently non-signaled fences, and when it's dropped, it signals all the fences with an ECANCELED error</p>",
+        "id": 572980310,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770714105
+    },
+    {
+        "content": "<p>yes, a properly designed fence context could allow us to enforce this and some other rules.</p>\n<p>What I'm wondering is to what degree that solves the unload problem? I suppose it should always be fine to just have 1 fence context, non-shared, down in the driver.</p>",
+        "id": 572981647,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770714484
+    },
+    {
+        "content": "<p>You still need the fence proxy, because as long as anyone holds a refcount on a fence, even if already signalled, the driver can't be unloaded</p>",
+        "id": 572981950,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770714569
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> say again, why can't the driver unload, or rather: why can it not decouple from those fences? What function precisely is blocking?</p>",
+        "id": 572982790,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770714805
+    },
+    {
+        "content": "<p>If you unload the driver, and then someone calls any ops function (such as the one to destroy the fence), then you're calling into machine code that has been freed as part of module unload.</p>",
+        "id": 572982992,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770714877
+    },
+    {
+        "content": "<p>But precisely this is a problem that I am addressing in Jobqueue already:<br>\n<a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/drm/jq.rs?ref_type=heads#L644\">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/drm/jq.rs?ref_type=heads#L644</a></p>",
+        "id": 572983129,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770714922
+    },
+    {
+        "content": "<p>(or will address once Danilo remodelled Revocable)</p>",
+        "id": 572983173,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770714941
+    },
+    {
+        "content": "<blockquote>\n<p>say again, why can't the driver unload, or rather: why can it not decouple from those fences? What function precisely is blocking?</p>\n</blockquote>\n<p>So, in theory they could if the destructor of a fence was truly generic</p>",
+        "id": 572983402,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715005
+    },
+    {
+        "content": "<p>but because we have DmaFenceSender&lt;T&gt;, with T having its own ::drop(), you need the code portion to stay around</p>",
+        "id": 572983523,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715049
+    },
+    {
+        "content": "<p>in C, <span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> started solving that by preventing any dma_fence::ops access after it's signaled</p>",
+        "id": 572983623,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715080
+    },
+    {
+        "content": "<p>and forcing drivers to use a generic fence allocator (like kmalloc())</p>",
+        "id": 572983705,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715104
+    },
+    {
+        "content": "<p>but as soon as there's a custom ::release() function, it doesn't work</p>",
+        "id": 572983793,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715128
+    },
+    {
+        "content": "<p>s/Philipp Stanner/Christian &amp; Tvrtko</p>\n<p>They are using RCU to check for unloaded ops</p>",
+        "id": 572983828,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715142
+    },
+    {
+        "content": "<p>sorry, yeah, Christian</p>",
+        "id": 572983967,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715182
+    },
+    {
+        "content": "<p>With <code>DmaFenceSender&lt;T&gt;</code>, you can drop <code>T</code> when signaled?</p>",
+        "id": 572983985,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770715187
+    },
+    {
+        "content": "<p>okay, that might do if we can do that</p>",
+        "id": 572984084,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715209
+    },
+    {
+        "content": "<p><a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/sync/dma_fence.rs?ref_type=heads#L330\">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/sync/dma_fence.rs?ref_type=heads#L330</a></p>\n<p>My release function would only be unloaded if you unload the entire dma_fence module.</p>",
+        "id": 572984202,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715241
+    },
+    {
+        "content": "<p>this leaves the actual memory alloc for the DmaFenceSender wrapper, which we can force to use kmalloc(), I guess</p>",
+        "id": 572984268,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715258
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572984202\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/sync/dma_fence.rs?ref_type=heads#L330\">https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-rfc-v2-2/rust/kernel/sync/dma_fence.rs?ref_type=heads#L330</a></p>\n<p>My release function would only be unloaded if you unload the entire dma_fence module.</p>\n</blockquote>\n<p>This is generic code so it is instantiated into driver</p>",
+        "id": 572984349,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770715281
+    },
+    {
+        "content": "<p>Yeah, that <code>release</code> function is generic over <code>T</code> so it's part of the module, not the dma_fence module.</p>",
+        "id": 572984409,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770715299
+    },
+    {
+        "content": "<p><code>drop_in_place()</code> is a custom destructor</p>",
+        "id": 572984426,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715302
+    },
+    {
+        "content": "<p>if you unload, it's gone</p>",
+        "id": 572984509,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715324
+    },
+    {
+        "content": "<p>That sucks.</p>",
+        "id": 572984642,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715362
+    },
+    {
+        "content": "<p>(In general there's currently no mechanism in Rust that can help with module unloading without carefully designing around it)</p>",
+        "id": 572984830,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770715414
+    },
+    {
+        "content": "<p>and even the ops, I think they have to stay around, because of this test <a href=\"https://elixir.bootlin.com/linux/v6.18.6/source/drivers/dma-buf/dma-fence.c#L576\">https://elixir.bootlin.com/linux/v6.18.6/source/drivers/dma-buf/dma-fence.c#L576</a></p>",
+        "id": 572984897,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715431
+    },
+    {
+        "content": "<p>what we need is a way to reset the ops to NULL once the fence is signaled</p>",
+        "id": 572985028,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715461
+    },
+    {
+        "content": "<p>Two questions:</p>\n<ol>\n<li>To what degree do we want to rely on Christian working around that further in C</li>\n<li>What can we do about it anyways? I'm not sure whether I fully understood to what degree our above discussion fully solves that</li>\n</ol>",
+        "id": 572985073,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715472
+    },
+    {
+        "content": "<p>This could be addressed by having ops be protected by RCU</p>",
+        "id": 572985086,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770715476
+    },
+    {
+        "content": "<p>not too sure Christian did that (I think he was planning to)</p>",
+        "id": 572985142,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715488
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> That is already the case.</p>",
+        "id": 572985148,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715490
+    },
+    {
+        "content": "<p>I think he is at version 7 or 8 right now</p>",
+        "id": 572985220,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715511
+    },
+    {
+        "content": "<p>Really? The code Boris linked has ops access outside RCU critical section</p>",
+        "id": 572985259,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1770715521
+    },
+    {
+        "content": "<p>Okay, some of this stuff have landed, but I guess not all of it</p>",
+        "id": 572985282,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715528
+    },
+    {
+        "content": "<p><a href=\"https://lore.kernel.org/dri-devel/20260120105655.7134-1-christian.koenig@amd.com/\">https://lore.kernel.org/dri-devel/20260120105655.7134-1-christian.koenig@amd.com/</a></p>",
+        "id": 572985320,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715540
+    },
+    {
+        "content": "<p>like the stuff to display the fence info already relies on RCU and the is_signaled check</p>",
+        "id": 572985404,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715554
+    },
+    {
+        "content": "<p>what's weird is that they don't check fence-&gt;ops</p>",
+        "id": 572985793,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715644
+    },
+    {
+        "content": "<p>but I guess there's a dummy impl somewhere</p>",
+        "id": 572985853,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715660
+    },
+    {
+        "content": "<p>He checks for <code>if (ops &amp;&amp; ops-&gt;XXX)</code></p>",
+        "id": 572985959,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715689
+    },
+    {
+        "content": "<p><a href=\"https://lore.kernel.org/dri-devel/20260120105655.7134-4-christian.koenig@amd.com/\">https://lore.kernel.org/dri-devel/20260120105655.7134-4-christian.koenig@amd.com/</a></p>",
+        "id": 572986037,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770715716
+    },
+    {
+        "content": "<p>Okay, that's in patch 3</p>",
+        "id": 572986236,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715767
+    },
+    {
+        "content": "<p>All good then</p>",
+        "id": 572986300,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715786
+    },
+    {
+        "content": "<p>So we just need to drop T on signaling, like <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> suggested</p>",
+        "id": 572986449,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715819
+    },
+    {
+        "content": "<p>and we need to make sure the allocation is done with kmalloc. <span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> before I start digging, you probably know if this patchset drops dma_fence_ops::release()</p>",
+        "id": 572986878,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770715937
+    },
+    {
+        "content": "<p>I guess not, but if you don't implement ::release,wait you get this nice 'implem can go away while the fence exists, as long as it's signaled'</p>",
+        "id": 572987206,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770716029
+    },
+    {
+        "content": "<p>with that in place, the fence proxy becomes pointless</p>",
+        "id": 572987399,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770716087
+    },
+    {
+        "content": "<p>AFAIU it treats all the ops the same. release() is also RCU guarded.<br>\nBut seems he'd just default to dma_fence_free() if the driver was already unloaded? hm.<br>\n<a href=\"https://lore.kernel.org/dri-devel/20260120105655.7134-3-christian.koenig@amd.com/\">https://lore.kernel.org/dri-devel/20260120105655.7134-3-christian.koenig@amd.com/</a></p>\n<p>We probably want to ask on-list</p>",
+        "id": 572989156,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1770716648
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"o\">+</span><span class=\"w\">   </span><span class=\"cm\">/*</span>\n<span class=\"cm\">+    * When neither a release nor a wait operation is specified set the ops</span>\n<span class=\"cm\">+    * pointer to NULL to allow the fence structure to become independent</span>\n<span class=\"cm\">+    * from who originally issued it.</span>\n<span class=\"cm\">+    */</span>\n<span class=\"o\">+</span><span class=\"w\">   </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"o\">!</span><span class=\"n\">fence</span><span class=\"p\">-&gt;</span><span class=\"nc\">ops</span><span class=\"p\">-&gt;</span><span class=\"nc\">release</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"o\">!</span><span class=\"n\">fence</span><span class=\"p\">-&gt;</span><span class=\"nc\">ops</span><span class=\"p\">-&gt;</span><span class=\"nc\">wait</span><span class=\"p\">)</span>\n<span class=\"o\">+</span><span class=\"w\">       </span><span class=\"n\">RCU_INIT_POINTER</span><span class=\"p\">(</span><span class=\"n\">fence</span><span class=\"p\">-&gt;</span><span class=\"nc\">ops</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">NULL</span><span class=\"p\">);</span>\n<span class=\"o\">+</span>\n</code></pre></div>",
+        "id": 572990150,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770716926
+    },
+    {
+        "content": "<p>found that in patch 3</p>",
+        "id": 572990232,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770716946
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> {Must,Will}BeSignalled is representing a single fence, or can it be any fence? I'm asking, because the WorkItem/IRQHandler won't have a single fence to refer to, they are just here to signal any fence that might be ready. It can also be that no fence could be signaled because the HW is not done yet</p>",
+        "id": 573028205,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770727287
+    },
+    {
+        "content": "<p>it represents one specific fence</p>",
+        "id": 573045812,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1770731593
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> I've pushed what I've typed so far for the DMA-fence signalling automation <a href=\"https://gitlab.freedesktop.org/bbrezillon/linux/-/commit/a64196082efd3f96259c8fd158f228a6c4374f69\">here</a>. It's still very much WIP, but I'd like to get early feedback to know if I'm completely off topic or not.</p>",
+        "id": 573752758,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1770992224
+    },
+    {
+        "content": "<p>uh, is that macro really necessary? <span aria-label=\"spiral shell\" class=\"emoji emoji-1f41a\" role=\"img\" title=\"spiral shell\">:spiral_shell:</span></p>",
+        "id": 574062681,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1771232543
+    },
+    {
+        "content": "<p>You have this example:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">Arc</span><span class=\"p\">;</span>\n<span class=\"k\">use</span><span class=\"w\"> </span><span class=\"n\">kernel</span><span class=\"p\">::</span><span class=\"n\">sync</span><span class=\"p\">::</span><span class=\"n\">dma_fence</span><span class=\"p\">::{</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">impl_has_dma_fence_work</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">DmaFenceWork</span><span class=\"p\">};</span>\n\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">MyStruct</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">work_field</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">DmaFenceWork</span><span class=\"o\">&lt;</span><span class=\"n\">MyStruct</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">17</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">f</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">fn</span><span class=\"p\">(</span><span class=\"o\">&amp;'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">T</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">]),</span>\n<span class=\"p\">}</span>\n\n<span class=\"n\">impl_has_dma_fence_work</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">impl</span><span class=\"p\">{</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"n\">HasDmaFenceWork</span><span class=\"o\">&lt;</span><span class=\"n\">MyStruct</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">17</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">MyStruct</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">N</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">work_field</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but structs with lifetime parameters are fundamentally incompatible with being spawned to a workqueue</p>",
+        "id": 574062915,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771232612
+    },
+    {
+        "content": "<blockquote>\n<p>but structs with lifetime parameters are fundamentally incompatible with being spawned to a workqueue</p>\n</blockquote>\n<p>I copied the example from <a href=\"http://workqueue.rs\">workqueue.rs</a>, could be wrong. What do you mean by being spawned to a workqueue?</p>",
+        "id": 574066005,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771233612
+    },
+    {
+        "content": "<blockquote>\n<p>uh, is that macro really necessary?</p>\n</blockquote>\n<p>Didn't find a wait to implement the Work -&gt; DmaFenceWork redirection without a macro, but if there is, I'd be happy to go for that instead</p>",
+        "id": 574066220,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771233681
+    },
+    {
+        "content": "<p>Spawning to a workqueue requires 'static. Structs with lifetime annotations are not 'static.</p>",
+        "id": 574066531,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771233781
+    },
+    {
+        "content": "<p>Does that mean the example in <a href=\"http://workqueue.rs\">workqueue.rs</a> is wrong, or is there something special with DmaFenceWork I'm not getting?</p>",
+        "id": 574067330,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771234024
+    },
+    {
+        "content": "<p>And just to be sure. Spawning == Scheduling the work item on some workqueue, right?</p>",
+        "id": 574067472,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771234073
+    },
+    {
+        "content": "<p>which example?</p>",
+        "id": 574067613,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771234120
+    },
+    {
+        "content": "<p><a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/workqueue.rs?h=v6.19#n581\">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/rust/kernel/workqueue.rs?h=v6.19#n581</a></p>",
+        "id": 574067773,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771234166
+    },
+    {
+        "content": "<p>wtf</p>",
+        "id": 574068013,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771234233
+    },
+    {
+        "content": "<p>Yes that would never work</p>",
+        "id": 574068058,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771234248
+    },
+    {
+        "content": "<blockquote>\n<p>Didn't find a wait to implement the Work -&gt; DmaFenceWork redirection without a macro, but if there is, I'd be happy to go for that instead</p>\n</blockquote>\n<p>Oh, and it's not only about this automation, it's also about making sure we can't schedule a DmaFenceWork on a regular queue, just like I don't want Works to be scheduled on a DmaFenceWorkqueue</p>",
+        "id": 574071310,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771235426
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> I've been thinking about <a class=\"message-link\" href=\"/#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/572749911\">#DRM &gt; Discussions around the DmaFence abstraction @ 💬</a>  a bit more, and how this \"called in atomic-context\" thing plays a role in the DmaFenceObserver design. Like, say we add a DmaFence::subscribe() method taking an Arc&lt;DmaFenceObserver&lt;T&gt;&gt; and turning it into a foreign pointer (thus retaining a ref) so that the object stays around until its ::signalled() method is called. Now, this means that the DmaFence might be the last owner of this Arc, which means we'll calling T::drop() in an atomic path, with all the associated risks. Unless we defer that drop to a workqueue.</p>",
+        "id": 574522352,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425159
+    },
+    {
+        "content": "<p>Yeah if drop might do anything bad, that's bad</p>",
+        "id": 574522585,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771425216
+    },
+    {
+        "content": "<p>So overall, I'm wondering if we wouldn't be better off restricting observers to Completion or WorkItem scheduling</p>",
+        "id": 574522649,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425231
+    },
+    {
+        "content": "<p>I don't know what you mean by that</p>",
+        "id": 574522715,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771425248
+    },
+    {
+        "content": "<p>I mean that the DmaFence::subscribe() would take a Work to schedule (and maybe a queue to schedule it on)</p>",
+        "id": 574522890,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425296
+    },
+    {
+        "content": "<p>the alternative I can think of is having our own internal dma_fence_cb + Work in DmaFence, and then have the DmaFenceObservers stored in some KVec that that we signal from a workqueue context</p>",
+        "id": 574523243,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425387
+    },
+    {
+        "content": "<p>basically any option that would allow us to not call this Observer::signalled() method and possible the Observer::drop() from an atomic context</p>",
+        "id": 574523542,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425454
+    },
+    {
+        "content": "<p>What does the observer do again?</p>",
+        "id": 574523905,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1771425532
+    },
+    {
+        "content": "<p>That's also part of my point, because it's in an atomic context, it usually can't do much.</p>",
+        "id": 574524452,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425668
+    },
+    {
+        "content": "<p>What's the issue of saying that observer drop must be callable from atomic context?</p>",
+        "id": 574524565,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1771425693
+    },
+    {
+        "content": "<p>what it usually does is schedule a work, or wake up a thread</p>",
+        "id": 574524586,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425697
+    },
+    {
+        "content": "<blockquote>\n<p>What's the issue of saying that observer drop must be callable from atomic context?</p>\n</blockquote>\n<p>Well, the problem is that those sort of things tend to be ignored, because it works most of the time</p>",
+        "id": 574524808,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425753
+    },
+    {
+        "content": "<p>(you usually have someone else holding a ref when the signalled() method is called)</p>",
+        "id": 574524907,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425780
+    },
+    {
+        "content": "<p>it's mostly a matter of ergonomics to be honest: if all the observers want to defer the work done on a signalled event, is there any point not doing it right away?</p>",
+        "id": 574525132,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425845
+    },
+    {
+        "content": "<p>because then you relax most of the constraints, or you make it so those are taken care of at the DmaFence level rather</p>",
+        "id": 574525303,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771425889
+    },
+    {
+        "content": "<p>I've not audited all of <a href=\"https://elixir.bootlin.com/linux/v6.18.6/A/ident/dma_fence_add_callback\">https://elixir.bootlin.com/linux/v6.18.6/A/ident/dma_fence_add_callback</a>, but the few I looked at do a complete(xxx), queue_work(), wake_up_process(), ...</p>",
+        "id": 574526920,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771426294
+    },
+    {
+        "content": "<p>so basically what I describe</p>",
+        "id": 574526964,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771426304
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>  BTW, I've just learned about <a href=\"https://gitlab.com/fedora-asahi/kernel-asahi/-/commit/b58e3dbd2ba065b4e87c97865caf68555b5cb4e1\">https://gitlab.com/fedora-asahi/kernel-asahi/-/commit/b58e3dbd2ba065b4e87c97865caf68555b5cb4e1</a>. It was probably discussed during some call and I you can blame me for not paying attention :-), but can you remind me why we diverged from this implementation? Was there something fundamentally wrong/broken there?</p>",
+        "id": 574550884,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771431965
+    },
+    {
+        "content": "<blockquote>\n<p>can you remind me why we diverged from this implementation?</p>\n</blockquote>\n<p>Actually diverging is okay. It's just that this implementation had some stuff right (like the distinction between observable-fence and signalable-fence), and those got lost in the new version, so I was mostly wondering what was the rationale for not picking at least some of the stuff from Lina's version.</p>",
+        "id": 574586058,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771442252
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> I think we never disccussed asahi fences that deeply. As far as I understood asahi always used the gpu scheduler, so I started out with writing a separate small fence implementation to co-evolve naturally with jobqueue.<br>\nI had understood the discussions with Daniel such that replacing just the scheduler without touching the fence would be very challenging.</p>",
+        "id": 574662031,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1771485925
+    },
+    {
+        "content": "<p>so are we now talking about race-avoiding when registering callbacks, or does the work item approach solve a different problem, too?</p>",
+        "id": 574662177,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1771486011
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/574662031\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"929978\">Boris Brezillon</span> I think we never disccussed asahi fences that deeply. As far as I understood asahi always used the gpu scheduler, so I started out with writing a separate small fence implementation to co-evolve naturally with jobqueue.</p>\n</blockquote>\n<p>Okay, I actually didn't know Asahi had a feature-full abstraction for fences either. Just like you, I thought those were mostly hidden behind the DrmSched and GPUVM abstractions with just a thin wrapper to extra raw dma_fence from syncobjs, but it turns out they were actually usable, with the exception that observability through callbacks wasn't implemented.</p>",
+        "id": 574667793,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771488295
+    },
+    {
+        "content": "<blockquote>\n<p>I had understood the discussions with Daniel such that replacing just the scheduler without touching the fence would be very challenging.</p>\n</blockquote>\n<p>You certainly need fence support for the JQ stuff. I was just surprised to see a full-blown implementation of this fence abstraction with Lina's name on it, and was wondering if there's something technically wrong about the original implementation that would have led to this full rewrite, or if it's just that this was overlooked. Rewriting stuff from scratch is not a problem per-se, but I tend to think if something functional exists, it should be considered, if nothing more, for learning purposes (what works, what's broken, what can be improved, ...).</p>\n<p>Oh well, I can blame myself for not paying enough attention to what <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> was sharing with me at the time...</p>",
+        "id": 574669173,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771488864
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/Discussions.20around.20the.20DmaFence.20abstraction/near/574662177\">said</a>:</p>\n<blockquote>\n<p>so are we now talking about race-avoiding when registering callbacks, or does the work item approach solve a different problem, too?</p>\n</blockquote>\n<p>Registration/deregistration of callbacks should be race-free thanks to the dma_fence::lock that's taken both when adding/removing a callback and when executing it. My concern was implementers of this callback having to take the atomic-context constraint into account, and also the fact that, no matter how you design the thing (Observer holding a ref on the Fence, or Fence holding a ref on the observer), one of the object might be dropped in this atomic path if we're not careful, and that would force the ::drop() implementation to be atomic-safe.</p>",
+        "id": 574669895,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1771489166
+    },
+    {
+        "content": "<p>Regarding splitting the fence implementation and locking considerations:</p>\n<p>if we have</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Fence</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">bindings</span><span class=\"p\">::</span><span class=\"n\">dma_fence</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">DriverFence</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">  </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">T</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">ARef</span><span class=\"o\">&lt;</span><span class=\"n\">Fence</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>an interesting question becomes if and how one would want to ensure Sync and Send.<br>\nOne wants to ask himself whether ensuring synchronization for accessing <code>T</code> should be left to the implementor.</p>\n<p>The members of  <code>DriverFence</code> (or its predecessor before the split, rather) were protected by the lock within the C backend. We probably still want it that way for the split version, too. But I'm unsure about the driver datat <code>T</code></p>",
+        "id": 577213394,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772629316
+    },
+    {
+        "content": "<p>Is there a lock inside <code>dma_fence</code> you wish to use?</p>",
+        "id": 577213556,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629362
+    },
+    {
+        "content": "<p>The easiest would be for the end-user to just put a mutex inside <code>T</code>, but if you wish to reuse an existing lock, there are other options too.</p>",
+        "id": 577213661,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629393
+    },
+    {
+        "content": "<p>So far that was used automatically since you always call C functions that take the lock. But it wasn't exposed to Rust</p>",
+        "id": 577213676,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772629397
+    },
+    {
+        "content": "<p>What you can do is store an <code>UnsafeCell&lt;T&gt;</code> and hand out <code>&amp;mut T</code> to Rust code, relying on the C lock being held.</p>",
+        "id": 577213817,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629438
+    },
+    {
+        "content": "<p>The thing is if <code>T</code> has its separate lock, then you suddenly have potentially two locks being used per what is effectively just 1 fence. That's also not cool, because maybe deadlock and stuff</p>",
+        "id": 577213865,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772629449
+    },
+    {
+        "content": "<p>But if any code needs to access any part of <code>T</code> without the lock, then that's not possible.</p>",
+        "id": 577213872,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629453
+    },
+    {
+        "content": "<p>One potential option is to have two fields, one in <code>UnsafeCell</code>. The one wrapped in <code>UnsafeCell</code> is protected by the C-side lock, and the other field is shared access (you hand out <code>&amp;_</code> refs without any locks)</p>",
+        "id": 577214008,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629493
+    },
+    {
+        "content": "<p>The point is if I just tell Rust that <code>DriverFence&lt;T&gt;</code> is <code>Sync</code> and then someone touches <code>T</code> concurrently things will explode, right?</p>",
+        "id": 577215093,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772629818
+    },
+    {
+        "content": "<p>There's no magic about <code>Sync</code>. Whoever implements <code>Sync</code> unsafely needs to ensure that the code is protected against concurrency</p>",
+        "id": 577215371,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1772629898
+    },
+    {
+        "content": "<p>How do other people who provide <code>Sync</code> containers that contain user-specified generic data address the lack of magic?</p>",
+        "id": 577215503,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772629938
+    },
+    {
+        "content": "<p>If you expose an API that allows for concurrent access to the <code>T</code>, then you must require that <code>T</code> is <code>Sync</code>. Otherwise, if you only allow access to the lock, then you do not need to require that <code>T</code> is <code>Sync</code>, because the lock prevents concurrent access.</p>",
+        "id": 577215663,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1772629986
+    },
+    {
+        "content": "<p>In practice, I don't think we need <code>DriverFence&lt;T&gt;</code> to be <code>Sync</code> (concurrent access to the signalable fence is not something we truly need if we can guarantee that only one thread owns this object), it should probably be <code>Send</code> though (DriverFence instantiated in one thread, and signaled from another is going to be pretty common).</p>",
+        "id": 577224834,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772632480
+    },
+    {
+        "content": "<p>We could only guarantee that if we stuff the DriverFence into non-refcounted container.<br>\nWhich I think can make sense</p>",
+        "id": 577226485,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772632900
+    },
+    {
+        "content": "<p>yep, that's more or less the approach taken here <a href=\"https://gitlab.freedesktop.org/bbrezillon/linux/-/blob/8bec931a3a222873bf93cd8111d88c2f79df30cd/rust/kernel/sync/dma_fence.rs#L670\">https://gitlab.freedesktop.org/bbrezillon/linux/-/blob/8bec931a3a222873bf93cd8111d88c2f79df30cd/rust/kernel/sync/dma_fence.rs#L670</a></p>",
+        "id": 577226996,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772633032
+    },
+    {
+        "content": "<p><code>DriverDmaFence</code> (your <code>DriverFence</code>) is not clonable, and visibility transitions (::publish(), ::signal()) consumes the old object</p>",
+        "id": 577227295,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772633109
+    },
+    {
+        "content": "<p>meaning you should only ever have one owner of a given DriverFence</p>",
+        "id": 577227547,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772633167
+    },
+    {
+        "content": "<p>With DriveFence's purpose being there to be signaled, and  Fence's to be waited on / register events</p>",
+        "id": 577240765,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772636153
+    },
+    {
+        "content": "<p>Exactly</p>",
+        "id": 577241538,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772636340
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pinned_drop]</span>\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">PinnedDrop</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">DriverFence</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">drop</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Pin</span><span class=\"o\">&lt;&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// TODO set error</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">signal</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>thinking about it, that's not what we want, do we…<br>\nWe want to guarantee a fence always being signaled, and we want to set an error if it drops unsignaled.</p>\n<p>That's racy, however. We'd need to take the fence lock.</p>\n<p>Reworking C dma_fence so that users always have to take the fence lock by themselves is actually another rework on Christian's agenda</p>",
+        "id": 577501426,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1772718166
+    },
+    {
+        "content": "<p>dma_fence_signal() is the version that takes the lock before signalling</p>",
+        "id": 577517570,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772721783
+    },
+    {
+        "content": "<p>there's a _locked() variant of that thing if the user already holds the lock</p>",
+        "id": 577517742,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1772721821
+    }
+]

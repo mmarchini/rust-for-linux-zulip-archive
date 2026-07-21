@@ -1,0 +1,335 @@
+<html>
+<head><meta charset="utf-8"><title>Writing up wrappers for ww_mutex? · Library · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/index.html">Library</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html">Writing up wrappers for ww_mutex?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="421729839"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421729839" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421729839">(Feb 15 2024 at 19:54)</a>:</h4>
+<p>Hi! I've been writing up a rust interface for KMS drivers written in rust, and little while ago I had asked for some advice regarding <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback">https://rust-for-linux.zulipchat.com/#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback</a> <br>
+I was skimming through the wiki again this morning and I think I answered my question, mainly it looks like what I probably want for this is some sort of <code>LockedBy</code> equivalent that can handle <code>ww_mutex</code> so that I can make structs like <code>Plane&lt;T&gt;</code> opaque until the caller can actually prove they hold the right locks to access it's contents.<br>
+I'm now looking at implementing wrappers for <code>ww_mutex</code>, but since this lock acquisition scheme is not infallible (see <a href="https://lwn.net/Articles/548909/">https://lwn.net/Articles/548909/</a> ) it doesn't seem like <code>sync::lock::Backend</code> would be suitable for this. Which brings me to ask: if I'm writing such wrappers, should I start by introducing a new variant of <code>sync::lock::Backend</code> designed for locks with fallible acquisition schemes? Or should I just go straight to writing a wrapper for <code>ww_mutex</code>, and worry about moving this stuff out to a trait later if we end up finding more users?</p>
+
+
+
+<a name="421741417"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421741417" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421741417">(Feb 15 2024 at 21:10)</a>:</h4>
+<p>I don't think that the current lock design can cover <code>ww_mutex</code>. One important in <code>ww_mutex</code> is the <code>ww_acquire_ctx</code>, and Rust API will need to design the interface where <code>ctx</code> interact with <code>mutex</code>. Also what <code>ww_mutex</code>API implies is the user somehow tracks all the acquired locks (so that they can be unlocked when "wound"), for a safe API, I think you will need to maintain that in an vector-like data structure in the <code>ctx</code>.</p>
+
+
+
+<a name="421741523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421741523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421741523">(Feb 15 2024 at 21:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/421741417">said</a>:</p>
+<blockquote>
+<p>I don't think that the current lock design can cover <code>ww_mutex</code>. One important in <code>ww_mutex</code> is the <code>ww_acquire_ctx</code>, and Rust API will need to design the interface where <code>ctx</code> interact with <code>mutex</code>. Also what <code>ww_mutex</code>API implies is the user somehow tracks all the acquired locks (so that they can be unlocked when "wound"), for a safe API, I think you will need to maintain that in an vector-like data structure in the <code>ctx</code>.</p>
+</blockquote>
+<p>awesome, I figured as much :) - thanks for confirming!</p>
+
+
+
+<a name="421741565"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421741565" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421741565">(Feb 15 2024 at 21:11)</a>:</h4>
+<p>Go ahead, I can help review ;-)</p>
+
+
+
+<a name="421754082"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421754082" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421754082">(Feb 15 2024 at 22:48)</a>:</h4>
+<p>JFYI too: Seems like it might just be for drm_modeset lock for the moment as well instead of ww_mutex generally, since we can't really just use the plain ww mutex API for that (DRM adds some additional debugging functionality to it's modeset locks).</p>
+
+
+
+<a name="421763678"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421763678" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Dave Airlie <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421763678">(Feb 16 2024 at 00:08)</a>:</h4>
+<p>can we expose that lock without any ww_ pieces? I think drm exec also uses ww_ but maybe we also can hide it from drivers there.</p>
+
+
+
+<a name="421766499"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421766499" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421766499">(Feb 16 2024 at 00:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="670868">Dave Airlie</span> <a href="#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/421763678">said</a>:</p>
+<blockquote>
+<p>can we expose that lock without any ww_ pieces? I think drm exec also uses ww_ but maybe we also can hide it from drivers there.</p>
+</blockquote>
+<p>Just got out of a meeting but yeah - I think this is actually going to end up being the way to go, because I didnt realize until looking that you don't really directly deal with ww_ at all on the driver's side</p>
+
+
+
+<a name="421766904"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421766904" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421766904">(Feb 16 2024 at 00:40)</a>:</h4>
+<p>in fact we might not even end up with any sort of independent <code>ModesetLock</code> object, and just may end up instead with <code>ModesetGuard</code> or something like that - and then have various modesetting objects with locks implement a common trait that provides methods for attempting to grab their respective locks</p>
+
+
+
+<a name="421767078"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/421767078" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#421767078">(Feb 16 2024 at 00:42)</a>:</h4>
+<p>(also I should probably note, I don't think I've looked at drm exec at all, although from a quick glance it seems like it's more or less the same deal there - DRM handles creating locks and such)</p>
+
+
+
+<a name="513081781"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/513081781" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#513081781">(Apr 18 2025 at 18:53)</a>:</h4>
+<p>Hi again! It's been quite a while since the last post I made here. For a while the usecase for having a ww mutex binding ended up not panning out with the KMS bindings, but now that I've been cleaning up the gem shmem patches I've run into some spots where we could eventually use some sort of WwMutex wrapper. At some point I can get to it, but would this possibly be something we could have as a todo item for new contributors also?</p>
+
+
+
+<a name="513081862"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/513081862" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#513081862">(Apr 18 2025 at 18:54)</a>:</h4>
+<p>Note: it's not super high priority, the unsafe code we have works fine but, well, it is unsafe ;P.</p>
+
+
+
+<a name="524040824"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524040824" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524040824">(Jun 14 2025 at 04:54)</a>:</h4>
+<p>I would like to help with that</p>
+
+
+
+<a name="524040854"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524040854" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524040854">(Jun 14 2025 at 04:55)</a>:</h4>
+<p>(if it's still a TODO thing)</p>
+
+
+
+<a name="524052612"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524052612" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524052612">(Jun 14 2025 at 09:27)</a>:</h4>
+<p>Cc: <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> </p>
+<p>Hi <span class="user-mention" data-user-id="928507">@Onur Özkan</span> ,</p>
+<p>Yes, it is -- <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> already came across <code>ww_mutex</code> in the context of <code>drm_gpuvm</code> and <code>dma_resv</code>, where the latter can be a very thin abstraction layer above <code>ww_mutex</code>.</p>
+
+
+
+<a name="524053097"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524053097" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524053097">(Jun 14 2025 at 09:36)</a>:</h4>
+<p>I think we should probably move away from the <code>sync::lock::Backend</code> framework anyway. If it doesn't fit ww_mutex, then I would not worry about expanding it - just write a new separate abstraction.</p>
+
+
+
+<a name="524053672"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524053672" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524053672">(Jun 14 2025 at 09:48)</a>:</h4>
+<p>sounds cool, I will spend sometime on this</p>
+
+
+
+<a name="524126095"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524126095" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524126095">(Jun 15 2025 at 11:55)</a>:</h4>
+<p>A status update regarding <code>ww_mutex</code>: I looked into the <code>sync::lock::Backend</code> and the <code>kernel/locking</code> tree today. From what I can see, it's not just limiting <code>ww_mutex</code>, but also other locking primitives under the <code>kernel/locking</code> tree. I plan to refactor it into <code>sync::locking::Backend</code> so it can serve as a proper generic foundation for <code>kernel/locking</code> primitives. This would allow us to abstract more than just <code>ww_mutex</code>, which I plan to do one by one after completing the rewrite/refactor/redesign of <code>sync::lock::Backend</code>. Before going down this path, I wanted to share it here to make sure I am not heading in an unusual or unnecessary direction. Any concerns?</p>
+
+
+
+<a name="524126235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524126235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524126235">(Jun 15 2025 at 11:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524053097">said</a>:</p>
+<blockquote>
+<p>I think we should probably move away from the <code>sync::lock::Backend</code> framework anyway. If it doesn't fit ww_mutex, then I would not worry about expanding it - just write a new separate abstraction.</p>
+</blockquote>
+<p>Based on this message, there shouldn't be any problem with my current plan but please correct me if I am wrong :)</p>
+
+
+
+<a name="524126784"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524126784" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524126784">(Jun 15 2025 at 12:07)</a>:</h4>
+<p>I can't answer fully without seeing the abstraction, but I generally believe that locks are currently more abstract than what they need to be.</p>
+
+
+
+<a name="524138968"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524138968" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524138968">(Jun 15 2025 at 15:37)</a>:</h4>
+<p>Instead of making Backend more generic, I would suggest focusing on providing ww_mutex first, some concepts in ww_mutex don’t apply to simple lock interfaces (like spinlock), so let’s not make Backend more complicated.</p>
+
+
+
+<a name="524139149"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524139149" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524139149">(Jun 15 2025 at 15:40)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524126784">said</a>:</p>
+<blockquote>
+<p>I can't answer fully without seeing the abstraction, but I generally believe that locks are currently more abstract than what they need to be.</p>
+</blockquote>
+<p>I agree with that</p>
+
+
+
+<a name="524139249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524139249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524139249">(Jun 15 2025 at 15:41)</a>:</h4>
+<p>E.g. we really don’t need returning a -EDEADLOCK  from a lock function, because it can only help ww_mutex, so it makes no sense to abstract Backend to do that.</p>
+
+
+
+<a name="524142097"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524142097" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524142097">(Jun 15 2025 at 16:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524139249">said</a>:</p>
+<blockquote>
+<p>E.g. we really don’t need returning a -EDEADLOCK  from a lock function, because it can only help ww_mutex, so it makes no sense to abstract Backend to do that.</p>
+</blockquote>
+<p>Yeah that would make no sense to do it that way, best would be adding generic type to the trait. But still, there will be some functions which will be usefuly only for certain backends</p>
+
+
+
+<a name="524142134"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524142134" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524142134">(Jun 15 2025 at 16:28)</a>:</h4>
+<p>I guess I will just skip the current Backend as is</p>
+
+
+
+<a name="524146535"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524146535" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524146535">(Jun 15 2025 at 17:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/524138968">said</a>:</p>
+<blockquote>
+<p>Instead of making Backend more generic, I would suggest focusing on providing ww_mutex first, some concepts in ww_mutex don’t apply to simple lock interfaces (like spinlock), so let’s not make Backend more complicated.</p>
+</blockquote>
+<p>Agreed</p>
+
+
+
+<a name="524147804"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524147804" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524147804">(Jun 15 2025 at 18:19)</a>:</h4>
+<p>FWIW: for a moment I did actually consider for a moment it might make sense to implement Backend for the case of ww mutexes without specific  contexts, but taking a look at the ww mutex code in the kernel it seems that even without a context it's still possible to hit -EDEADLK (though I'm not sure I really understand why)</p>
+
+
+
+<a name="524267274"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524267274" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524267274">(Jun 16 2025 at 14:15)</a>:</h4>
+<p>Okay, so <a href="https://github.com/onur-ozkan/linux/commit/b1674992e83574d92ac0905541a67ccb4a856379">this is the initial patch</a> I'm planning to send for review. Last week, I sent <a href="https://github.com/onur-ozkan/linux/commit/5f6cd1b2d2fd166562bbd74fa7dd58a15e995fe6">this minor patch</a>, but I'm not sure if I did it properly or if it just takes some time to get a response from reviewers (I haven't seen any response yet).</p>
+<p>What I did was simply pick two maintainers from the MAINTAINERS file and run this command:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">git</span><span class="w"> </span><span class="n">send</span><span class="o">-</span><span class="n">email</span><span class="w"> </span><span class="o">--</span><span class="n">to</span><span class="o">=</span><span class="n">mturquette</span><span class="o">@</span><span class="n">baylibre</span><span class="p">.</span><span class="n">com</span><span class="p">,</span><span class="n">sboyd</span><span class="o">@</span><span class="n">kernel</span><span class="p">.</span><span class="n">org</span><span class="w"> </span><span class="mi">0001</span><span class="o">-</span><span class="n">Various</span><span class="o">-</span><span class="n">improvements</span><span class="o">-</span><span class="n">on</span><span class="o">-</span><span class="n">clock</span><span class="o">-</span><span class="n">abstractions</span><span class="p">.</span><span class="n">patch</span>
+</code></pre></div>
+<p>Also, I feel like the <code>ww_mutex</code> abstraction patch is relatively fat (or is it not? I am just too new to patch-based development), so I expect there might be a lot of back-and-forth during review. I'm not sure what the best approach is here, should I wait for some initial feedback on <a href="https://github.com/onur-ozkan/linux/commit/b1674992e83574d92ac0905541a67ccb4a856379">this patch</a>, or just go ahead and send it now?</p>
+
+
+
+<a name="524269974"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524269974" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524269974">(Jun 16 2025 at 14:29)</a>:</h4>
+<p>You need to send the patch to the mailing list so that everyone can see it.</p>
+
+
+
+<a name="524308501"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524308501" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524308501">(Jun 16 2025 at 17:56)</a>:</h4>
+<p>Please see <a href="https://rust-for-linux.com/contributing#submitting-patches">https://rust-for-linux.com/contributing#submitting-patches</a> -- we have an example command there and other pointers (the rest of the page is also important, if you haven't seen it! :)</p>
+<p>Thanks!</p>
+
+
+
+<a name="524308730"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524308730" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524308730">(Jun 16 2025 at 17:58)</a>:</h4>
+<p>Oh, seems like I sould re-send the patch with including you to the sending address :)</p>
+
+
+
+<a name="524308741"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524308741" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524308741">(Jun 16 2025 at 17:58)</a>:</h4>
+<p>I missed that part, thank you</p>
+
+
+
+<a name="524309430"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524309430" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524309430">(Jun 16 2025 at 18:02)</a>:</h4>
+<p>Just in case, that is one possible command for the "Rust" subsystem, but you may need to add other entries too like the page mentions, depending on the patch.</p>
+<p>For instance, as <span class="user-mention" data-user-id="411647">@Boqun Feng</span> mentioned in the list (<a href="https://lore.kernel.org/rust-for-linux/aFBbTMMTHrgHwVFJ@Mac.home/">https://lore.kernel.org/rust-for-linux/aFBbTMMTHrgHwVFJ@Mac.home/</a>), you want to also add the <code>M</code>/<code>R</code>/<code>L</code> addresses for locking. You can use <code>get_maintainers.pl</code> to search for things and other advanced options.</p>
+<p>I hope that helps!</p>
+
+
+
+<a name="524309623"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524309623" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524309623">(Jun 16 2025 at 18:04)</a>:</h4>
+<p>/me offering free Cc list checking ;-)</p>
+
+
+
+<a name="524312545"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/524312545" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#524312545">(Jun 16 2025 at 18:25)</a>:</h4>
+<p>I would suggest you take Boqun's offer (thanks Boqun) -- Cc list checking is not too fun, and getting those right is important nevertheless :)</p>
+
+
+
+<a name="525325063"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/525325063" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#525325063">(Jun 23 2025 at 12:53)</a>:</h4>
+<p>Hi, I was going through the v5 review notes and saw that Benno mentioned this:</p>
+<blockquote>
+<p>I don't know the design of <code>struct ww_mutex</code>, but from the code below I gathered that it has some special error return values that signify that one should release other locks.</p>
+<p>Did anyone think about making a more Rusty API that would allow one to try to lock multiple mutexes at the same time (in a specified order) and if it fails, it would do the resetting automatically?</p>
+</blockquote>
+<p>As I just recently joined the conversation on Zulip and picked up this task to help out with the Rust side of the kernel, I don't feel like I'm the right person to answer this design question. What should I do at this point?</p>
+<p>Also, what should we do when there is a conflict of suggestion coming from 2 different reviewers? (e.g., one suggesting something do add while the other doesn't like it).</p>
+
+
+
+<a name="525326667"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/525326667" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#525326667">(Jun 23 2025 at 13:01)</a>:</h4>
+<p>It's okay to say no to adding more things to your change.</p>
+<p>As for disagreements, one option is to reply and point out the disagreement. The reviewer may not have noticed the disagreement.</p>
+
+
+
+<a name="525334559"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/525334559" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#525334559">(Jun 23 2025 at 13:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="928507">Onur Özkan</span> <a href="#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/525325063">said</a>:</p>
+<blockquote>
+<p>Hi, I was going through the v5 review notes and saw that Benno mentioned this:</p>
+<blockquote>
+<p>I don't know the design of <code>struct ww_mutex</code>, but from the code below I gathered that it has some special error return values that signify that one should release other locks.</p>
+<p>Did anyone think about making a more Rusty API that would allow one to try to lock multiple mutexes at the same time (in a specified order) and if it fails, it would do the resetting automatically?</p>
+</blockquote>
+<p>As I just recently joined the conversation on Zulip and picked up this task to help out with the Rust side of the kernel, I don't feel like I'm the right person to answer this design question. What should I do at this point?</p>
+</blockquote>
+<p>Don't worry, I just replied to Benno.</p>
+
+
+
+<a name="525550176"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/525550176" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#525550176">(Jun 24 2025 at 15:57)</a>:</h4>
+<p>jfyi: We are currently waiting to hear back from the DRM folks about the design of the Rust <code>ww_mutex</code> API before moving forward (see the latest mail in the patch <a href="https://lore.kernel.org/all/DAURXDWGWEDV.2GZ129VC6IFKF@kernel.org/">series</a>).</p>
+<p>Any input would be appreciated :)</p>
+
+
+
+<a name="525550983"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/525550983" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#525550983">(Jun 24 2025 at 16:02)</a>:</h4>
+<p>I read through a bit previous discussion, and seems that the <code>ww_mutex</code> requirement comes from the abstraction of <code>drm_plane</code>, <span class="user-mention" data-user-id="690399">@Lyude</span> it'll be nice if you can point us to an example that C code current does locking for <code>drm_plane</code>, which would help on the design of <code>ww_mutex</code>.</p>
+
+
+
+<a name="526248943"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/526248943" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Onur Özkan <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#526248943">(Jun 29 2025 at 06:04)</a>:</h4>
+<p>I might come up with a couple of design ideas/suggestions in a week or so by checking the C sources that use <code>ww_mutex</code> while we wait for feedback from DRM</p>
+
+
+
+<a name="526483570"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/526483570" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#526483570">(Jun 30 2025 at 20:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/channel/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F/near/525550983">said</a>:</p>
+<blockquote>
+<p>I read through a bit previous discussion, and seems that the <code>ww_mutex</code> requirement comes from the abstraction of <code>drm_plane</code>, <span class="user-mention silent" data-user-id="690399">Lyude</span> it'll be nice if you can point us to an example that C code current does locking for <code>drm_plane</code>, which would help on the design of <code>ww_mutex</code>.</p>
+</blockquote>
+<p>For <code>drm_plane</code>? That would be on the KMS side of things, and I haven't run into any needs for ww mutexes there quite yet. ww mutexes do get used pretty often in kms but for all of the abstractions I've been writing they're pretty much all called in contexts where all of the locking is handled by the C functions that we call down to</p>
+
+
+
+<a name="526483585"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/526483585" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#526483585">(Jun 30 2025 at 20:41)</a>:</h4>
+<p>You might be thinking of <code>dma_resv</code></p>
+
+
+
+<a name="526484225"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/526484225" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#526484225">(Jun 30 2025 at 20:45)</a>:</h4>
+<p>This being said though, I do have some examples of it being used in KMS:</p>
+<p><a href="https://gitlab.freedesktop.org/lyudess/linux/-/blob/rust/irq-spinlock/drivers/gpu/drm/nouveau/dispnv50/crc.c?ref_type=heads#L540">https://gitlab.freedesktop.org/lyudess/linux/-/blob/rust/irq-spinlock/drivers/gpu/drm/nouveau/dispnv50/crc.c?ref_type=heads#L540</a></p>
+<p>here we setup an atomic display commit, add the relevant resources that we need (each get_*_state() call ends up acquiring a drm_modeset_lock, which is a thin wrapper around ww_mutex that uses the atomic context we initialize in drm_atomic_state). If we deadlock, we clear the atomic state and go back to the start and try again</p>
+
+
+
+<a name="526484677"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291566-Library/topic/Writing%20up%20wrappers%20for%20ww_mutex%3F/near/526484677" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291566-Library/topic/Writing.20up.20wrappers.20for.20ww_mutex.3F.html#526484677">(Jun 30 2025 at 20:49)</a>:</h4>
+<p>BTW - it might take me until next week to take a look at this but I'm more then happy to help out with the review of this</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

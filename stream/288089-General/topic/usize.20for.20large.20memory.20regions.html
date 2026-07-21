@@ -1,0 +1,54 @@
+<html>
+<head><meta charset="utf-8"><title>usize for large memory regions · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html">usize for large memory regions</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="562269488"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562269488" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562269488">(Dec 06 2025 at 22:31)</a>:</h4>
+<p>Hi all,<br>
+I wanted to discuss support for 32-bit architectures in the Rust core kernel code.</p>
+<p>While drivers (such as Nova) target 64-bit only, the core Rust abstractions are intended for 32-bit as well if I am not mistaken. This creates an issue when dealing with large resources such as GPU video memory.</p>
+<p>I recently ran into this with the <a href="https://lore.kernel.org/all/20251204215129.2357292-4-joelagnelf@nvidia.com/">GPU buddy allocator bindings</a>. These bindings need to address VRAM that can exceed 4GB. On a 32-bit architecture, <code>usize</code> is 32-bit, which means using it for these "size" or "offset" values would result in data loss and not work.</p>
+<p>Currently, I use <code>u64</code> explicitly instead of <code>usize</code> to represent these values. </p>
+<p>My question is: What is the recommended way to handle this in Rust in core kernel? Is there a preferred abstraction or best practice for supporting large address spaces on 32-bit targets without having to resort to using <code>u64</code> everywhere <code>usize</code> would normally be used?</p>
+
+
+
+<a name="562307111"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562307111" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562307111">(Dec 07 2025 at 12:58)</a>:</h4>
+<p>If the underlying C api doesn't support 64-bit numbers, then you're out of luck. But I would expect a GPU-specific allocator to use 64-bit always?</p>
+
+
+
+<a name="562414187"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562414187" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alexandre Courbot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562414187">(Dec 08 2025 at 08:58)</a>:</h4>
+<p>I would expect sizes that are explicitly 64-bit (due to the hardware device working with that size) to use <code>u64</code> in the code, with <code>usize</code> being used when dealing with the size of the CPU address bus</p>
+
+
+
+<a name="562503798"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562503798" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562503798">(Dec 08 2025 at 15:56)</a>:</h4>
+<p>Alex, Sure. For nova, considering it is 64-bit only, do we use usize or u64 for large size/offset data. It would be good to be consistent with rust core kernel code though.</p>
+
+
+
+<a name="562504188"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562504188" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joel Fernandes <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562504188">(Dec 08 2025 at 15:58)</a>:</h4>
+<p>Alice, yes the allocator in C uses u64. I am ok with sticking with u64 then. I have already converted to using u64.</p>
+
+
+
+<a name="562594137"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/usize%20for%20large%20memory%20regions/near/562594137" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/usize.20for.20large.20memory.20regions.html#562594137">(Dec 09 2025 at 03:29)</a>:</h4>
+<p>For GPU memory that's 64-bit, using u64 seems like the way to go.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

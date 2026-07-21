@@ -1,0 +1,560 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> how do I handle copying to/from user space pages that are mapped into the kernel? <code>Page::write_raw</code>and <code>Page::read_raw</code> require race absence, both on the page being operated on, and on the buffer being interacted with, I think. But there is essentially no way to guarantee this for pages that are mapped from user space.</p>",
+        "id": 499251047,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371333
+    },
+    {
+        "content": "<p>Can I call it a black box, cover my eyes and do it anyway?</p>",
+        "id": 499251210,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371380
+    },
+    {
+        "content": "<p>Does \"Valid for reads/writes\" mean race free?</p>",
+        "id": 499251625,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371475
+    },
+    {
+        "content": "<p>Is this in a syscall from the process the page is mapped into?</p>",
+        "id": 499251839,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371530
+    },
+    {
+        "content": "<p>If so, you could pass the address it's mapped into in userspace to the <code>kernel::uaccess</code> API</p>",
+        "id": 499252168,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371615
+    },
+    {
+        "content": "<p>Yes. It is done by one of the read/write paths into the kernel. Can be regular read/write syscall, but can also be aio, uring or possibly others. The mapping code is the same. Essentially, the pages of the user space buffers are mapped into kernel space and I see them later at the bottom of the block stack.</p>",
+        "id": 499252338,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371658
+    },
+    {
+        "content": "<p>And you are given a <code>struct page</code> for the memory?</p>",
+        "id": 499252819,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371786
+    },
+    {
+        "content": "<p>I don't have a <code>UserPtr</code>. Essentially the kernel IO layer travels the user process mm, figures out which page corresponds to the address of the buffer and then maps it to kernel. Later I get a <code>struct page</code> pointer.</p>",
+        "id": 499252956,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371812
+    },
+    {
+        "content": "<p>Rust doesn't really have a way to copy data that could be concurrently modified. The uaccess API falls back to doing the copy in asm.</p>",
+        "id": 499253179,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371868
+    },
+    {
+        "content": "<p>How does uaccess get around the no race limitation?</p>",
+        "id": 499253186,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371870
+    },
+    {
+        "content": "<p>With assembly.</p>",
+        "id": 499253234,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371883
+    },
+    {
+        "content": "<p>right</p>",
+        "id": 499253264,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371889
+    },
+    {
+        "content": "<p>uaccess also has some logic to deal with page faults if the address isn't mapped</p>",
+        "id": 499253484,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371933
+    },
+    {
+        "content": "<p>That is already guaranteed for me</p>",
+        "id": 499253543,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371950
+    },
+    {
+        "content": "<p>What does C do?</p>",
+        "id": 499253616,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739371966
+    },
+    {
+        "content": "<p>I was thinking about calling directly into C memcpy</p>",
+        "id": 499253623,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739371967
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499253616\">said</a>:</p>\n<blockquote>\n<p>What does C do?</p>\n</blockquote>\n<p>C just copies the data, no questions asked. No semantics is assigned to the data, it is just a move.</p>",
+        "id": 499253808,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372017
+    },
+    {
+        "content": "<p>Then I guess you just do that too. <span aria-label=\"woman shrugging\" class=\"emoji emoji-1f937-200d-2640\" role=\"img\" title=\"woman shrugging\">:woman_shrugging:</span></p>",
+        "id": 499253874,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372039
+    },
+    {
+        "content": "<p>But I will fail the safety requirements of the page functions.</p>",
+        "id": 499253958,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372052
+    },
+    {
+        "content": "<p>Which takes me back to the safety requirements of ptr::copy_nonoverlapping</p>",
+        "id": 499254050,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372079
+    },
+    {
+        "content": "<p>They just say valid for read and valid for write for length.</p>",
+        "id": 499254165,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372110
+    },
+    {
+        "content": "<p>Does that imply no races?</p>",
+        "id": 499254193,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372120
+    },
+    {
+        "content": "<p>Because if not, I think we can relax the requirements on the page functions.</p>",
+        "id": 499254255,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372140
+    },
+    {
+        "content": "<p>As long as no references are made to the data in the pages.</p>",
+        "id": 499254358,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372163
+    },
+    {
+        "content": "<p>The stdlib function <code>copy_nonoverlapping</code> absolutely does require no races.</p>",
+        "id": 499254447,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372181
+    },
+    {
+        "content": "<p>It dosen't say so in the safety requirements</p>",
+        "id": 499254533,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372209
+    },
+    {
+        "content": "<p>You're going to use it anyway because linux kernel memory model yolo.</p>",
+        "id": 499254554,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372214
+    },
+    {
+        "content": "<p>My guess is that it's implied by \"valid for writes\"</p>",
+        "id": 499254625,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372229
+    },
+    {
+        "content": "<p>And it should not, because it does not interpret the data it mvoes</p>",
+        "id": 499254632,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372230
+    },
+    {
+        "content": "<p>Like C memcpy, it should not care</p>",
+        "id": 499254732,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372255
+    },
+    {
+        "content": "<p>What do you mean?</p>",
+        "id": 499254796,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372268
+    },
+    {
+        "content": "<p>I mean, since it is not creating references to <code>src</code> or <code>dst</code>, it does not have to require race absence. It essentially compiles down to a call to C <code>memcpy</code>.</p>",
+        "id": 499255055,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372327
+    },
+    {
+        "content": "<p>Rust does not have any way to read a value that may be concurrently written to. If you think you found a function whose docs say otherwise, you can file a documentation bug with the stdlib. It does not mean you found a way to do it.</p>",
+        "id": 499255257,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372379
+    },
+    {
+        "content": "<p>Data races don't care about references. It's about when you perform reads or writes to bytes of memory.</p>",
+        "id": 499255648,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372472
+    },
+    {
+        "content": "<p>hmm</p>",
+        "id": 499255746,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372497
+    },
+    {
+        "content": "<p>But if I call into a C or asm function that does the move, I should be fine?</p>",
+        "id": 499255867,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372524
+    },
+    {
+        "content": "<p>I mean, we got the linux kernel memory model yolo just-do-what-c-does, so you can just do the memcpy in Rust.</p>",
+        "id": 499256035,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372575
+    },
+    {
+        "content": "<p>To be completely correct, Rust is of the opinion that calls into C/asm can do anything Rust can, but no more.</p>",
+        "id": 499256233,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372627
+    },
+    {
+        "content": "<p>But then how would you prefer I write my safety comment? Surely I cannot put \"yolo\".</p>",
+        "id": 499256243,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372629
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"sd\">/// Copy data of this segment into `dst_page`.</span>\n<span class=\"w\">    </span><span class=\"sd\">///</span>\n<span class=\"w\">    </span><span class=\"sd\">/// Note: Disregards `self.offset()`</span>\n<span class=\"w\">    </span><span class=\"cp\">#[inline(always)]</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">copy_to_page</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">dst_page</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Page</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">offset</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">length</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: self.bio_vec is valid and thus bv_page must be a valid</span>\n<span class=\"w\">        </span><span class=\"c1\">// pointer to a `struct page`. We do not own the page, but we prevent</span>\n<span class=\"w\">        </span><span class=\"c1\">// drop by wrapping the `Page` in `ManuallyDrop`.</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">src_page</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ManuallyDrop</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">Page</span><span class=\"p\">::</span><span class=\"n\">from_raw</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">bio_vec</span><span class=\"p\">.</span><span class=\"n\">bv_page</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">});</span>\n\n<span class=\"w\">        </span><span class=\"n\">src_page</span><span class=\"p\">.</span><span class=\"n\">with_pointer_into_page</span><span class=\"p\">(</span><span class=\"n\">offset</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">length</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">src</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// SAFETY:</span>\n<span class=\"w\">            </span><span class=\"c1\">// - If `with_pointer_into_page` calls this closure, it has performed bounds</span>\n<span class=\"w\">            </span><span class=\"c1\">//   checking and guarantees that `src` is valid for `length` bytes.</span>\n<span class=\"w\">            </span><span class=\"c1\">// - TODO: User space might write src_page at any time?</span>\n<span class=\"w\">            </span><span class=\"c1\">// - We have exclusive ownership of `dst_page` and thus this write wil not race.</span>\n<span class=\"w\">            </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">dst_page</span><span class=\"p\">.</span><span class=\"n\">write_raw</span><span class=\"p\">(</span><span class=\"n\">src</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">offset</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">length</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 499256466,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372673
+    },
+    {
+        "content": "<p>Like, I can't just put \"yolo\" in this TODO</p>",
+        "id": 499256564,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372699
+    },
+    {
+        "content": "<p>But if I call <code>bindings::memcpy</code> it's all fine? Then why not relax the requirements on the page functions instead.</p>",
+        "id": 499256822,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739372763
+    },
+    {
+        "content": "<p>You can explain that this is one of the cases where we don't follow the Rust rules precisely and rely on the linux kernel memory model instead.</p>",
+        "id": 499256935,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372783
+    },
+    {
+        "content": "<p>Same as with DMA.</p>",
+        "id": 499257253,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739372851
+    },
+    {
+        "content": "<p>It's better to use <code>bindings::memcpy()</code> IMO ;-)</p>",
+        "id": 499276161,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739377514
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499256935\">said</a>:</p>\n<blockquote>\n<p>You can explain that this is one of the cases where we don't follow the Rust rules precisely and rely on the linux kernel memory model instead.</p>\n</blockquote>\n<p>More precisely, we rely on <code>copy_nonoverlapping()</code> behaving like a <code>bindings::memcpy()</code> in linux kernel memory model.</p>",
+        "id": 499276377,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739377577
+    },
+    {
+        "content": "<p>In practice I see it compiles down to memcpy anyway. I know it’s not a guarantee, but it seems like something to build on.</p>",
+        "id": 499277600,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739377902
+    },
+    {
+        "content": "<p>I’ll have to check out the reasoning in dma</p>",
+        "id": 499278119,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378042
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499277600\">said</a>:</p>\n<blockquote>\n<p>In practice I see it compiles down to memcpy anyway. I know it’s not a guarantee, but it seems like something to build on.</p>\n</blockquote>\n<p>We need to some confirmation from t-opsem, or as least let them know \"hey we are doing this\"</p>",
+        "id": 499279426,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378398
+    },
+    {
+        "content": "<p>Haven't we gotten that confirmation countless times?</p>",
+        "id": 499279584,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378433
+    },
+    {
+        "content": "<p>but in this case, the racy accesses are from outside kernel, so it may already be not a UB.</p>",
+        "id": 499279662,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378460
+    },
+    {
+        "content": "<p>They told us to like C when Rust doesn't provide a mechanism.</p>",
+        "id": 499279673,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378464
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499279662\">said</a>:</p>\n<blockquote>\n<p>but in this case, the racy accesses are from outside kernel, so it may already be not a UB.</p>\n</blockquote>\n<p>That should not matter?</p>",
+        "id": 499279800,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378505
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499279673\">said</a>:</p>\n<blockquote>\n<p>They told us to like C when Rust doesn't provide a mechanism.</p>\n</blockquote>\n<p>C doesn't have a <code>copy_nonoverlapping()</code>, for <code>volatile</code>, yes, for <code>copy_nonoverlapping()</code>, I don't know.</p>",
+        "id": 499279949,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378534
+    },
+    {
+        "content": "<p>User space process is basically just another thread to kernel</p>",
+        "id": 499280012,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378551
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280012\">said</a>:</p>\n<blockquote>\n<p>User space process is basically just another thread to kernel</p>\n</blockquote>\n<p>But it's a different program, it's similar to <code>read_volatile()</code> is not a UB if hardware is changing the memory at the same time.</p>",
+        "id": 499280191,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378599
+    },
+    {
+        "content": "<p>Especially when we map their address space into our address space</p>",
+        "id": 499280239,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378613
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280191\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280012\">said</a>:</p>\n<blockquote>\n<p>User space process is basically just another thread to kernel</p>\n</blockquote>\n<p>But it's a different program, it's similar to <code>read_volatile()</code> is not a UB if hardware is changing the memory at the same time.</p>\n</blockquote>\n<p>I agree it should not be UB, but there is nothing in rust saying that it is not.</p>",
+        "id": 499280462,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378666
+    },
+    {
+        "content": "<p>that's why I said we need some confirmation</p>",
+        "id": 499280550,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378690
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280550\">said</a>:</p>\n<blockquote>\n<p>that's why I said we need some confirmation</p>\n</blockquote>\n<p>Right. How to get that? What is the best mechanism for contacting them? Do you already have a point of contact?</p>",
+        "id": 499280729,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378744
+    },
+    {
+        "content": "<p>We know that we can treat <code>volatile</code> accesses are the same between Rust and C, but we don't know whether <code>copy_nonoverlapping()</code> is <code>volatile</code> or not</p>",
+        "id": 499280875,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378779
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280729\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280550\">said</a>:</p>\n<blockquote>\n<p>that's why I said we need some confirmation</p>\n</blockquote>\n<p>Right. How to get that? What is the best mechanism for contacting them? Do you already have a point of contact?</p>\n</blockquote>\n<p>There's a t-opsem channel in Rust zulip</p>",
+        "id": 499280947,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378805
+    },
+    {
+        "content": "<p>The <code>copy_nonoverlapping()</code> method is not volatile.</p>",
+        "id": 499280948,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378805
+    },
+    {
+        "content": "<p>If we call out to c memcpy it will be volatile</p>",
+        "id": 499281039,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378835
+    },
+    {
+        "content": "<p>Unless lto</p>",
+        "id": 499281100,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378852
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280948\">said</a>:</p>\n<blockquote>\n<p>The <code>copy_nonoverlapping()</code> method is not volatile.</p>\n</blockquote>\n<p>It means two <code>copy_nonoverlapping()</code> with the same inputs can end up with only one memory copy after optimization?</p>",
+        "id": 499281151,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378870
+    },
+    {
+        "content": "<p>\"unless lto\" that's saying it's not volatile</p>",
+        "id": 499281165,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378875
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499281151\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/291565-Help/topic/Interacting.20with.20user.20space.20pages/near/499280948\">said</a>:</p>\n<blockquote>\n<p>The <code>copy_nonoverlapping()</code> method is not volatile.</p>\n</blockquote>\n<p>It means two <code>copy_nonoverlapping()</code> with the same inputs can end up with only one memory copy after optimization?</p>\n</blockquote>\n<p>Yes of course.</p>",
+        "id": 499281246,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378891
+    },
+    {
+        "content": "<p>But really rustic should not optimize pointer operations</p>",
+        "id": 499281258,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378895
+    },
+    {
+        "content": "<p>Of course it should.</p>",
+        "id": 499281310,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378906
+    },
+    {
+        "content": "<p>Sigh. It makes things difficult</p>",
+        "id": 499281370,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739378926
+    },
+    {
+        "content": "<p>That's why we should be careful about relying on <code>copy_nonoverlapping()</code> behaving like <code>memcpy()</code> in kernel C code.</p>",
+        "id": 499281524,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739378969
+    },
+    {
+        "content": "<p>Even without lto, llvm knows about memcpy and will optimize assuming it behaves as specified.</p>",
+        "id": 499281542,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739378974
+    },
+    {
+        "content": "<p>Well, the existing C code in the kernel is relying on llvm not removing memcpy calls</p>",
+        "id": 499281830,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379045
+    },
+    {
+        "content": "<p>It's good to have the optimization sometimes, it's just for your case, you want to avoid that.</p>",
+        "id": 499282027,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739379098
+    },
+    {
+        "content": "<p>I mean, it can only make optimizations that don't change behavior, so it's pretty hard to break a single copy from one of these user pages.</p>",
+        "id": 499282045,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379102
+    },
+    {
+        "content": "<p>But if you copied twice, I'm sure it could merge them.</p>",
+        "id": 499282188,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379137
+    },
+    {
+        "content": "<p>No, I don’t think so, but I need to check</p>",
+        "id": 499282337,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379184
+    },
+    {
+        "content": "<p>The point is the semantics here really requires volatile, i.e. you want to compiler to generate memcpy asm regardlessly.</p>",
+        "id": 499282468,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1739379236
+    },
+    {
+        "content": "<p>In rust idk, but I would be very surprised if that happened in c</p>",
+        "id": 499282474,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379238
+    },
+    {
+        "content": "<p>Can I blackbox it or something?</p>",
+        "id": 499282618,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379266
+    },
+    {
+        "content": "<p>I seem to recall there is something like that in std</p>",
+        "id": 499282676,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379287
+    },
+    {
+        "content": "<p>What you want is a volatile copy. You certainly don't want the black_box thing.</p>",
+        "id": 499282765,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379313
+    },
+    {
+        "content": "<p><a href=\"https://doc.rust-lang.org/stable/std/intrinsics/fn.volatile_copy_nonoverlapping_memory.html\">https://doc.rust-lang.org/stable/std/intrinsics/fn.volatile_copy_nonoverlapping_memory.html</a></p>",
+        "id": 499282844,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379338
+    },
+    {
+        "content": "<p>But there's no stable counterpart.</p>",
+        "id": 499282985,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379366
+    },
+    {
+        "content": "<p>So this is related to ensuring llvm does not remove the call if it thinks it can. Not about potential races, right?</p>",
+        "id": 499283171,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739379417
+    },
+    {
+        "content": "<p>Well, the potential races makes it UB.</p>",
+        "id": 499283257,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1739379441
+    },
+    {
+        "content": "<p>OK. What I am hearing is that </p>\n<ul>\n<li>it is probably alright to rely on the current page functions that use <code>copy_nonoverlapping</code> but it would be better to call <code>bindings::memcpy</code> directly, although both give the same result. </li>\n<li>None of that is volatile, but as far as I can tell that is not a requirement for my current situation. </li>\n<li>I might have to contact t-opsem to let them know we are doing this, but I also might not have to contact them because they gave us card blanche to “just do like C” during the discussion of atomics and memory models.</li>\n</ul>",
+        "id": 499312175,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739388503
+    },
+    {
+        "content": "<p>And DMA has the same problem so I should look for how to write my safety comments over there</p>",
+        "id": 499312292,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1739388539
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> I mentioned you by name <a href=\"https://lore.kernel.org/all/87bjuil15w.fsf@kernel.org/\">here</a> as author of statements you made in this thread.</p>",
+        "id": 503020572,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1741006904
+    },
+    {
+        "content": "<p>If these potential data races are a problem in in dma and block direct io, then they are a problem in the uaccess module as well, right?</p>",
+        "id": 507563476,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742735073
+    },
+    {
+        "content": "<p>Or do they just rely on <code>bindings::copy_from_user</code> magically making the problem go away?</p>",
+        "id": 507563649,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742735207
+    },
+    {
+        "content": "<p>I don't see the difference of that and caling <code>memcpy</code>, even thouhg <code>copy_from_user</code> ends up in hand coded assembly.</p>",
+        "id": 507569578,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1742739622
+    }
+]

@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Is there precedent for using <code>core::ops::Receiver</code> to create ergonomic subclassable kernel types?</p>\n<p>A pattern I keep running into over and over again while writing abstractions is that I have some kernel object <code>O</code> which needs to be subclassable by the user (from the C side, via struct composition). So I end up with <code>O&lt;T&gt;</code> containing the raw kernel object and a <code>T</code>. Then I add a <code>Deref&lt;O&lt;T&gt;&gt; -&gt; T</code> impl, so given an <code>O&lt;T&gt;</code> you can call things on <code>T</code>. But if those methods take just the <code>&amp;self</code> as the receiver, they can only interact with the user-implemented <code>T</code> type, not the actual <code>O&lt;T&gt;</code> kernel object. So I wind up with stuff like <code>fn foo(this: &amp;O&lt;T&gt;)</code> when I need to give the methods access to the outer object, which is quite ugly (especially to call). What I really want is <code>fn foo(self: &amp;O&lt;T&gt;)</code>, which works if the type implements <code>core::ops::Receiver</code>.</p>\n<p>Here's an example of not using <code>Receiver</code>: <a href=\"https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L164\">https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L164</a><br>\nAnd here's one using it (a trivial one, which I just implemented): <a href=\"https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L128\">https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L128</a></p>\n<p>Is there some other pattern to solve this issue I don't know about? Should I just start switching things to use <code>Receiver</code> impls this way?</p>",
+        "id": 326629766,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675873325
+    },
+    {
+        "content": "<p>I think that <code>Deref</code> could only be used for smart pointers: <a href=\"https://doc.rust-lang.org/std/ops/trait.Deref.html\">https://doc.rust-lang.org/std/ops/trait.Deref.html</a>, in other words, using it for subclass (or inheritance) is not idiomatic, at least that's what I've heard.</p>",
+        "id": 326633962,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675874366
+    },
+    {
+        "content": "<blockquote>\n<p>Implementing Deref for smart pointers makes accessing the data behind them convenient, which is why they implement Deref. On the other hand, the rules regarding Deref and DerefMut were designed specifically to accommodate smart pointers. Because of this, Deref should only be implemented for smart pointers to avoid confusion.</p>\n</blockquote>",
+        "id": 326634360,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675874458
+    },
+    {
+        "content": "<p>Just FYI: <a href=\"https://github.com/rust-unofficial/patterns/blob/main/anti_patterns/deref.md\">https://github.com/rust-unofficial/patterns/blob/main/anti_patterns/deref.md</a></p>",
+        "id": 326636563,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675875036
+    },
+    {
+        "content": "<p>And even for <code>impl Deref</code>, using regular parameter for <code>&amp;Self</code> is recommended: <a href=\"https://marabos.nl/atomics/building-arc.html#mutation\">https://marabos.nl/atomics/building-arc.html#mutation</a></p>\n<blockquote>\n<p>This function does not take a self argument, but takes a regular argument (named arc) instead. This means it can only be called as <code>Arc::get_mut(&amp;mut a)</code>, and not as <code>a.get_mut()</code>. This is advisable for types that implement Deref, to avoid ambiguity with a similarly named method on the underlying T.</p>\n</blockquote>",
+        "id": 326637909,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675875405
+    },
+    {
+        "content": "<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>\n<p>I'd love to hear of a better solution if there is one ^^</p>",
+        "id": 326640719,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675876154
+    },
+    {
+        "content": "<p>Could you make a function &amp;O&lt;T&gt; -&gt; &amp;T ?</p>",
+        "id": 326641938,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675876498
+    },
+    {
+        "content": "<p>but it’s not deref</p>",
+        "id": 326642503,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675876655
+    },
+    {
+        "content": "<p>Yes, I've used that pattern too (thought it's a bit ugly with all the <code>foo.inner().bar()</code>, but that doesn't solve the problem of methods on <code>T</code> wanting to access the outer <code>O&lt;T&gt;</code>.</p>",
+        "id": 326642561,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675876670
+    },
+    {
+        "content": "<p>Consider <a href=\"https://github.com/AsahiLinux/linux/blob/070e841af7bdb37ea554e61667360004cf44d06f/drivers/gpu/drm/asahi/queue/mod.rs#L119\">this</a>. Note that <code>pending</code> is a member of <code>JobFence</code> and <code>signal()</code> is a method on <code>FenceObject&lt;T&gt;</code>. Doing it like this lets me just have a <code>FenceObject&lt;Driver&gt;</code> object around and the code can call <code>fence.command_complete()</code> and that ends up calling through to the outer <code>FenceObject&lt;T&gt;</code>. Without the <code>Receiver</code> trick, that would have to be <code>JobFence::command_complete(fence)</code>, and without the <code>Deref</code> additionally that would have to use <code>this.inner().pending.(...)</code>.</p>",
+        "id": 326643386,
+        "sender_full_name": "Asahi Lina",
+        "timestamp": 1675876875
+    },
+    {
+        "content": "<p>Don’t take me wrong, I’ve used these patterns and want to use them, so I understand you. But as the doc said, sometimes balancing ergonomic with other things is important …</p>",
+        "id": 326644375,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675877139
+    },
+    {
+        "content": "<p>Without ergonomic, you will have to repeat yourself sometimes, but if the price is “it’s clear for others to understand the code”, it’s worth.</p>",
+        "id": 326644856,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675877258
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326640719\">said</a>:</p>\n<blockquote>\n<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>\n<p>I'd love to hear of a better solution if there is one ^^</p>\n</blockquote>\n<p>Not sure whether it can solve your issue, but in workqueue wrapper, this is a <code>WorkAdapter</code> which kinda achieves that <code>T contains O</code></p>",
+        "id": 326658739,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1675881199
+    },
+    {
+        "content": "<p>You may be able to do <code>impl O&lt;T&gt; { fn foo(&amp;self) {} }</code> to have <code>fn foo(self: O&lt;T&gt;)</code>.</p>",
+        "id": 326665340,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1675883433
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326658739\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"522295\">Asahi Lina</span> <a href=\"#narrow/stream/288089-General/topic/core.3A.3Aops.3A.3AReceiver/near/326640719\">said</a>:</p>\n<blockquote>\n<p>I understand how it's an antipattern in standard Rust, but in the kernel the problem is that the composition order is inverted in order to interact with C. In idiomatic Rust you'd use <code>T contains O</code>, but the kernel needs to carry around pointers to <code>O</code>, not <code>T</code>, and there is no sensible way to do that with a user-defined <code>T</code> as the outer struct as far as I know. And once you have <code>O&lt;T&gt; contains T</code>, it's very unergonomic not to be able to directly access methods in <code>T</code> from the outer <code>O&lt;T&gt;</code>.</p>\n<p>I'd love to hear of a better solution if there is one ^^</p>\n</blockquote>\n<p>Not sure whether it can solve your issue, but in workqueue wrapper, this is a <code>WorkAdapter</code> which kinda achieves that <code>T contains O</code></p>\n</blockquote>\n<p>FWIW,   <a href=\"https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=d1977ade9ff0fc03bf5595e34a3a5d57\">https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2021&amp;gist=d1977ade9ff0fc03bf5595e34a3a5d57</a></p>",
+        "id": 326972742,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1676009902
+    }
+]

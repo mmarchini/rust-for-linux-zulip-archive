@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>I've got a private trait that I implement on data that ultimately comes from the API user, to enforce compile-time checks on whether that data either implements Copy or is wrapped in another type.</p>\n<p>One of my structs containing such data is public, but the trait when passing the data on creation is private. This fires this warning:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">note</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">but</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"n\">DriverFenceAllowedData</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">only</span><span class=\"w\"> </span><span class=\"n\">usable</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"n\">visibility</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"err\">`</span>\n<span class=\"w\">   </span><span class=\"o\">-</span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">rust</span><span class=\"o\">/</span><span class=\"n\">kernel</span><span class=\"o\">/</span><span class=\"n\">dma_buf</span><span class=\"o\">/</span><span class=\"n\">dma_fence</span><span class=\"p\">.</span><span class=\"n\">rs</span><span class=\"p\">:</span><span class=\"mi\">488</span><span class=\"p\">:</span><span class=\"mi\">1</span>\n<span class=\"w\">    </span><span class=\"o\">|</span>\n<span class=\"mi\">488</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">DriverFenceAllowedData</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"w\">    </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"o\">^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">note</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"err\">`</span><span class=\"cp\">#[warn(private_bounds)]</span><span class=\"err\">`</span><span class=\"w\"> </span><span class=\"n\">on</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">default</span>\n</code></pre></div>\n<p>I would have liked to switch the warning of, but <code>allow</code> has no effect</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"sd\">/// A trait to enforce that all data in a [`DriverFence`] either does not need</span>\n<span class=\"sd\">/// drop, or lives in a [`RcuBox`].</span>\n<span class=\"cp\">#[allow(private_bounds)]</span>\n<span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">DriverFenceAllowedData</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">Copy</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">DriverFenceAllowedData</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">F</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"k\">impl</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">DriverFenceAllowedData</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">RcuBox</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>",
+        "id": 597836574,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779800064
+    },
+    {
+        "content": "<p>Consider making the trait public, and use the <code>Sealed</code> pattern. (search for <code>trait Sealed</code> in <code>rust/kernel</code> to see examples)</p>",
+        "id": 597837741,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779800350
+    },
+    {
+        "content": "<p>Why's it even illegal to have the trait be private?</p>",
+        "id": 597838602,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779800535
+    },
+    {
+        "content": "<p>Because if it's a bound, users of your API cannot use it as a bound themselves.</p>",
+        "id": 597838729,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779800568
+    },
+    {
+        "content": "<p>If your API is:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"p\">;</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"kt\">bool</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">accept_foo</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Then the API user can do stuff like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">accept_foo</span><span class=\"p\">(</span><span class=\"kc\">true</span><span class=\"p\">);</span>\n<span class=\"n\">accept_foo</span><span class=\"p\">(</span><span class=\"mi\">1_</span><span class=\"k\">u8</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>But if they want to do something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">validate_foo</span><span class=\"o\">&lt;</span><span class=\"n\">F</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">????&gt;</span><span class=\"p\">(</span><span class=\"n\">is_valid</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">bool</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">foo</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">F</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">is_valid</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">accept_foo</span><span class=\"p\">(</span><span class=\"n\">foo</span><span class=\"p\">);</span>\n<span class=\"w\">  </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Then they need to access the trait bound to import it.</p>",
+        "id": 597840940,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779801080
+    },
+    {
+        "content": "<p>The <code>Sealed</code> pattern allows you to prevent people from implementing your public trait and let them refer to it if they want to.</p>",
+        "id": 597841145,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779801130
+    },
+    {
+        "content": "<p>You're marking <code>#[allow]</code> in the wrong place, it should be where you use the trait, not on the trait.</p>",
+        "id": 597855726,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1779804383
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"1082757\">@Manos Pitsidianakis</span> OK, thx, understood</p>\n<p>But in kernel Rust, wouldn't it be sufficient if I just don't export the trait via the respective <code>mod.rs</code> file?</p>",
+        "id": 598262867,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779954924
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> could we see the code perhaps?</p>\n<p>FWIW I think even in the kernel crate it's more valuable to have it public, so that it shows up in documentation as well and users can understand what types it's implemented for. But that's just my personal opinion, I'm not a rust-for-linux maintainer :)</p>",
+        "id": 598264673,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779955430
+    },
+    {
+        "content": "<p>I post a v1 in a few days. If I find your mail address I can put you on Cc</p>",
+        "id": 598265524,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1779955659
+    },
+    {
+        "content": "<p>sure thing, emails are visible if you click on a user's profile here on zulip</p>",
+        "id": 598265722,
+        "sender_full_name": "Manos Pitsidianakis",
+        "timestamp": 1779955717
+    }
+]

@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>Hi,<br>\nI'm looking at the kernel source code. I couldn't see any Rust wrapper for <code>struct file_operations</code>, except in <code>rust/bindings/</code>. <br>\nI also noticed that in <code>rust/kernel/drm/</code>, it's used used from the bindings directly. Same thing with <code>rust/kernel/miscdevice.rs</code>.<br>\nIs there any plan to create a wrapper for them?</p>",
+        "id": 537098593,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1756729366
+    },
+    {
+        "content": "<p>Although it could make sense to have shared logic, there is no such logic yet.</p>",
+        "id": 537099962,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1756729768
+    },
+    {
+        "content": "<p>Apparently, there is, in the wrapper for Miscellaneous Devices <code>rust/kernel/miscdevice.rs</code>, in <code>trait MiscDevice</code></p>",
+        "id": 538545918,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757459949
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span>,</p>\n<p>In <code>rust/kernel/miscdevice.rs</code>, why have you named the trait for <code>struct file_operations</code> as <code>MiscDevice</code>?<br>\nWhy not name it <code>FileOperations</code>, and its implementations (misc, char) can have the specific name, <code>MiscdeviceVTable</code> in our case.</p>\n<p>I also wonder if the implementations for different device types are any different from each other because, it's just a Rust-safe wrapping  of <code>struct file_operations</code>, that is used by all device types equally.</p>\n<p>Yes some methods in <code>struct file_operations</code> are specifically made for block devices, and no one implements them in their misc device, but there are general methods like <code>open()</code> and <code>release()</code>.</p>",
+        "id": 539060109,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757682224
+    },
+    {
+        "content": "<p>I named the trait <code>MiscDevice</code> because it was designed to be useful for miscdevice without considering any other use-case.</p>",
+        "id": 539061257,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757682552
+    },
+    {
+        "content": "<p>Having a general trait would be great, but that's not what I attemped to make with <code>MiscDevice</code></p>",
+        "id": 539061319,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757682572
+    },
+    {
+        "content": "<p>I see.</p>",
+        "id": 539064449,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757683425
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> In <code>rust/kernel/uaccess.rs</code>, in <code>read_raw()</code>, in <code>len &gt; self.length</code>, why does the function return an error if the kernel buffer is larger than the user buffer? Shouldn't it be the opposite?</p>\n<p>Also, in <code>let res = unsafe { bindings::copy_from_user(out_ptr, self.ptr.as_const_ptr(), len) };</code>, shouldn't <code>len</code> be <code>self.length</code>? The kernel only wants to read the amount that the user provided</p>\n<p>Also, in <code>self.length -= len;</code>, why does it subtract the kernel buffer size from the user buffer? Shouldn't it just make <code>self.length = 0</code>, because it read everything?</p>\n<p>Here's what I mean:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">read_raw</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">out</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">MaybeUninit</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">])</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">out</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">out_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">out</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">().</span><span class=\"n\">cast</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">c_void</span><span class=\"o\">&gt;</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">length</span><span class=\"w\"> </span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">EFAULT</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"c1\">// SAFETY: `out_ptr` points into a mutable slice of length `len`, so we may write</span>\n<span class=\"w\">        </span><span class=\"c1\">// that many bytes to it.</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">copy_from_user</span><span class=\"p\">(</span><span class=\"n\">out_ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">as_const_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">length</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">!=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">EFAULT</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">ptr</span><span class=\"p\">.</span><span class=\"n\">wrapping_byte_add</span><span class=\"p\">(</span><span class=\"n\">len</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">length</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 539267687,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757766428
+    },
+    {
+        "content": "<p>The way it works was chosen because that's what is most convenient for the actual use-case I had for the function.</p>",
+        "id": 539267832,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757766595
+    },
+    {
+        "content": "<p>So I can't use any of <code>read_raw</code>, <code>read_slice</code>, <code>read_all</code> if my usecase has a kernel buffer that is larger than the user buffer?<br>\nIf so, should I add a different method for this usecase?</p>",
+        "id": 539268100,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757766835
+    },
+    {
+        "content": "<p><code>read_all</code> doesn't fall into that case</p>",
+        "id": 539268184,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757766922
+    },
+    {
+        "content": "<p>besides, you can create a shorter slice of your kernel buffer based on the length</p>",
+        "id": 539268196,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1757766935
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Wrapper.20for.20struct.20file_operations/near/539268196\">said</a>:</p>\n<blockquote>\n<p>besides, you can create a shorter slice of your kernel buffer based on the length</p>\n</blockquote>\n<p>Fair</p>",
+        "id": 539271302,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757769913
+    },
+    {
+        "content": "<p>In <code>samples/rust/rust_misc_device.rs</code>. You used <code>inner</code> as a variable that gets destroyed when the file closes. Is there a way to make it device-wide or module-wide? So even when closing the file, it retains its data.</p>\n<p>One way is to create a global variable (<code>static mut</code>) like in C, but is there any other way that can be contained in the module's or the device's struct maybe?</p>",
+        "id": 539399663,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1757848513
+    }
+]

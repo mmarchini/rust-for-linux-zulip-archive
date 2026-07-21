@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Hi,</p>\n<p>I’ve started a new DRM driver, for some quite old hardware, and I’m a bit stuck on various parts:</p>\n<ul>\n<li>How do I get back a <code>Device&lt;Bound&gt;</code> instead of a <code>Device&lt;Normal&gt;</code> from an <code>ioctl()</code> callback, so that I can access its <code>DevRes&lt;IoMem&lt;_&gt;&gt;</code>?  I’ve tried <code>tdev.the_devres.access(unsafe { tdez.as_ref().as_bound() })</code> but it seems to make my kernel crash when I use it afterwards, which is a bit inconvenient.</li>\n<li>How do I convert to and from physical addresses after an allocation?  For now I’ve declared reserved memory in the device-tree so that I know the address, but I’d rather allocate with <code>Kmalloc::alloc()</code> at probe time, and retrieve the physical address afterwards to configure the hardware.</li>\n</ul>\n<p>I’ve put my branch here, if you’d like to understand how I’ve done things so far: <a href=\"https://github.com/linkmauve/linux/tree/wii-v7.0-flipper\">https://github.com/linkmauve/linux/tree/wii-v7.0-flipper</a></p>\n<p>I started from the Tyr skeleton, and am based on mainline as of last night so far, with a bunch of patches on top of it to make the rest of the hardware work, as well as Rust on PowerPC.</p>\n<p>Thanks for your time, and for the very pleasant so far Rust integration in the kernel!</p>",
+        "id": 585201975,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776089767
+    },
+    {
+        "content": "<p>This is good timing as I've started playing around with the Nova DRM driver and implementing an ioctl that needs to call into nova-core and have run into exactly the same issue. In this case we have a reference to an auxdev and we have <code>Device&lt;Normal&gt;</code> but need a <code>Device&lt;Bound&gt;</code> in order to get to the associated drvdata.</p>\n<p>For example:</p>\n<div class=\"codehilite\" data-code-language=\"pub\"><pre><span></span><code>        let dev = adev.parent();\n        // SAFETY: The parent PCI device remains bound for the entire lifetime of the\n        // auxiliary device it created.\n        let dev = unsafe { dev.as_bound() };\n        let drvdata = dev.drvdata::&lt;Self&gt;()?;\n\n        Ok(drvdata.gpu.spec.chipset)\n    }\n</code></pre></div>\n<p>In my case using <code>dev.as_bound()</code> works as expected, but introduces an <code>unsafe</code> block, the safety of which is questionable. I looked at the auxdev sample driver to see if that solves this issue, but it seems to side step it by only accessing the auxdev parent device from the <code>probe()</code> routine where a <code>Device&lt;Bound&gt;</code> exists. </p>\n<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> did you have any thoughts or ideas on what the correct solution is here? I tried changing the stored auxdev reference to a <code>Device&lt;Bound&gt;</code> but that of course doesn't work because it correctly doesn't implement  <code>AlwaysRefCounted</code>.</p>\n<p>For reference my WIP tree with the above is at <a href=\"https://github.com/apopple-nvidia/linux/tree/nova-drm\">https://github.com/apopple-nvidia/linux/tree/nova-drm</a> . Thanks.</p>",
+        "id": 585330810,
+        "sender_full_name": "Alistair Popple",
+        "timestamp": 1776142218
+    },
+    {
+        "content": "<p>I think I’ve solved it with <code>tdev.the_devres.try_access().ok_or(EBUSY)?</code> instead of <code>.access()</code>, I didn’t get around how <code>Revokable</code> works but I understand it as making it possible to revoke access to the DRM file from the client.  And now without unsafe it seems I can address the memory of my device!</p>\n<p>As for the second point, I added a helper for <code>virt_to_phys()</code> but it seems weird, I get addresses outside of the physical memory map of my device, which shouldn’t possibly happen, as the amount of RAM in this console is fixed and defined in the device-tree.</p>",
+        "id": 585365574,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776156582
+    },
+    {
+        "content": "<p>for <code>DevRes&lt;IoMem&gt;</code> access there is the fallible <code>try_access()</code>which should be used when you can't prove that the device is still bound. Long term plan is to try to guarantee a bound device for DRM ioctl implementations in drivers<br>\nAccess to physical addresses is an unsolved problem. Lina posted <a href=\"https://lore.kernel.org/rust-for-linux/20250202-rust-page-v1-0-e3170d7fe55e@asahilina.net/\">patches</a> for physical addresses for pages last year which isn't the way to go. using <code>virt_to_phys()</code>was recommended but I still need to port the asahi downstream driver over.<br>\nOn what kind of alloctions are you using virt_to_phys?</p>",
+        "id": 585370353,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1776157914
+    },
+    {
+        "content": "<blockquote>\n<p>On what kind of alloctions are you using virt_to_phys?<br>\nFor now, I wanted to replace a static <code>reserved-memory</code> in the device-tree with an allocation on driver probe, using <code>Kmalloc::alloc()</code> to get a physically contiguous allocation.  I have two big chunks of memory to allocate, a 256 KiB FIFO used to communicate between the CPU and the GPU, and a 640×480 YUYV buffer which gets scanned out.  Ideally those would get deallocated on module unload, to avoid wasting almost 1 MiB out of the 88 available on the Wii (or worse, 24 on the GameCube) if video output isn’t needed.</p>\n</blockquote>",
+        "id": 585377126,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776159872
+    },
+    {
+        "content": "<p>kmalloc should work. not sure what could be wrong. I'd start staring at the arch specific implementation to why it goes wrong or look if the same happens in (random) C code</p>",
+        "id": 585398408,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1776166124
+    },
+    {
+        "content": "<p>I have a third case to handle, vertex arrays coming from userspace, but those could possibly cross page boundaries and thus have no guarantee to be contiguous, so I guess for the time being I’ll have to copy them to a kernel-allocated buffer anyway, unless they span a single page.</p>\n<p>I’ll test <code>virt_to_phys()</code> in a C module, thanks!</p>",
+        "id": 585448377,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776178303
+    },
+    {
+        "content": "<p>(Cc: <span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span>)</p>\n<p><span class=\"user-mention\" data-user-id=\"1069135\">@Alistair Popple</span>, <span class=\"user-mention\" data-user-id=\"1023387\">@Link Mauve</span>  The problem is that DRM ioctls are not synchronized with the device / driver lifecycle, i.e. there is no guarantee that the parent device is still bound to the driver.</p>\n<p>As <span class=\"user-mention\" data-user-id=\"671509\">@Janne Grunau</span> mentioned the long term plan is to actually provide this guarantee, but it is not just a DRM problem. It is a kernel wide topic around cdev synchronization, DRM is just one affected subsystem.</p>\n<p>I definitely plan to (keep) working on this, but in the meantime we can do the following workaround [1], which leverages drm_dev_enter(), drm_dev_exit() and drm_dev_unplug(), which is also used on the C side to protect device resources.</p>\n<p>Devres::try_access() basically does the same thing more generically, despite using RCU instead of SRCU, which the DRM helper is based on.</p>\n<p>However, for this case I do not recommend to use Devres::try_access(), as we do not really want to access an individual device resource from a scope where we do not have a &amp;Device&lt;Bound&gt;, we simply want a &amp;Device&lt;Bound&gt; for an entire scope.</p>\n<p>Besides that, the fundamental problem here is really that we want DRM ioctls to provide this guarantee, whereas Devres::try_access() is really just a last resort. Actually, I think all users have been converted to access(), so we might even remove it, until we find a valid use-case.</p>\n<p>That said, the patch in [1] should solve the issue for now. I based it on top of the DeviceContext series, as this would be unsound to implement for a drm::Device that is not guaranteed to be registered.</p>\n<p>But for local testing, you can also just cherry-pick the HEAD commit and drop the drm::Device type state.</p>\n<p>I hope this helps!</p>\n<p>[1] <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/dakr/linux.git/log/?h=drm/unbind_guard\">https://git.kernel.org/pub/scm/linux/kernel/git/dakr/linux.git/log/?h=drm/unbind_guard</a></p>",
+        "id": 585478801,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776185694
+    },
+    {
+        "content": "<p>Thanks <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>, took a look at <code>UnbindGuard</code> and that seems to fix the actual safety problem of a device getting unbound during an operation. However for our auxdev use case it doesn't remove the need for the unsafe statement to turn the <code>Device&lt;Normal&gt;</code> into <code>Device&lt;Bound&gt;</code> to get at the PCI parent device data:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"p\">(</span><span class=\"k\">crate</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">get_param</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">NovaDevice</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">getparam</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">uapi</span><span class=\"p\">::</span><span class=\"n\">drm_nova_getparam</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">_file</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">File</span><span class=\"o\">&lt;</span><span class=\"n\">File</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"kt\">u32</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"p\">.</span><span class=\"n\">unbind_guard</span><span class=\"p\">().</span><span class=\"n\">ok_or</span><span class=\"p\">(</span><span class=\"n\">ENODEV</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">nova_core</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">guard</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">parent</span><span class=\"p\">()</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">ok_or</span><span class=\"p\">(</span><span class=\"n\">ENODEV</span><span class=\"p\">)</span><span class=\"o\">?</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">as_bound</span><span class=\"p\">()</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">drvdata</span><span class=\"p\">::</span><span class=\"o\">&lt;</span><span class=\"n\">NovaCore</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"o\">?</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">get_ref</span><span class=\"p\">()</span>\n<span class=\"w\">        </span><span class=\"p\">};</span>\n</code></pre></div>\n<p>Whilst in this case it is actually safe with the protection of unbind guard it would be nicer if we could avoid the use of unsafe, otherwise it's very easy to forget the guard. I'm not really sure how to go about that though so am interested in any thoughts you might have.</p>",
+        "id": 585857804,
+        "sender_full_name": "Alistair Popple",
+        "timestamp": 1776333922
+    },
+    {
+        "content": "<p>That's because <code>parent()</code> can not guarantee a bound device for any generic device, but only for an auxiliary device, see [1].</p>\n<p>The DRM UnbindGuard (and the DRM device) should leverage the <code>AsBusDevice</code> trait to provide you with the actual auxiliary device -- let me hack this up later today.</p>\n<p>Besides, in nova-drm you shouldn't mess with the parent device yourself. Instead you should pass the <code>&amp;auxiliary::Device&lt;Bound&gt;</code> to nova-core, so it can derive the parent itself, gather its private data and do things on behalf of nova-drm.</p>\n<p>[1] <a href=\"https://rust.docs.kernel.org/kernel/auxiliary/struct.Device.html#method.parent\">https://rust.docs.kernel.org/kernel/auxiliary/struct.Device.html#method.parent</a></p>",
+        "id": 585859270,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776334352
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"1023387\">@Link Mauve</span> would you be interested in joining our weekly calls on Thursdays, 2pm UTC?</p>",
+        "id": 585927863,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1776351811
+    },
+    {
+        "content": "<p>So one hour ago?  Sure!</p>",
+        "id": 585928233,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776351911
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"1069135\">@Alistair Popple</span> </p>\n<p>I updated [1]; you should now get an <code>&amp;auxiliary::Device&lt;Bound&gt;</code> from the <code>drm::UnbindGuard</code> that you can pass to nova-core.</p>\n<p>[1] <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/dakr/linux.git/log/?h=drm/unbind_guard\">https://git.kernel.org/pub/scm/linux/kernel/git/dakr/linux.git/log/?h=drm/unbind_guard</a></p>",
+        "id": 585964064,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1776361706
+    },
+    {
+        "content": "<p>Thanks <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> , that fixes the problem nicely.</p>",
+        "id": 586013245,
+        "sender_full_name": "Alistair Popple",
+        "timestamp": 1776384245
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/291565-Help/topic/Working.20on.20a.20new.20DRM.20driver/near/585927863\">said</a> :</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"1023387\">Link Mauve</span> would you be interested in joining our weekly calls on Thursdays, 2pm UTC?</p>\n</blockquote>\n<p>What is the address of the call, btw?</p>",
+        "id": 590462074,
+        "sender_full_name": "Link Mauve",
+        "timestamp": 1776948811
+    }
+]

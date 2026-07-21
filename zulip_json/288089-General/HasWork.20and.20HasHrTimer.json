@@ -1,0 +1,398 @@
+[
+    {
+        "content": "<p>I think these two don't need to be generic over <code>T</code>, right? Because <code>T</code> is always <code>Self</code>. I.e. they can be</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">HasWork</span><span class=\"o\">&lt;</span><span class=\"k\">const</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">raw_get_work</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">Work</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ID</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">HasHrTimer</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">raw_get_hr_timer</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">Self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">HrTimer</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 566862541,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1767844617
+    },
+    {
+        "content": "<p>Well, <code>T</code> could be <code>dyn Trait</code></p>",
+        "id": 566875963,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1767854762
+    },
+    {
+        "content": "<p>I figured that might be the reason, but I haven’t found any documentation describing this.</p>",
+        "id": 566877243,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1767855419
+    },
+    {
+        "content": "<p>I did not end up needing it for workqueue, but I <em>do</em> use that feature for the linked list.</p>",
+        "id": 566877494,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1767855564
+    },
+    {
+        "content": "<p>Hmm.. but <code>HasSelfPtr&lt;T&gt;</code> is never used as trait bound. <code>ListItem</code> imo is the actual <code>Has*</code> trait here, which describes 1) how to find the field from the struct and 2) how to find the struct from the field.</p>",
+        "id": 567290427,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768016705
+    },
+    {
+        "content": "<p>For example, as long as <code>DTWrap&lt;dyn Foo&gt;</code> impl <code>ListItem&lt;0&gt;</code> <a href=\"https://rust.docs.kernel.org/kernel/list/struct.List.html#examples\">here</a>, the linked list API works for it. The fact that <code>DTWrap&lt;dyn Foo&gt;</code> is <code>HasSelftPtr&lt;dyn Foo&gt;</code> is an implementation details.</p>",
+        "id": 567290830,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768017385
+    },
+    {
+        "content": "<p>We can remove <code>HasSelfPtr</code> and the code still works.</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gh\">diff --git a/rust/kernel/list.rs b/rust/kernel/list.rs</span>\n<span class=\"gh\">index 8349ff32fc37..a1b8e4088124 100644</span>\n<span class=\"gd\">--- a/rust/kernel/list.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/list.rs</span>\n<span class=\"gu\">@@ -13,7 +13,7 @@</span>\n\n<span class=\"w\"> </span>mod impl_list_item_mod;\n<span class=\"w\"> </span>pub use self::impl_list_item_mod::{\n<span class=\"gd\">-    impl_has_list_links, impl_has_list_links_self_ptr, impl_list_item, HasListLinks, HasSelfPtr,</span>\n<span class=\"gi\">+    impl_has_list_links, impl_has_list_links_self_ptr, impl_list_item, HasListLinks,</span>\n<span class=\"w\"> </span>};\n\n<span class=\"w\"> </span>mod arc;\n<span class=\"gh\">diff --git a/rust/kernel/list/impl_list_item_mod.rs b/rust/kernel/list/impl_list_item_mod.rs</span>\n<span class=\"gh\">index 202bc6f97c13..10de5036a6ec 100644</span>\n<span class=\"gd\">--- a/rust/kernel/list/impl_list_item_mod.rs</span>\n<span class=\"gi\">+++ b/rust/kernel/list/impl_list_item_mod.rs</span>\n<span class=\"gu\">@@ -56,22 +56,6 @@ unsafe fn raw_get_list_links(ptr: *mut Self) -&gt; *mut $crate::list::ListLinks$(&lt;$</span>\n<span class=\"w\"> </span>}\n<span class=\"w\"> </span>pub use impl_has_list_links;\n\n<span class=\"gd\">-/// Declares that the [`ListLinks&lt;ID&gt;`] field in this struct is inside a</span>\n<span class=\"gd\">-/// [`ListLinksSelfPtr&lt;T, ID&gt;`].</span>\n<span class=\"gd\">-///</span>\n<span class=\"gd\">-/// # Safety</span>\n<span class=\"gd\">-///</span>\n<span class=\"gd\">-/// The [`ListLinks&lt;ID&gt;`] field of this struct at [`HasListLinks&lt;ID&gt;::raw_get_list_links`] must be</span>\n<span class=\"gd\">-/// inside a [`ListLinksSelfPtr&lt;T, ID&gt;`].</span>\n<span class=\"gd\">-///</span>\n<span class=\"gd\">-/// [`ListLinks&lt;ID&gt;`]: crate::list::ListLinks</span>\n<span class=\"gd\">-/// [`ListLinksSelfPtr&lt;T, ID&gt;`]: crate::list::ListLinksSelfPtr</span>\n<span class=\"gd\">-pub unsafe trait HasSelfPtr&lt;T: ?Sized, const ID: u64 = 0&gt;</span>\n<span class=\"gd\">-where</span>\n<span class=\"gd\">-    Self: HasListLinks&lt;ID&gt;,</span>\n<span class=\"gd\">-{</span>\n<span class=\"gd\">-}</span>\n<span class=\"gd\">-</span>\n<span class=\"w\"> </span>/// Implements the [`HasListLinks`] and [`HasSelfPtr`] traits for the given type.\n<span class=\"w\"> </span>#[macro_export]\n<span class=\"w\"> </span>macro_rules! impl_has_list_links_self_ptr {\n<span class=\"gu\">@@ -80,10 +64,6 @@ macro_rules! impl_has_list_links_self_ptr {</span>\n<span class=\"w\"> </span>       for $self:ty\n<span class=\"w\"> </span>       { self$(.$field:ident)* }\n<span class=\"w\"> </span>    )*) =&gt; {$(\n<span class=\"gd\">-        // SAFETY: The implementation of `raw_get_list_links` only compiles if the field has the</span>\n<span class=\"gd\">-        // right type.</span>\n<span class=\"gd\">-        unsafe impl$(&lt;$($generics)*&gt;)? $crate::list::HasSelfPtr&lt;$item_type $(, $id)?&gt; for $self {}</span>\n<span class=\"gd\">-</span>\n<span class=\"w\"> </span>        unsafe impl$(&lt;$($generics)*&gt;)? $crate::list::HasListLinks$(&lt;$id&gt;)? for $self {\n<span class=\"w\"> </span>            #[inline]\n<span class=\"w\"> </span>            unsafe fn raw_get_list_links(ptr: *mut Self) -&gt; *mut $crate::list::ListLinks$(&lt;$id&gt;)? {\n</code></pre></div>",
+        "id": 567290936,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768017518
+    },
+    {
+        "content": "<p>We only need to make sure <code>impl_list_item!()</code> use the right implementation.</p>",
+        "id": 567290973,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768017561
+    },
+    {
+        "content": "<p>As far as I can tell, a \"field\" struct (e.g. <code>Work</code>, <code>HrTimer</code> and <code>ListLink</code>) may need to generic over <code>T</code>, but a \"has field\" trait seems not.</p>",
+        "id": 567291419,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768018126
+    },
+    {
+        "content": "<p>With regards to <code>HasSelfPtr</code>, it's plausible that it was needed prior to Tamir's changes, but isn't anymore.</p>",
+        "id": 567322895,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054012
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/HasWork.20and.20HasHrTimer/near/567291419\">said</a>:</p>\n<blockquote>\n<p>As far as I can tell, a \"field\" struct (e.g. <code>Work</code>, <code>HrTimer</code> and <code>ListLink</code>) may need to generic over <code>T</code>, but a \"has field\" trait seems not.</p>\n</blockquote>\n<p>If you have a <code>HasField&lt;Work&lt;T&gt;&gt;</code> trait, then it's still generic over <code>T</code> by virtue of being generic over the field type, or do I misunderstand what you mean?</p>",
+        "id": 567322972,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054058
+    },
+    {
+        "content": "<p>It’s going to be a <code>trait HasField&lt;F: Field&lt;Self&gt;&gt;</code>, in Work case it’s a <code>HasField&lt;Work&lt;Self&gt;&gt;</code></p>",
+        "id": 567323085,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054179
+    },
+    {
+        "content": "<p>Note that even ignoring the <code>dyn Trait</code> case, the type may also mismatch <code>Self</code> if the struct is inside another struct. Binder uses this pretty heavily for the list with <code>DTRWrap</code></p>",
+        "id": 567323162,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054261
+    },
+    {
+        "content": "<p>So you may have <code>struct Bar { foo: Foo }</code> plus <code>struct Foo { field: Work&lt;Bar&gt; }</code>.</p>",
+        "id": 567323188,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054291
+    },
+    {
+        "content": "<p>of course the impl that matters is <code>HasWork&lt;Bar&gt; for Bar</code></p>",
+        "id": 567323218,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054320
+    },
+    {
+        "content": "<p>but <code>Foo</code> should NOT <code>HasField&lt;Work&lt;Foo&gt;&gt;</code> in this case, right?</p>",
+        "id": 567323239,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054343
+    },
+    {
+        "content": "<p>Right, if anything it is <code>Foo impl HasField&lt;Work&lt;Bar&gt;&gt;</code></p>",
+        "id": 567323264,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054367
+    },
+    {
+        "content": "<p>or just <code>Bar impl HasField&lt;Work&lt;Bar&gt;&gt;</code>?</p>",
+        "id": 567323328,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054427
+    },
+    {
+        "content": "<p>sure</p>",
+        "id": 567323339,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054435
+    },
+    {
+        "content": "<p>but e.g. <code>ListArcSafe</code> performs the trait recursively when it comes to the tracked by stuff</p>",
+        "id": 567323380,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054475
+    },
+    {
+        "content": "<p>So <code>DTRWrap&lt;T&gt;</code> is <code>ListArcSafe</code> with tracking by whatever the <code>wrapped</code> field uses</p>",
+        "id": 567323399,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054499
+    },
+    {
+        "content": "<p>and each <code>T</code> used with it then implements <code>ListArcSafe</code> with some mechanism</p>",
+        "id": 567323413,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054511
+    },
+    {
+        "content": "<p>So <code>DTRWrap&lt;Transaction&gt;</code> implements <code>ListArcSafe</code> with untracked tracking. Whereas <code>DTRWrap&lt;Node&gt;</code> implements it with an <code>AtomicTracker</code> inside <code>struct Node</code></p>",
+        "id": 567323450,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054554
+    },
+    {
+        "content": "<p>well, maybe <code>ListArcSafe</code> is a bit of a different concept - it's not really an <code>HasField</code></p>",
+        "id": 567323506,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054646
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 567323537,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054668
+    },
+    {
+        "content": "<p>also <code>ListArcSafe</code> is not generic over <code>T</code> as well.</p>",
+        "id": 567323586,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054726
+    },
+    {
+        "content": "<p>yeah I realize now</p>",
+        "id": 567323591,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054742
+    },
+    {
+        "content": "<p>there's no need to perform <code>container_of</code> from the field to the struct</p>",
+        "id": 567323609,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054752
+    },
+    {
+        "content": "<p>that's what the <code>T</code> is for - it's the return type of <code>container_of</code></p>",
+        "id": 567323649,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054766
+    },
+    {
+        "content": "<p>so if there's no <code>container_of</code>, there's no need for the <code>T</code></p>",
+        "id": 567323665,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054776
+    },
+    {
+        "content": "<p>but even with <code>container_of</code>, we can use <code>Self</code>, right? Because we don't do <code>impl HasField&lt;F: Field&lt;Self&gt;&gt; for dyn Foo</code>.</p>",
+        "id": 567323747,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054845
+    },
+    {
+        "content": "<p>i.e. we always impl <code>HasField&lt;...&gt;</code> for a <code>Sized</code> type.</p>",
+        "id": 567323773,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054874
+    },
+    {
+        "content": "<p>Binder implements <code>HasListLinks&lt;DTRWrap&lt;dyn DeliverToRead&gt;&gt;</code></p>",
+        "id": 567323789,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054898
+    },
+    {
+        "content": "<p>for <code>DTRWrap&lt;dyn DeliverToRead&gt;</code></p>",
+        "id": 567323813,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054911
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/HasWork.20and.20HasHrTimer/near/567323773\">said</a>:</p>\n<blockquote>\n<p>i.e. we always impl <code>HasField&lt;...&gt;</code> for a <code>Sized</code> type.</p>\n</blockquote>\n<p>Oh, this is not correct</p>",
+        "id": 567323817,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054917
+    },
+    {
+        "content": "<p>We do, but we just use more than container_of</p>",
+        "id": 567323850,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768054954
+    },
+    {
+        "content": "<p>It implements <code>container_of</code> not by a pointer offset, but by storing a pointer to the original struct.</p>",
+        "id": 567323883,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054989
+    },
+    {
+        "content": "<p>next to the prev/next pointers</p>",
+        "id": 567323889,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768054996
+    },
+    {
+        "content": "<p>well</p>",
+        "id": 567323902,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055008
+    },
+    {
+        "content": "<p>the offset is actually fixed, so we could get away with only storing the vtable</p>",
+        "id": 567323912,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055024
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/HasWork.20and.20HasHrTimer/near/567323789\">said</a>:</p>\n<blockquote>\n<p>Binder implements <code>HasListLinks&lt;DTRWrap&lt;dyn DeliverToRead&gt;&gt;</code></p>\n</blockquote>\n<p><code>HasListLinks</code> is not generic over <code>T</code> though</p>",
+        "id": 567323915,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055025
+    },
+    {
+        "content": "<p>What we actually did was: <code>impl HasListLink&lt;ID&gt; for DTRWrap&lt;dyn DeliverToRead&gt;</code>.</p>",
+        "id": 567323966,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055103
+    },
+    {
+        "content": "<p>oh</p>",
+        "id": 567323998,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055140
+    },
+    {
+        "content": "<p>and <code>view_value()</code> uses <code>Self</code> as the type of the container</p>",
+        "id": 567324026,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055184
+    },
+    {
+        "content": "<p>I remember now. <code>Work&lt;T&gt;</code> is generic because <code>Work::new</code> needs to know what the surrounding struct is to construct the function pointer stored within it.</p>",
+        "id": 567324058,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055218
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/HasWork.20and.20HasHrTimer/near/567324058\">said</a>:</p>\n<blockquote>\n<p>I remember now. <code>Work&lt;T&gt;</code> is generic because <code>Work::new</code> needs to know what the surrounding struct is to construct the function pointer stored within it.</p>\n</blockquote>\n<p>Right, the <code>Field</code> type needs to be generic over the <code>Container</code> type.</p>",
+        "id": 567324098,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055249
+    },
+    {
+        "content": "<p>but <code>HasField</code> trait may not need to generic over the <code>Container</code> type.</p>",
+        "id": 567324124,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055275
+    },
+    {
+        "content": "<p>But with the workqueue, <code>Work&lt;Foo&gt;</code> and <code>Work&lt;Bar&gt;</code> may be present in the same linked list. That never happens with <code>List</code>.</p>",
+        "id": 567324152,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055310
+    },
+    {
+        "content": "<p>That's true.</p>",
+        "id": 567324236,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055389
+    },
+    {
+        "content": "<p>By the way, <code>HasWork</code> is just a utility to help you implement the <em>real</em> trait <code>RawWorkItem</code></p>",
+        "id": 567324275,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055440
+    },
+    {
+        "content": "<p>well I guess <code>ListItem</code> is the same situation</p>",
+        "id": 567324307,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055473
+    },
+    {
+        "content": "<p>And that's another hint for me, because <code>RawWorkItem</code> and <code>ListItem</code> are not generic, which may suggest the generic part is not needed.</p>",
+        "id": 567324325,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055499
+    },
+    {
+        "content": "<p>Anyway, I probably keep a <code>trait HasField&lt;T, F: Field&lt;T&gt;&gt;</code> at the moment, and see if I could replace all <code>Has*</code> trait and then see if I could get rid of the generic <code>T</code> part.</p>",
+        "id": 567324385,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055569
+    },
+    {
+        "content": "<p>sounds sensible</p>",
+        "id": 567324401,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055582
+    },
+    {
+        "content": "<p>My fear is also removing <code>T</code> could restrict some usages that we haven't forseen, and keeping it is not that bad ;-) But let's see.</p>",
+        "id": 567324473,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055661
+    },
+    {
+        "content": "<p>Mainly I would make sure to think about the implications towards nested structs and for trait objects.</p>",
+        "id": 567324517,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055705
+    },
+    {
+        "content": "<p>both are used by Binder for <code>List</code></p>",
+        "id": 567324529,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055714
+    },
+    {
+        "content": "<p>so you have a test case</p>",
+        "id": 567324537,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055720
+    },
+    {
+        "content": "<p>For sure</p>",
+        "id": 567324547,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055728
+    },
+    {
+        "content": "<p>here it's relevant to consider both fixed offsets: <code>DTRWrap&lt;dyn DeliverToRead&gt;</code> has <code>ListLinks&lt;0&gt;</code> at a fixed offset, but the inner type may have a <code>ListLinks&lt;1&gt;</code> at a dynamic offset (though it's used with <code>List&lt;DTRWrap&lt;SpecificStruct&gt;&gt;</code> in that case)</p>",
+        "id": 567324607,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055796
+    },
+    {
+        "content": "<p>I believe <code>List&lt;dyn Trait&gt;</code> requires a fixed offset</p>",
+        "id": 567324616,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055805
+    },
+    {
+        "content": "<p>whereas workqueue obviously supports dynamic offsets</p>",
+        "id": 567324624,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055815
+    },
+    {
+        "content": "<p>I also need to make sure a <code>HasField&lt;DelayedWork&lt;T&gt;&gt;</code> can implies <code>HasField&lt;Work&lt;T&gt;&gt;</code>, which is another interesting requirement.</p>",
+        "id": 567324702,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055887
+    },
+    {
+        "content": "<p>yes, and same for ListLinksSelfPtr</p>",
+        "id": 567324729,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055911
+    },
+    {
+        "content": "<p>Thanks! Going to poke the code a bit tomorrow and see what I get.</p>",
+        "id": 567324755,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1768055955
+    },
+    {
+        "content": "<p><span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 567324763,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768055969
+    }
+]

@@ -1,0 +1,111 @@
+<html>
+<head><meta charset="utf-8"><title>XArray RPIT lifetime capture · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html">XArray RPIT lifetime capture</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="525476424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525476424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jesung Yang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525476424">(Jun 24 2025 at 09:23)</a>:</h4>
+<p>In <a href="https://github.com/Rust-for-Linux/linux/blob/0303584766b7bdb6564c7e8f13e0b59b6ef44984/rust/kernel/xarray.rs#L104-L118"><code>xarray</code>'s <code>iter</code> implementation</a>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">iter</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="nb">Iterator</span><span class="o">&lt;</span><span class="n">Item</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NonNull</span><span class="o">&lt;</span><span class="n">T</span><span class="p">::</span><span class="n">PointedTo</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// SAFETY: self.xa is always valid by the type invariant.</span>
+<span class="w">    </span><span class="n">iter</span><span class="p">::</span><span class="n">once</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">bindings</span><span class="p">::</span><span class="n">xa_find</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">xa</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="kt">usize</span><span class="p">::</span><span class="n">MAX</span><span class="p">,</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">XA_PRESENT</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">chain</span><span class="p">(</span><span class="n">iter</span><span class="p">::</span><span class="n">from_fn</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// SAFETY: self.xa is always valid by the type invariant.</span>
+<span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">bindings</span><span class="p">::</span><span class="n">xa_find_after</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">xa</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="kt">usize</span><span class="p">::</span><span class="n">MAX</span><span class="p">,</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">XA_PRESENT</span><span class="p">)</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">map_while</span><span class="p">(</span><span class="o">|</span><span class="n">ptr</span><span class="o">|</span><span class="w"> </span><span class="n">NonNull</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ptr</span><span class="p">.</span><span class="n">cast</span><span class="p">()))</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The current return type uses <code>+ '_</code>, which promises that the RPIT (return-position impl Trait) opaque type outlives the lifetime of <code>&amp;self</code>. However, I believe what we actually want here is the opposite: the lifetime of <code>&amp;self</code> outlives the lifetime of the opaque type.</p>
+<p>This would be correctly expressed as:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">iter</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="nb">Iterator</span><span class="o">&lt;</span><span class="n">Item</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NonNull</span><span class="o">&lt;</span><span class="n">T</span><span class="p">::</span><span class="n">PointedTo</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">use</span><span class="o">&lt;'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span>
+</code></pre></div>
+<p>Unfortunately, <code>use</code> bounds are not available in Rust 1.78.0, which is the current MSRV for Rust-for-Linux. IIUC, we might want to at least leave a TODO comment to indicate this mismatch and document the intended future improvement.</p>
+<p>Any thoughts?</p>
+<p>Reference: <a href="https://rust-lang.github.io/rfcs/3498-lifetime-capture-rules-2024.html#the-outlives-trick">https://rust-lang.github.io/rfcs/3498-lifetime-capture-rules-2024.html#the-outlives-trick</a></p>
+
+
+
+<a name="525479292"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525479292" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525479292">(Jun 24 2025 at 09:41)</a>:</h4>
+<p>to quote from your link:</p>
+<blockquote>
+<p>It works anyway in this specific case only because the lifetime of the returned opaque type is <em>exactly</em> equal to the lifetime <code>'a</code>. Because equality is symmetric, the fact that our promise is the wrong way around doesn’t matter.</p>
+</blockquote>
+<p>I think this also applies here, the returned iterator lives exactly for <code>'_</code>.</p>
+<p>Now if we could use <code>use&lt;&gt;</code>, then it might make sense to change it, but I don't think that we need a comment, since there are a lot of other places that could make use of this change as well, so I don't think we should single this one out</p>
+
+
+
+<a name="525482945"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525482945" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jesung Yang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525482945">(Jun 24 2025 at 10:03)</a>:</h4>
+<p>Thanks, that makes sense. I was mostly thinking about it from an accuracy perspective, but agreed that it's not critical to call it out in this context.</p>
+
+
+
+<a name="525489922"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525489922" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525489922">(Jun 24 2025 at 10:49)</a>:</h4>
+<p>It doesn't sound like a bad idea to list the ones we know we could eventually change in an issue or similar if someone wants to go through them. It can also serve as a guide for others looking into <code>use&lt;&gt;</code> later on.</p>
+
+
+
+<a name="525527589"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525527589" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jesung Yang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525527589">(Jun 24 2025 at 14:08)</a>:</h4>
+<p>If it eventually turns out to be useful, I'm happy to send a patch.</p>
+
+
+
+<a name="525690960"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525690960" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525690960">(Jun 25 2025 at 11:28)</a>:</h4>
+<p>I think having it in an issue would be definitely useful.</p>
+<p>As for a patch, i.e. as a comment, that sounds OK to me too, but <span class="user-mention" data-user-id="546447">@Benno Lossin</span> mentioned there would be many cases. I only see a few <code>-&gt; impl ... + '...</code> instances at the moment from a quick grep, though.</p>
+
+
+
+<a name="525691485"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525691485" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525691485">(Jun 25 2025 at 11:31)</a>:</h4>
+<p>(It is true that, if we keep adding more, it may not be great to have a comment for each.)</p>
+
+
+
+<a name="525692053"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525692053" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525692053">(Jun 25 2025 at 11:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/288089-General/topic/XArray.20RPIT.20lifetime.20capture/near/525690960">said</a>:</p>
+<blockquote>
+<p>I think having it in an issue would be definitely useful.</p>
+<p>As for a patch, i.e. as a comment, that sounds OK to me too, but <span class="user-mention silent" data-user-id="546447">Benno Lossin</span> mentioned there would be many cases. I only see a few <code>-&gt; impl ... + '...</code> instances at the moment from a quick grep, though.</p>
+</blockquote>
+<p>I didn't actually check how many instances we had <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> but since it comes up a lot when working with borrowing iterators, I thought we might have several...</p>
+
+
+
+<a name="525692104"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525692104" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525692104">(Jun 25 2025 at 11:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/channel/288089-General/topic/XArray.20RPIT.20lifetime.20capture/near/525691485">said</a>:</p>
+<blockquote>
+<p>(It is true that, if we keep adding more, it may not be great to have a comment for each.)</p>
+</blockquote>
+<p>yeah, I think having an issue is a good idea</p>
+
+
+
+<a name="525716247"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/XArray%20RPIT%20lifetime%20capture/near/525716247" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jesung Yang <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/XArray.20RPIT.20lifetime.20capture.html#525716247">(Jun 25 2025 at 13:44)</a>:</h4>
+<p>Then I'll file an issue with the <code>-&gt; impl ... + '...</code> instances I can find for now. Thanks for the discussion!</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

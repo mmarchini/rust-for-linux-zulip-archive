@@ -1,0 +1,243 @@
+<html>
+<head><meta charset="utf-8"><title>alloc_hooks and statics duplicated per function · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html">alloc_hooks and statics duplicated per function</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="561657777"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/561657777" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#561657777">(Dec 03 2025 at 13:56)</a>:</h4>
+<p>If you look in <code>include/linux/alloc_tag.h</code> you will find that many allocation functions are wrapped in <code>alloc_hooks()</code> using a <code>#define</code>. This macro is declared as follows:</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="c1">// a few different variants of this one depending on config</span>
+<span class="cp">#define DEFINE_ALLOC_TAG(_alloc_tag)                        \</span>
+<span class="cp">    static struct alloc_tag _alloc_tag __used __aligned(8)          \</span>
+<span class="cp">    __section(ALLOC_TAG_SECTION_NAME) = {                   \</span>
+<span class="cp">        .ct = CODE_TAG_INIT,                        \</span>
+<span class="cp">        .counters = NULL };</span>
+
+<span class="cp">#define alloc_hooks_tag(_tag, _do_alloc)                \</span>
+<span class="cp">({                                  \</span>
+<span class="cp">    typeof(_do_alloc) _res;                     \</span>
+<span class="cp">    if (mem_alloc_profiling_enabled()) {                \</span>
+<span class="cp">        struct alloc_tag * __maybe_unused _old;         \</span>
+<span class="cp">        _old = alloc_tag_save(_tag);                \</span>
+<span class="cp">        _res = _do_alloc;                   \</span>
+<span class="cp">        alloc_tag_restore(_tag, _old);              \</span>
+<span class="cp">    } else                              \</span>
+<span class="cp">        _res = _do_alloc;                   \</span>
+<span class="cp">    _res;                               \</span>
+<span class="cp">})</span>
+
+<span class="cp">#define alloc_hooks(_do_alloc)                      \</span>
+<span class="cp">({                                  \</span>
+<span class="cp">    DEFINE_ALLOC_TAG(_alloc_tag);                   \</span>
+<span class="cp">    alloc_hooks_tag(&amp;_alloc_tag, _do_alloc);            \</span>
+<span class="cp">})</span>
+</code></pre></div>
+<p>So this means that each call to <code>kmalloc</code> expands to declaring a new global variable for counting allocations from this call-site.</p>
+<p>Right now, all Rust code is going to share a single global declared in <code>rust/helpers/</code>, so <code>alloc_hooks()</code> combines all Rust code throughout the entire kernel. The INLINE_HELPERS patch doesn't help here (ok actually it helps a bit, because .ko modules get a separately compiled copy of helpers, so each module has its own global). To really fix it, we would need some way for things such as <code>KBox::new</code> to expand to a new instance of this static.</p>
+<p>But we can't really create these statics using Rust statics, afaict. We want them duplicated per callsite, including when generics is in play.</p>
+<p>What's the solution here? Is the only way to convert the C static into an inline asm block containing a section block? I think those do get duplicated by inlining and generics ...</p>
+<p>Thoughts?</p>
+<p>I made this about <code>alloc_hooks()</code>, but I don't think it's the only case in the kernel where this pattern occurs.</p>
+
+
+
+<a name="562068689"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562068689" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562068689">(Dec 05 2025 at 10:35)</a>:</h4>
+<p>We could solve it similarly to how we solve lock class keys, with a macro.</p>
+
+
+
+<a name="562073594"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562073594" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562073594">(Dec 05 2025 at 11:01)</a>:</h4>
+<p>But <code>KBox::new</code> isn't a macro today</p>
+
+
+
+<a name="562086802"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562086802" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562086802">(Dec 05 2025 at 12:14)</a>:</h4>
+<p>Right. We could add a new kbox constructor that takes an alloc_tag, similar to lock class, and add a macro that generates the tag when calling the new constructor. We can then convert users to the new API over time.</p>
+
+
+
+<a name="562087013"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087013" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087013">(Dec 05 2025 at 12:15)</a>:</h4>
+<p>A lot of churn, but I don't know how to do it without a macro.</p>
+
+
+
+<a name="562087095"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087095" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087095">(Dec 05 2025 at 12:16)</a>:</h4>
+<p>Or rather, if we can do it without a macro, we can do the lock class thing without a macro as well.</p>
+
+
+
+<a name="562087254"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087254" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087254">(Dec 05 2025 at 12:17)</a>:</h4>
+<p>I do think that inline asm works, but it might be a bit much ...</p>
+
+
+
+<a name="562087300"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087300" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087300">(Dec 05 2025 at 12:17)</a>:</h4>
+<p>since it takes something that's not platform specific and makes it platform specific</p>
+
+
+
+<a name="562087470"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087470" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087470">(Dec 05 2025 at 12:18)</a>:</h4>
+<p>How would you do it with inline asm?</p>
+
+
+
+<a name="562087628"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087628" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087628">(Dec 05 2025 at 12:19)</a>:</h4>
+<p>Inline asm can be used to define global variables</p>
+
+
+
+<a name="562087656"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087656" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087656">(Dec 05 2025 at 12:19)</a>:</h4>
+<p>With <code>pushsection</code></p>
+
+
+
+<a name="562087752"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562087752" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562087752">(Dec 05 2025 at 12:20)</a>:</h4>
+<p>It would still live inside <code>KBox::new</code>, there is nothing the inline asm block can read that would help it decide where we are called from. Unless you read the link register?</p>
+
+
+
+<a name="562088032"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088032" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088032">(Dec 05 2025 at 12:21)</a>:</h4>
+<p>Assuming that the call to <code>kmalloc</code> gets inlined, then the inline asm would be inlined with it. Duplicating the inline asm through inlining leads to multiple copies.</p>
+
+
+
+<a name="562088287"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088287" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088287">(Dec 05 2025 at 12:23)</a>:</h4>
+<p>In that case, would it work to define a static variable in pure rust in <code>KBox::new</code> and then force inlining of the function?</p>
+
+
+
+<a name="562088454"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088454" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088454">(Dec 05 2025 at 12:23)</a>:</h4>
+<p>That static variable would not be duplicated.</p>
+
+
+
+<a name="562088540"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088540" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088540">(Dec 05 2025 at 12:24)</a>:</h4>
+<p>it would be equivalent to declaring the static outside of the function at the top-level</p>
+
+
+
+<a name="562088545"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088545" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088545">(Dec 05 2025 at 12:24)</a>:</h4>
+<p>Ok. But one you define in assembly would be?</p>
+
+
+
+<a name="562088696"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088696" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088696">(Dec 05 2025 at 12:25)</a>:</h4>
+<p>yeah I believe so</p>
+
+
+
+<a name="562088937"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562088937" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562088937">(Dec 05 2025 at 12:26)</a>:</h4>
+<p>As far as I can tell from <code>pushsection</code> docs, it allows you to switch the ELF section momentarily (with a stack). What section would you switch to that is unique for the invocation site?</p>
+
+
+
+<a name="562089126"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089126" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089126">(Dec 05 2025 at 12:27)</a>:</h4>
+<p>Can you do something like <code>some_name_{PC}</code> or something like that?</p>
+
+
+
+<a name="562089206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089206">(Dec 05 2025 at 12:28)</a>:</h4>
+<p>It looks like the C code uses a <code>#define</code> called <code>ALLOC_TAG_SECTION_NAME</code> for the section name.</p>
+
+
+
+<a name="562089224"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089224" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089224">(Dec 05 2025 at 12:28)</a>:</h4>
+<p>They do not have to be unique.</p>
+
+
+
+<a name="562089250"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089250" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089250">(Dec 05 2025 at 12:28)</a>:</h4>
+<p>Multiple instances of the same section name are concatenated.</p>
+
+
+
+<a name="562089866"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089866" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089866">(Dec 05 2025 at 12:32)</a>:</h4>
+<p>Each alloc call site would map to a unique counter, but they all live in the same section, which is ALLOC_TAG_SECTION_NAME?</p>
+
+
+
+<a name="562089918"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562089918" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562089918">(Dec 05 2025 at 12:32)</a>:</h4>
+<p>So how would you ID what counter to use?</p>
+
+
+
+<a name="562090057"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562090057" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562090057">(Dec 05 2025 at 12:33)</a>:</h4>
+<p><code>alloc_hooks_tag</code> takes a pointer to the entry in the section</p>
+
+
+
+<a name="562090321"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562090321" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562090321">(Dec 05 2025 at 12:34)</a>:</h4>
+<p>Right, so for my mental model, this pointer is equivalent to our lock class key. How do you obtain that pointer at the call site?</p>
+
+
+
+<a name="562090392"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562090392" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562090392">(Dec 05 2025 at 12:35)</a>:</h4>
+<p>You could write the inline asm so that it stores the address in a specific register.</p>
+
+
+
+<a name="562090433"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562090433" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562090433">(Dec 05 2025 at 12:35)</a>:</h4>
+<p>Then it would be an address somewhere inside the big section, to where this particular piece ended up.</p>
+
+
+
+<a name="562090922"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562090922" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562090922">(Dec 05 2025 at 12:38)</a>:</h4>
+<p>OK, I guess that could work. Then we just have to be sure that the code is inlined.</p>
+
+
+
+<a name="562091265"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562091265" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562091265">(Dec 05 2025 at 12:40)</a>:</h4>
+<p>And, as an added bonus we can use the same method to get rid of all the macros we have for lock class key. But the cost would be that constructors <em>must</em> be inlined.</p>
+
+
+
+<a name="562091497"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562091497" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562091497">(Dec 05 2025 at 12:41)</a>:</h4>
+<p>I don't the use of target specific inline assembly should deter us. But I guess that is up for discussion.</p>
+
+
+
+<a name="562303029"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/alloc_hooks%20and%20statics%20duplicated%20per%20function/near/562303029" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/alloc_hooks.20and.20statics.20duplicated.20per.20function.html#562303029">(Dec 07 2025 at 11:28)</a>:</h4>
+<p>Adding this for potential discussion at BoF</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

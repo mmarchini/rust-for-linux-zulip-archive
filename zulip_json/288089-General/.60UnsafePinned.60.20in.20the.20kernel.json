@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Hello everyone, upstream rust now has <a href=\"https://github.com/rust-lang/rust/pull/137043\">merged the <code>UnsafePinned</code></a> type (still unstable of-course).</p>\n<p>In my <a href=\"https://lore.kernel.org/all/20250131-b4-rust_miscdevice_registrationdata-v2-0-588f1e6cfabe@gmail.com/#r\">rust: miscdevice: Add additional data to MiscDeviceRegistration patchset</a> I've manually implemented this type before it was in Upsteam.</p>\n<p>For the next version I want to match the API 1to1 to the Upstream rust version and possibly use the same documentation, so that once the type is stable we can just alias <code>kernel::type::UnsafePinned</code> to <code>core::ptr::UnsafePinned</code>.</p>\n<p>Is copying the documentation (and probably parts of the code) alright License wise and how would attribution be handled in such a case?</p>",
+        "id": 512916099,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1744924157
+    },
+    {
+        "content": "<p>Upsteam documentation for reference: <a href=\"https://doc.rust-lang.org/nightly/std/pin/struct.UnsafePinned.html\">https://doc.rust-lang.org/nightly/std/pin/struct.UnsafePinned.html</a></p>",
+        "id": 512917027,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1744924598
+    },
+    {
+        "content": "<blockquote>\n<p>Is copying the documentation (and probably parts of the code) alright License wise and how would attribution be handled in such a case?</p>\n</blockquote>\n<p>It should be fine as long as the license/copyright is respected. Please take a look at how we did it in the <code>std_vendor.rs</code> files (and the commits introducing those).</p>\n<p>Another source of inspiration may be <code>alloc</code>, that was an entire library we added from upstream that is now gone, see commit 753dece88d70 (\"rust: import upstream <code>alloc</code> crate\").</p>",
+        "id": 513016864,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1744975807
+    },
+    {
+        "content": "<p>I've sent a RFC version: <a href=\"https://lore.kernel.org/rust-for-linux/20250418-rust_unsafe_pinned-v1-1-c4c7558399f8@gmail.com/\">https://lore.kernel.org/rust-for-linux/20250418-rust_unsafe_pinned-v1-1-c4c7558399f8@gmail.com/</a></p>",
+        "id": 513024362,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1744978996
+    },
+    {
+        "content": "<p>I also asked on the Rust PR: <a href=\"https://github.com/rust-lang/rust/pull/137043#issuecomment-2815348311\">https://github.com/rust-lang/rust/pull/137043#issuecomment-2815348311</a></p>",
+        "id": 513027015,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1744980241
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> this is very interesting for the pcpu work, since it allows \"This means, in particular, that &amp;mut UnsafePinned is not necessarily a unique pointer, and thus the compiler cannot just make aliasing assumptions. \"</p>",
+        "id": 513070197,
+        "sender_full_name": "Mitchell Levy",
+        "timestamp": 1744997694
+    },
+    {
+        "content": "<p>Yeah, but it's not a free ticket, if you provide a public API, you will have to provide a <code>Pin&lt;&amp;mut UnsafePinned&gt;</code>, because <code>&amp;mut UnsafePinned</code> alone is not immune to <code>swap()</code>.</p>",
+        "id": 513070470,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1744997813
+    },
+    {
+        "content": "<p>One of the usage of <code>UnsafePinned</code> is that you already some <code>T : Sync</code> (i.e. having interior mutability), but for a few special functions you want to provide exclusive accesses (only one thread can do it at a time), then you can provide a function <code>foo(Pin&lt;&amp;mut T&gt;)</code> where <code>T</code> is a <code>UnsafePinned</code>. This can make sure 1) no concurrent <code>foo()</code> called while <code>foo()</code> being called* and 2) compiler won't assume nolias when <code>foo()</code> being called, so a co-existing <code>&amp;T</code> is not a UB.</p>\n<p>*) The API has to guarantee no co-existing <code>Pin&lt;&amp;mut T&gt;</code>.</p>",
+        "id": 513072791,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1744998937
+    },
+    {
+        "content": "<p><del>Sorry, I'm not sure I'm understanding what this has to do with mutual exclusion of <code>foo()</code></del> nvm i thought about it more</p>",
+        "id": 513073281,
+        "sender_full_name": "Mitchell Levy",
+        "timestamp": 1744999153
+    },
+    {
+        "content": "<p>One of the example is the <code>Rcu::read_copy_update()</code> function in <a href=\"https://lore.kernel.org/rust-for-linux/20241101060237.1185533-14-boqun.feng@gmail.com/\">this series</a>. It guarantees only one updater can do the read-copy-update at a time, while allowing <code>Rcu::deference()</code> happens at the same time.</p>",
+        "id": 513073361,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1744999195
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411477\">@Miguel Ojeda</span> How much of the selection between polyfil and Upstream <code>UnsafePinned</code>should I include for V2?</p>\n<p>From my side basically everything from only Polyfill to Config flag to select the Upsteam version seems reasonable (Although probably a middle path is best).</p>",
+        "id": 513281350,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1745161086
+    },
+    {
+        "content": "<p>I am not sure I understand -- what do you mean by \"how much\"? If someone wants to use it, then there are only two possibilities, no? i.e. whether or not to use the upstream one in newer compiler versions.</p>\n<p>Between those two, I would say let's keep it as simple as possible unless there is a good reason to use the upstream one.</p>\n<p>In any case, we cannot use it yet, not even in 1.88, unless more PRs land quickly for 1.88, right?</p>",
+        "id": 513313137,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1745188384
+    },
+    {
+        "content": "<p>Adding an <code>UnsafePinned</code> that we can replace with the upstream version eventually seems reasonable to me. I think we can probably wait with adding the config flag to select which one until the upstream one is more ready.</p>\n<p>Also, sorry for not leaving a review on your miscdevice change. I looked at it previously and it looks quite reasonable, though it needs to be rebased because parts of miscdevice were reorganized in the meantime.</p>",
+        "id": 513359997,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1745222565
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/288089-General/topic/.60UnsafePinned.60.20in.20the.20kernel/near/513313137\">said</a>:</p>\n<blockquote>\n<p>I am not sure I understand -- what do you mean by \"how much\"? If someone wants to use it, then there are only two possibilities, no? i.e. whether or not to use the upstream one in newer compiler versions.</p>\n<p>Between those two, I would say let's keep it as simple as possible unless there is a good reason to use the upstream one.</p>\n</blockquote>\n<p>I'll just go with that then.</p>\n<blockquote>\n<p>In any case, we cannot use it yet, not even in 1.88, unless more PRs land quickly for 1.88, right?</p>\n</blockquote>\n<p>Currently the upstream version should almost the exact same thing as my version from what I understand.</p>",
+        "id": 513368000,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1745226259
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/.60UnsafePinned.60.20in.20the.20kernel/near/513359997\">said</a>:</p>\n<blockquote>\n<p>Adding an <code>UnsafePinned</code> that we can replace with the upstream version eventually seems reasonable to me. I think we can probably wait with adding the config flag to select which one until the upstream one is more ready.</p>\n<p>Also, sorry for not leaving a review on your miscdevice change. I looked at it previously and it looks quite reasonable, though it needs to be rebased because parts of miscdevice were reorganized in the meantime.</p>\n</blockquote>\n<p>That's fine. I'm planning on sending <code>UnsafePinned</code> V2 after the next pin-init sync and then rebasing the miscdev changes on on the <code>UnsafePinned</code> patches.</p>",
+        "id": 513368434,
+        "sender_full_name": "Christian Schrefl",
+        "timestamp": 1745226471
+    }
+]

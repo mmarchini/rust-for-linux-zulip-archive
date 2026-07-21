@@ -1,0 +1,242 @@
+[
+    {
+        "content": "<p>This appears to not be supported. In other words, it's impossible to have a mutex (which needs to be pinned) wrap something that also needs to be pinned.</p>\n<p>This makes the following pattern impossible to implement:</p>\n<p><code>Mutex&lt;Opaque&lt;bindings::foo&gt;&gt;</code> where <code>bindings::foo</code> contains e.g.: a <code>list_head</code> or similar.</p>\n<p>Having a mutex wrap a bindgen type might be handy if we want to enforce that all access to the bindgen field be serialized, because it makes it impossible to get a <code>*mut Foo</code> otherwise. </p>\n<p>A similar (but much worse) solution would be:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[pin_data]</span>\n<span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">  </span><span class=\"n\">inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindgen</span><span class=\"p\">::</span><span class=\"n\">foo</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">  </span><span class=\"cp\">#[pin]</span>\n<span class=\"w\">  </span><span class=\"n\">protects_inner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Mutex</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>That is clearly inferior, as we now must manually make sure that <code>protects_inner</code> is locked before accessing <code>inner</code>, instead of relying on the type system.</p>\n<p>cc <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span></p>",
+        "id": 523945083,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1749820919
+    },
+    {
+        "content": "<p>we at some point talked about making the <code>T</code> in <code>Mutex&lt;T&gt;</code> structurally pinned, but didn't follow through with it</p>",
+        "id": 523945255,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749820971
+    },
+    {
+        "content": "<p>most likely because there was no user</p>",
+        "id": 523945280,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749820978
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523945255\">said</a>:</p>\n<blockquote>\n<p>we at some point talked about making the <code>T</code> in <code>Mutex&lt;T&gt;</code> structurally pinned, but didn't follow through with it</p>\n</blockquote>\n<blockquote>\n<p>most likely because there was no user</p>\n</blockquote>\n<p>Yeah, this is not the first time I face this situation, which is what pushed me to finally start this thread. So if there wasn't a user, there is one now :)</p>\n<p>If the result of this discussion turns out to be that we'd like to get this supported, let me know how I can help.</p>",
+        "id": 523946604,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1749821398
+    },
+    {
+        "content": "<p>let's hear from the rest of the <span class=\"user-group-mention\" data-user-group-id=\"436926\">@team</span> and see if anyone has any objections</p>",
+        "id": 523946731,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749821434
+    },
+    {
+        "content": "<p>we'd probably have to change <code>Lock</code> &amp; make all locks pin their inner value, or split the locking API back into the different parts</p>",
+        "id": 523946833,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749821462
+    },
+    {
+        "content": "<p>wait, <code>structurally pinned</code> means <code>if Mutex&lt;T&gt; is pinned, so is T</code> right? But I don't think we need T to _always_ be pinned? We'd just like to support having it be pinned if needed</p>",
+        "id": 523946860,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1749821467
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523946833\">said</a>:</p>\n<blockquote>\n<p>we'd probably have to change <code>Lock</code> &amp; make all locks pin their inner value, or split the locking API back into the different parts</p>\n</blockquote>\n<p>or introduce a new <code>PinMutex&lt;T&gt;</code>, but that is most likely confusing...</p>",
+        "id": 523946954,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749821492
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523946860\">said</a>:</p>\n<blockquote>\n<p>wait, <code>structurally pinned</code> means <code>if Mutex&lt;T&gt; is pinned, so is T</code> right? But I don't think we need T to _always_ be pinned? We'd just like to support having it be pinned if needed</p>\n</blockquote>\n<p>how would you differentiate between two instances of <code>Mutex&lt;T&gt;</code>, one of which pins T and the other doesn't?</p>",
+        "id": 523947062,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749821531
+    },
+    {
+        "content": "<p>I guess it is fine to pin <code>T</code>. If <code>T: Unpin</code> everything should work as before, right?</p>",
+        "id": 523947643,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1749821701
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/523947643\">said</a>:</p>\n<blockquote>\n<p>I guess it is fine to pin <code>T</code>. If <code>T: Unpin</code> everything should work as before, right?</p>\n</blockquote>\n<p>yes</p>",
+        "id": 523947675,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749821710
+    },
+    {
+        "content": "<blockquote>\n<p>If <code>T: Unpin</code> everything should work as before, right?</p>\n</blockquote>\n<p>Ah right, I missed this part.</p>",
+        "id": 523947819,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1749821743
+    },
+    {
+        "content": "<p>Structurally pinning data makes sense. In fact my v. early prototype of pin-init does that <a href=\"https://github.com/nbdd0121/pin-init/blob/trunk/examples/pthread_mutex.rs#L86\">https://github.com/nbdd0121/pin-init/blob/trunk/examples/pthread_mutex.rs#L86</a></p>",
+        "id": 523951539,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749822908
+    },
+    {
+        "content": "<p>should we then just do it for <code>Lock</code>?</p>",
+        "id": 523951628,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749822938
+    },
+    {
+        "content": "<p>I think we should</p>",
+        "id": 523951682,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749822951
+    },
+    {
+        "content": "<p>you will then make .lock() return a Pin&lt;Guard&gt; instead of a Guard, because Guard impl DerefMut</p>",
+        "id": 523953957,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749823599
+    },
+    {
+        "content": "<p>That doesn't sound super ergnomic!</p>",
+        "id": 523959681,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825540
+    },
+    {
+        "content": "<p>how so? and what would you suggest instead?</p>",
+        "id": 523959761,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749825573
+    },
+    {
+        "content": "<p>It's just generally I don't like to write out <code>Pin</code> very often. We could implement <code>DerefMut</code> conditionally if <code>T: Unpin</code> and provide a <code>as_mut()</code> that provides <code>Pin&lt;&amp;mut T&gt;</code>?</p>",
+        "id": 523960072,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825680
+    },
+    {
+        "content": "<p>I guess that's identical to <code>Pin&lt;Guard&gt;</code>..</p>",
+        "id": 523960116,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825696
+    },
+    {
+        "content": "<p>where would you have to write <code>Pin</code>?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">guard</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">lock</span><span class=\"p\">.</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n</code></pre></div>",
+        "id": 523960234,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749825741
+    },
+    {
+        "content": "<p>Good point, I guess type inference is good enough</p>",
+        "id": 523960346,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825789
+    },
+    {
+        "content": "<p>and if you have a function that takes a <code>Guard&lt;'_, T&gt;</code> now, that function should just take a <code>&amp;mut T</code> or <code>impl DerefMut&lt;Target = T&gt;</code> instead</p>",
+        "id": 523960411,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749825817
+    },
+    {
+        "content": "<p>Taking <code>impl</code> feels like an overkill</p>",
+        "id": 523960504,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825851
+    },
+    {
+        "content": "<p>I think we should have more types that declare themselves to be pinned, just like <code>Arc</code></p>",
+        "id": 523960575,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1749825881
+    },
+    {
+        "content": "<p>note that Pin&lt;Guard&gt; is still DerefMut if T is Unpin.</p>",
+        "id": 523961914,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749826341
+    },
+    {
+        "content": "<p>so I don’t think the change affect ergonomics when T is Unpin</p>",
+        "id": 523962043,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1749826384
+    },
+    {
+        "content": "<p>asahi has <a href=\"https://github.com/AsahiLinux/linux/commit/436c0916931a7f6321dfec089069a5bbf0997f78\">Add Lock::pin_init()</a></p>",
+        "id": 524053794,
+        "sender_full_name": "Janne Grunau",
+        "timestamp": 1749894699
+    },
+    {
+        "content": "<p>that is unsound</p>",
+        "id": 524053849,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749894763
+    },
+    {
+        "content": "<p>it allows moving the value, because it's not pinning the guard</p>",
+        "id": 524053875,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1749894796
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> I created an issue at <a href=\"https://github.com/Rust-for-Linux/linux/issues/1181\">https://github.com/Rust-for-Linux/linux/issues/1181</a></p>\n<p>Let's keep the discussion focused here please.</p>\n<p>Can anyone assign that to me in Github btw? I can't.</p>",
+        "id": 530614674,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1753378779
+    },
+    {
+        "content": "<p>Benno beat me to it :)</p>",
+        "id": 530614854,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1753378836
+    },
+    {
+        "content": "<p>in the issue you say:</p>\n<blockquote>\n<p>Note that <code>Bar</code> is pinned, so having it in a <code>Mutex</code> will not compile at the moment. This is specially undesirable, since <code>Foo</code> is already pinned, and thus, it could trivially enforce that its <code>bar</code> field is pinned as well.</p>\n</blockquote>\n<p>What do you mean by \"will not compile at the moment\"? The example you gave above does compile and it has the <code>bar</code> field marked as pinned.</p>\n<p>You won't be able to instantiate a <code>Foo</code> that pins the <code>Bar</code> in <code>bar</code>, maybe that's what you meant?</p>",
+        "id": 530615530,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1753379066
+    },
+    {
+        "content": "<blockquote>\n<p>Furthermore, there is no support for pinned projections, so the following won't work:</p>\n</blockquote>\n<p>regarding that, I have some good news for you: <a href=\"https://github.com/Rust-for-Linux/pin-init/pull/75\">https://github.com/Rust-for-Linux/pin-init/pull/75</a></p>",
+        "id": 530615647,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1753379106
+    },
+    {
+        "content": "<p>I will try to put that in v6.18</p>",
+        "id": 530615738,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1753379132
+    },
+    {
+        "content": "<blockquote>\n<p>You won't be able to instantiate a <code>Foo</code> that pins the <code>Bar</code> in <code>bar</code>, maybe that's what you meant?</p>\n</blockquote>\n<p>Yes, this means that in practice the example will not work, correct?</p>",
+        "id": 530615760,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1753379139
+    },
+    {
+        "content": "<p>so the wording was indeed bad on my end,  but hopefully the meaning is still valid</p>",
+        "id": 530615798,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1753379157
+    },
+    {
+        "content": "<p>yeah I just got confused and thought you meant it would trip up earlier (ie when just defining the types, which shouldn't happen)</p>",
+        "id": 530615872,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1753379186
+    },
+    {
+        "content": "<p>Edited to make it clearer</p>",
+        "id": 530616328,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1753379345
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"546447\">Benno Lossin</span> <a href=\"#narrow/channel/288089-General/topic/Mutex.3CT.3E.20where.20T.20is.20pinned/near/530615647\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>Furthermore, there is no support for pinned projections, so the following won't work:</p>\n</blockquote>\n<p>regarding that, I have some good news for you: <a href=\"https://github.com/Rust-for-Linux/pin-init/pull/75\">https://github.com/Rust-for-Linux/pin-init/pull/75</a></p>\n</blockquote>\n<p>You can put a link to that PR at the issue that Daniel just created.</p>",
+        "id": 530616375,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1753379362
+    }
+]

@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>Hi, I'm working on the add a tracepoint for <code>Arc::drop</code> when refcount reaches 0: <a href=\"https://github.com/fbq/linux-rust/commit/c36d185e728eace05221152ee1596d99f384f2a3\">https://github.com/fbq/linux-rust/commit/c36d185e728eace05221152ee1596d99f384f2a3</a></p>\n<p>The reason is that <code>Arc::drop</code> sometimes could be expensive, and you don't want it in your fastpath, so step 0 is to find it out. And a tracepoint means perf and bpf get a chance to step into and do their work.</p>\n<p>One thing I could use some advise is about the tracepoint data, right now I'm using the <code>core::any::type_name</code> so that users could figure out the inner data type, and maybe put a filter on. But that also means more space for kernel text. I wonder whether I could use <code>core::any::TypeId</code> and somehow retrieve the type name with <code>TypeId</code> from debug information?</p>\n<p>Anyway, going to send it out later this week for broader review, let me know if you want to be Cced ;-)</p>",
+        "id": 329229926,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1676995652
+    },
+    {
+        "content": "<blockquote>\n<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>\n</blockquote>\n<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>",
+        "id": 329233220,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676996438
+    },
+    {
+        "content": "<p>By the way the exact result of <code>type_name</code> is not guaranteed to be stable. Does linux provide any stability guarantees for tracepoints?</p>",
+        "id": 329233775,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1676996583
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412316\">bjorn3</span> <a href=\"#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233775\">said</a>:</p>\n<blockquote>\n<p>By the way the exact result of <code>type_name</code> is not guaranteed to be stable. Does linux provide any stability guarantees for tracepoints?</p>\n</blockquote>\n<p>Interesting point. I guess the answer is no, since it's just a type name, but C doesn't have template, so right now Linux doesn't have a \"generic\" tracepoint, I think.</p>",
+        "id": 329234998,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1676996898
+    },
+    {
+        "content": "<p>I don't know the current feeling, but this 2009 article talked about tracepoints as ABI: <a href=\"https://lwn.net/Articles/330402/\">https://lwn.net/Articles/330402/</a></p>\n<blockquote>\n<p>A tracepoint exists to make specific kernel information available to user space. So, in some real sense, it becomes part of the kernel ABI. As an ABI feature, a tracepoint becomes set in stone once it's shipped in a stable kernel. There is not a universal agreement on the immutability of kernel tracepoints, but the simple fact is that, once these tracepoints become established and prove their usefulness, changing them will cause user-space tracing tools to break. That means that, even if tracepoints are not seen as a stable ABI the way system calls are, there will still be considerable resistance to changing them.</p>\n</blockquote>",
+        "id": 329260058,
+        "sender_full_name": "Josh Stone (cuviper)",
+        "timestamp": 1677003662
+    },
+    {
+        "content": "<p>(I used to be involved from the SystemTap side)</p>",
+        "id": 329260207,
+        "sender_full_name": "Josh Stone (cuviper)",
+        "timestamp": 1677003711
+    },
+    {
+        "content": "<p>here's another look from 2017: <a href=\"https://lwn.net/Articles/737530/\">https://lwn.net/Articles/737530/</a></p>",
+        "id": 329260524,
+        "sender_full_name": "Josh Stone (cuviper)",
+        "timestamp": 1677003815
+    },
+    {
+        "content": "<p>that said, <code>type_name</code> as a parameter seems fine to me; the tracepoint itself would not change</p>",
+        "id": 329261143,
+        "sender_full_name": "Josh Stone (cuviper)",
+        "timestamp": 1677003982
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"412316\">bjorn3</span> <a href=\"#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233220\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>\n</blockquote>\n<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>\n</blockquote>\n<p>But can we make that happen? It doesn't seem like something wrong ;-)</p>",
+        "id": 329280622,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677009797
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"585614\">Josh Stone (cuviper)</span> <a href=\"#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329261143\">said</a>:</p>\n<blockquote>\n<p>that said, <code>type_name</code> as a parameter seems fine to me; the tracepoint itself would not change</p>\n</blockquote>\n<p>Right, tracepoint itself cannot change, but its parameter certainly doesn't need to be the same between builds, thanks for the extra confirmation ;-)</p>",
+        "id": 329281051,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677009938
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329280622\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"412316\">bjorn3</span> <a href=\"#narrow/stream/291566-Library/topic/trace.20when.20Arc.20drop.20its.20inner.20object/near/329233220\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>I wonder whether I could use core::any::TypeId and somehow retrieve the type name with TypeId from debug information?</p>\n</blockquote>\n<p>No, rustc doesn't record any debug info to map from <code>TypeId</code> back to the type name.</p>\n</blockquote>\n<p>But can we make that happen? It doesn't seem like something wrong ;-)</p>\n</blockquote>\n<p>Or ,<code>TypeId</code> is just unique per CU?</p>",
+        "id": 329281795,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677010174
+    },
+    {
+        "content": "<p>TypeId is globally unique (modulo hash collisions)</p>",
+        "id": 329308920,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1677020280
+    },
+    {
+        "content": "<p>Creating a section with TypeId -&gt; type name mapping would be possible, however I don't think having a function in the standard library for the lookup would work as wasm doesn't support merging the section from all cgus and giving this function the start and end location of the section. It would also need OS integration in case of dylibs. As for exposing the section as a stable feature to lookup yourself, that won't work either. We likely want to change the representation of TypeId and thus this section in the future to avoid all hash collisions. For example my making it a pointer to the mangled type name instead of a plain u64.</p>",
+        "id": 329309760,
+        "sender_full_name": "bjorn3",
+        "timestamp": 1677020637
+    },
+    {
+        "content": "<p>Thanks! Let me think about it ;-)</p>",
+        "id": 329309983,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1677020740
+    }
+]

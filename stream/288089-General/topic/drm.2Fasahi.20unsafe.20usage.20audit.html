@@ -1,0 +1,58 @@
+<html>
+<head><meta charset="utf-8"><title>drm/asahi unsafe usage audit · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/drm.2Fasahi.20unsafe.20usage.20audit.html">drm/asahi unsafe usage audit</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="354830131"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/drm/asahi%20unsafe%20usage%20audit/near/354830131" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Asahi Lina <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/drm.2Fasahi.20unsafe.20usage.20audit.html#354830131">(May 01 2023 at 09:54)</a>:</h4>
+<p>Hi! I just counted up all the instances of <code>unsafe</code> in my drm/asahi driver and I thought others might find the stats interesting.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">UserPtr</span><span class="w">                     </span><span class="mi">20</span>
+<span class="n">Object</span><span class="w"> </span><span class="n">system</span><span class="w"> </span><span class="n">internals</span><span class="w">     </span><span class="mi">19</span>
+<span class="n">Zeroed</span><span class="o">/</span><span class="n">mem</span>::<span class="n">zeroed</span><span class="p">()</span><span class="w">        </span><span class="mi">18</span>
+<span class="n">Impl</span><span class="w"> </span><span class="nb">Sync</span><span class="o">/</span><span class="nb">Send</span><span class="w">              </span><span class="mi">15</span>
+<span class="n">Memory</span><span class="w"> </span><span class="n">allocator</span><span class="w"> </span><span class="n">internals</span><span class="w">  </span><span class="mi">9</span>
+<span class="fm">asm!</span><span class="p">()</span><span class="w">                      </span><span class="mi">6</span>
+<span class="n">place</span><span class="o">!</span><span class="p">()</span><span class="w">                    </span><span class="mi">6</span>
+<span class="n">Unions</span><span class="w">                      </span><span class="mi">6</span>
+<span class="n">Bad</span><span class="o">/</span><span class="n">missing</span><span class="w"> </span><span class="n">abstractions</span><span class="w">    </span><span class="mi">5</span>
+<span class="n">MMU</span><span class="o">/</span><span class="n">Handoff</span><span class="w"> </span><span class="n">internals</span><span class="w">       </span><span class="mi">5</span>
+<span class="n">Pin</span><span class="w"> </span><span class="n">projections</span><span class="w">             </span><span class="mi">4</span>
+<span class="n">Cast</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">bytes</span><span class="w">               </span><span class="mi">2</span>
+<span class="n">MMIO</span><span class="w">                        </span><span class="mi">2</span>
+<span class="n">GpuWeakPointer</span><span class="p">.</span><span class="n">upgrade</span><span class="p">()</span><span class="w">    </span><span class="mi">1</span>
+<span class="n">Pin</span>::<span class="n">new_unchecked</span><span class="p">()</span><span class="w">        </span><span class="mi">1</span>
+<span class="n">mem</span>::<span class="n">transmute</span><span class="p">()</span><span class="w">            </span><span class="mi">1</span>
+<span class="n">Misc</span><span class="w"> </span><span class="n">raw</span><span class="w"> </span><span class="n">pointer</span><span class="w"> </span><span class="n">usage</span><span class="w">      </span><span class="mi">1</span>
+<span class="n">pin_init</span><span class="w"> </span><span class="n">limitations</span><span class="w">        </span><span class="mi">1</span>
+</code></pre></div>
+<ul>
+<li>UserPtr: Each read from userspace is 3 <code>unsafe</code> blocks. I'll probably abstract it out soon within the driver so I can at least avoid the duplication, but in general making this API safe requires something like <code>qubes-castable</code> so we can mark structs that are "bag of bytes" compatible. Once we have that, we can have a safe API for copies to/from userspace.</li>
+<li>Object/Allocator/MMU internals: This is the kind of code that would be expected to use <code>unsafe</code> all over the place, so not much to do here. It's quite self-contained.</li>
+<li><code>Zeroed</code>: This is basically a duplicate of the <code>Zeroable</code> trait already upstream, so most of this will go away except for a few <code>unsafe impl Zeroable</code> instances. It would be nice to be able to auto-derive this, which would be easy with the <code>Castable</code> implementation.</li>
+<li><code>place!()</code>: Will be superseded by pin-init once it gains I think just one more feature I need.</li>
+<li>Unions, <code>asm!()</code>, <code>impl Sync</code>/<code>Send</code>: These are quite fundamental, not sure we can do much about it. Unions consisting entirely of bag-of-bytes members are probably safe, but I'm not sure if there's a good way to implement an abstraction for that? It'd be neat if you could unsafely mark a union as "safe to access" the normal way with fields, instead of having to create accessor methods for each field to contain the unsafety...</li>
+<li>Cast to bytes: Same story as before, needs some kind of <code>Castable</code> thing.</li>
+<li>Bad/missing abstractions: Mostly the <code>memremap()</code> stuff in the MMU code, I'll write a proper abstraction for this before upstreaming.</li>
+<li>MMIO: Fundamentally unsafe.</li>
+<li>pin_init limitations: That's one where I have an array I need to pin_init, so I had to open-code that. It would be nice to have a pinned array initializer (that takes a closure that returns a <code>PinInit&lt;&gt;</code> per element).</li>
+<li><code>transmute</code>: Waiting on <code>const_float_bits_conv</code> becoming stable.</li>
+<li><code>GpuWeakPointer.upgrade()</code>: Unsafe by choice (this isn't actually unsafe by normal Rust rules, I just consider it unsafe in the context of the GPU object/pointer model)</li>
+</ul>
+<p>The good news is basically everything is "boring"! It's either APIs which are fundamentally unsafe but where it's easy to verify they are being used safely, simple raw pointer manipulation in allocator/memory management code, etc. I only do "interesting" things with raw pointers in one or two places (the kind of situation where you actually need a long <code>SAFETY</code> comment to explain why the logic is sound).</p>
+
+
+
+<a name="378874178"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/drm/asahi%20unsafe%20usage%20audit/near/378874178" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Demi Obenour <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/drm.2Fasahi.20unsafe.20usage.20audit.html#378874178">(Jul 26 2023 at 16:43)</a>:</h4>
+<p>Would it help if I published <code>qubes-castable</code> on <code>crates.io</code>?</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

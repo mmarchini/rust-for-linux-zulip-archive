@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>I have a proof-of-concept  of a different <code>register!</code> API as disccused in the thread here: <a href=\"https://lore.kernel.org/rust-for-linux/20260128-register-v4-0-aee3a33d9649@nvidia.com/T/#mbdf1acf98fc691df50845553cea46d7c53725ef6\">https://lore.kernel.org/rust-for-linux/20260128-register-v4-0-aee3a33d9649@nvidia.com/T/#mbdf1acf98fc691df50845553cea46d7c53725ef6</a>.</p>\n<p>The code is here <a href=\"https://github.com/nbdd0121/linux/commit/d5264f51a48340fc108a75b4c470aab44c298caa\">https://github.com/nbdd0121/linux/commit/d5264f51a48340fc108a75b4c470aab44c298caa</a> (ignore the code quality as it's a POC; I created a helper type per register as it's easy, but in practice I think we don't need one per register, just 4 helper types would be sufficient).</p>\n<p>The usage of this API would be:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">io</span><span class=\"p\">.</span><span class=\"n\">read_reg</span><span class=\"p\">(</span><span class=\"n\">REGISTER_NAME</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// current: REGISTER_NAME::read(io)</span>\n<span class=\"n\">io</span><span class=\"p\">.</span><span class=\"n\">read_reg</span><span class=\"p\">(</span><span class=\"n\">REGISTER_NAME</span><span class=\"p\">(</span><span class=\"n\">base</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"c1\">// current: REGISTER_NAME::read(io, base)</span>\n<span class=\"n\">io</span><span class=\"p\">.</span><span class=\"n\">read_reg</span><span class=\"p\">(</span><span class=\"n\">REGISTER_ARRAY</span><span class=\"p\">(</span><span class=\"n\">index</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"c1\">// current: REGISTER_ARRAY::read(io, index)</span>\n<span class=\"n\">io</span><span class=\"p\">.</span><span class=\"n\">read_reg</span><span class=\"p\">(</span><span class=\"n\">REGISTER_ARRAY</span><span class=\"p\">(</span><span class=\"n\">base</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">index</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"c1\">// current: REGISTER_ARRAY::read(io, base, index)</span>\n</code></pre></div>\n<p>the benefit is that it does not have the <code>Deref</code> issue, and IMO this is more consistent with plain of IO access.</p>\n<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span></p>",
+        "id": 571091200,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769795564
+    },
+    {
+        "content": "<p>Ok, I see you solved it with an indirection.</p>",
+        "id": 571091975,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769795794
+    },
+    {
+        "content": "<p>I.e. the <code>read_reg()</code> calls back into the register type to execute the actual I/O operation.</p>",
+        "id": 571092122,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769795827
+    },
+    {
+        "content": "<p>Which is the answer to my question \"How do we figure out the size, etc.\"</p>",
+        "id": 571092202,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769795852
+    },
+    {
+        "content": "<p>I think there's also some venue in making it slightly more generic and perhaps just use <code>io.read(REGISTER_REFERENCE)</code>.</p>",
+        "id": 571092685,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796008
+    },
+    {
+        "content": "<p>To me this looks nicer than I anticipated, especially that now the code isn't <em>that</em> different from a C code reading register with a <code>#define</code>-ed offset, but now we have type and bounds checking</p>",
+        "id": 571092914,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796064
+    },
+    {
+        "content": "<p>I think it's a good solution, but I don't think we gain much from it, do we? I.e. having the custom trait instead of <code>Deref</code> isn't more complicated.</p>",
+        "id": 571092918,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769796065
+    },
+    {
+        "content": "<p>I think this is more natural to read. It also does not require any additional <code>AsIo</code> trait impl. You can just use the register.</p>",
+        "id": 571093262,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796160
+    },
+    {
+        "content": "<p>With this properly cleaned up and implemented i think this will also be less LOC and easier to understand than the current macro</p>",
+        "id": 571093425,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796203
+    },
+    {
+        "content": "<p>(You can think the <code>RegisterRef</code> in my POC is just a description of a register offset + type)</p>",
+        "id": 571093537,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796229
+    },
+    {
+        "content": "<p>All actual read/write/update code would be fully generic and there's no need to codegen it for each register anymore.</p>",
+        "id": 571093691,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796269
+    },
+    {
+        "content": "<blockquote>\n<p>All actual read/write/update code would be fully generic and there's no need to codegen it for each register anymore.</p>\n</blockquote>\n<p>Yes, I do like this part.</p>\n<blockquote>\n<p>With this properly cleaned up and implemented i think this will also be less LOC and easier to understand than the current macro</p>\n<p>(You can think the <code>RegisterRef</code> in my POC is just a description of a register offset + type)</p>\n</blockquote>\n<p>I don't think I can agree with this, but I also won't object going forward with this approach, as it seems reasonable in general. But  I'd like to get rid of this icky \"_reg\" suffix. <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 571094489,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769796527
+    },
+    {
+        "content": "<p>Sure, we can remove that.</p>",
+        "id": 571094589,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796563
+    },
+    {
+        "content": "<p>Another reason I like this is that it rhymes with the field projection / field representating type work that <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span> and I work on. :)</p>",
+        "id": 571094760,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1769796617
+    }
+]

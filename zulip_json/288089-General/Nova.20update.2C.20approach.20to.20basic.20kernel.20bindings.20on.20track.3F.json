@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>(reposting this from DRM channel couple of days ago:)</p>\n<p>Hi everyone, rust newbie here.  We're now implementing some basic firmware-loading functionality within the Nova driver. If someone has spare cycles would be nice to sanity-check if my approach in creating and/or reusing essential wrappers for various kernel subsystems to have this feature working initially are on the right track (vmalloc allocator, elf headers, struct page,  scatterlist). Many thanks for the feedback!</p>\n<p>Code located here:<br>\n<a href=\"https://gitlab.freedesktop.org/abj/nova-drm/-/compare/3698fbbf...28d0cbd3\">https://gitlab.freedesktop.org/abj/nova-drm/-/compare/3698fbbf...28d0cbd3</a></p>",
+        "id": 434296170,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713509259
+    },
+    {
+        "content": "<p>There is already struct page wrapper on its way upstream: <a href=\"https://lore.kernel.org/all/20240418-alice-mm-v6-4-cb8f3e5d688f@google.com/\">https://lore.kernel.org/all/20240418-alice-mm-v6-4-cb8f3e5d688f@google.com/</a></p>",
+        "id": 434298880,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713510378
+    },
+    {
+        "content": "<p>I'm looking at <code>SGEntry</code> and <code>SGTable</code>. Are these intended to be fields of a struct?</p>",
+        "id": 434299858,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713510775
+    },
+    {
+        "content": "<p>Or temporary variables? Or are they really owned by C code that we just have a reference/pointer to?</p>",
+        "id": 434300134,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713510898
+    },
+    {
+        "content": "<p>It looks like <code>SGTable::alloc_table</code> is the real constructor, not the <code>new</code> function. Generally, the goal should be that safe code can't use your struct wrong, but it looks like bad things will happen if you try to use the <code>SGTable</code> before you call <code>alloc</code>.  So you probably want to use pin-init to have a constructor for <code>SGTable</code> where you call <code>sg_alloc_table</code> inside the constructor.</p>",
+        "id": 434300614,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713511101
+    },
+    {
+        "content": "<p>Such a constructor would probably look something along these lines:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">use</span><span class=\"w\"> </span><span class=\"k\">crate</span>::<span class=\"n\">alloc</span>::<span class=\"n\">Flags</span><span class=\"p\">;</span>\n\n<span class=\"cp\">#[repr(transparent)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">SGTable</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">inner</span>: <span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span>::<span class=\"n\">sg_table</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">SGTable</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">new</span><span class=\"p\">(</span><span class=\"n\">nents</span>: <span class=\"kt\">u32</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">flags</span>: <span class=\"nc\">Flags</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">PinInit</span><span class=\"o\">&lt;</span><span class=\"bp\">Self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Error</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">try_pin_init</span><span class=\"o\">!</span><span class=\"p\">(</span><span class=\"n\">SGTable</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">inner</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"n\">Opaque</span>::<span class=\"n\">try_ffi_init</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">slot</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"c1\">// SAFETY: `slot` is a valid pointer that can hold an</span>\n<span class=\"w\">                </span><span class=\"c1\">// `sg_table`. If this call returns an error, we do not use the</span>\n<span class=\"w\">                </span><span class=\"c1\">// `slot` anymore.</span>\n<span class=\"w\">                </span><span class=\"c1\">//</span>\n<span class=\"w\">                </span><span class=\"c1\">// If it returns success, then since this type is pinned, `slot`</span>\n<span class=\"w\">                </span><span class=\"c1\">// will hold an `sg_table` until the destructor of `SGTable`</span>\n<span class=\"w\">                </span><span class=\"c1\">// runs, at which point we destroy the sg table before the</span>\n<span class=\"w\">                </span><span class=\"c1\">// address becomes invalid.</span>\n<span class=\"w\">                </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">ret</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">bindings</span>::<span class=\"n\">sg_alloc_table</span><span class=\"p\">(</span><span class=\"n\">slot</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">nents</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">flags</span><span class=\"p\">.</span><span class=\"n\">as_raw</span><span class=\"p\">())</span>\n<span class=\"w\">                </span><span class=\"p\">};</span>\n\n<span class=\"w\">                </span><span class=\"n\">to_result</span><span class=\"p\">(</span><span class=\"n\">ret</span><span class=\"p\">)</span>\n<span class=\"w\">            </span><span class=\"p\">})</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Some notes:</p>\n<ul>\n<li>The <code>Flags</code> parameter is from <a href=\"https://lore.kernel.org/rust-for-linux/20240328013603.206764-1-wedsonaf@gmail.com/\">the recent Allocation API patchset</a>, which is now in rust-next and will be merged for the next kernel version.</li>\n<li>The safety comment should explain why the unsafe block is okay. C doesn't explicitly document what the method requires, but I reasoned that it's okay as long as:<ul>\n<li>The pointer is okay for writing an sg table to.</li>\n<li>If <code>sg_alloc_table</code> fails, then we do not need to clean it up.</li>\n<li>If <code>sg_table_alloc</code> succeeds, then we must ensure that we call <code>sg_free_table</code> before the address is freed or otherwise reused. Pinning guarantees that the destructor runs before the address is freed or reused.</li>\n</ul>\n</li>\n<li><code>to_result</code> is a convenience method in the <code>error</code> module for converting an integer to an error.</li>\n<li>It looks like <code>Opaque::try_ffi_init</code> doesn't exist yet. I guess nobody has used <code>Opaque</code> with a type that has a fallible constructor yet. You will need to add it, I'm happy to show you in the right direction there as well.</li>\n</ul>",
+        "id": 434303352,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713512121
+    },
+    {
+        "content": "<p>I'm looking at the documentation for <code>dma_map_sgtable</code> and it seems to talk about moving ownership of the sg table in and out of the \"cpu domain\". Do you have any more info on this? Can the same sg table only be mapped with one device at the time?</p>",
+        "id": 434304118,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713512416
+    },
+    {
+        "content": "<p>As a more general note, I would try to get the raw pointers eliminated in argument-to-safe-function position. And unsafe blocks generally need safety comments that explain why they are okay.</p>",
+        "id": 434305308,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713512759
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434298880\">said</a>:</p>\n<blockquote>\n<p>There is already struct page wrapper on its way upstream: <a href=\"https://lore.kernel.org/all/20240418-alice-mm-v6-4-cb8f3e5d688f@google.com/\">https://lore.kernel.org/all/20240418-alice-mm-v6-4-cb8f3e5d688f@google.com/</a></p>\n</blockquote>\n<p>thanks! Wasn't aware of this but I can already reuse this</p>",
+        "id": 434316942,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713516676
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434304118\">said</a>:</p>\n<blockquote>\n<p>I'm looking at the documentation for <code>dma_map_sgtable</code> and it seems to talk about moving ownership of the sg table in and out of the \"cpu domain\". Do you have any more info on this? Can the same sg table only be mapped with one device at the time?</p>\n</blockquote>\n<p>yes ownership does get moved to the  struct device. Must have overlooked this but this dma mapping function should probably not belong here (there is an implementation on the trait RawDevice)</p>",
+        "id": 434317897,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713517043
+    },
+    {
+        "content": "<p>Could you tell me a bit more about how <code>SGTable</code> is expected to be stored? Is it a local variable in a function? A field of a long-lived struct? In its own allocation?</p>",
+        "id": 434318695,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713517318
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434318695\">said</a>:</p>\n<blockquote>\n<p>Could you tell me a bit more about how <code>SGTable</code> is expected to be stored? Is it a local variable in a function? A field of a long-lived struct? In its own allocation?</p>\n</blockquote>\n<p>Had to double-check this. But yes this is supposed to be a long-lived object that exists for the lifetime of the driver at least.</p>",
+        "id": 434688874,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713774922
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434304118\">said</a>:</p>\n<blockquote>\n<p>I'm looking at the documentation for <code>dma_map_sgtable</code> and it seems to talk about moving ownership of the sg table in and out of the \"cpu domain\". Do you have any more info on this? Can the same sg table only be mapped with one device at the time?</p>\n</blockquote>\n<p>update: got confused with the terminology here.  ownership here in the sense that device domain \"owns\" the sgtable for r/w access when it is mapped, so the cpu shouldn't be touching it. cpu access is restored after unmapping. However actual resources allocated by sg_alloc_table still needs to be freed sg_free_table.</p>",
+        "id": 434696814,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713777159
+    },
+    {
+        "content": "<p>Okay, makes sense.</p>",
+        "id": 434697007,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713777223
+    },
+    {
+        "content": "<p>And I guess it must be unmapped before <code>sg_free_table</code> as well?</p>",
+        "id": 434697165,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713777261
+    },
+    {
+        "content": "<p>Can the same sg table be part of more than one mapping, or will dma_map and dma_unmap calls always \"alternate\"?</p>",
+        "id": 434697361,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713777319
+    },
+    {
+        "content": "<p>If you call dma_map on something that is already mapped, does it just detect that and return an error, or is it important that the driver does not make such calls?</p>",
+        "id": 434697456,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713777345
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434697165\">said</a>:</p>\n<blockquote>\n<p>And I guess it must be unmapped before <code>sg_free_table</code> as well?</p>\n</blockquote>\n<p>yes</p>",
+        "id": 435060971,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713903115
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Nova.20update.2C.20approach.20to.20basic.20kernel.20bindings.20on.20track.3F/near/434697361\">said</a>:</p>\n<blockquote>\n<p>Can the same sg table be part of more than one mapping, or will dma_map and dma_unmap calls always \"alternate\"?</p>\n</blockquote>\n<p>afaic, sg mappings has 1:1 relationship with the device. ie, cannot be mapped again if it has been mapped</p>",
+        "id": 435061079,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713903149
+    },
+    {
+        "content": "<p>How long do mappings \"last\"? Are they always confined to a function call, or longer lasting than that?</p>",
+        "id": 435062957,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713903929
+    },
+    {
+        "content": "<p>The mappings exist longer than the scope of the function that called it until the sgtable is unmapped at some point, if that's what you mean.</p>\n<p>Regarding the design of this api, would it be better to add the mapping  as a method within RawDevice trait?  Usage would then look something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">Gsp</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"k\">fn</span> <span class=\"nf\">load</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">     </span><span class=\"o\">..</span><span class=\"p\">.</span>\n<span class=\"w\">     </span><span class=\"n\">pci_dev</span><span class=\"p\">.</span><span class=\"n\">dma_map</span><span class=\"p\">(</span><span class=\"n\">sg_table</span><span class=\"p\">);</span>\n<span class=\"w\">   </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">drop</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">Gsp</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">   </span><span class=\"k\">fn</span> <span class=\"nf\">drop</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">pci_dev</span><span class=\"p\">.</span><span class=\"n\">dma_unmap</span><span class=\"p\">(</span><span class=\"n\">sg_table</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n<span class=\"o\">..</span>\n<span class=\"o\">..</span>\n</code></pre></div>\n<p>Or just stick to the current approach? To me it doesn't seem to make a difference though?</p>",
+        "id": 435177380,
+        "sender_full_name": "Abdiel Janulgue",
+        "timestamp": 1713961456
+    },
+    {
+        "content": "<p>It is awkward that <code>sg_table</code> is both long-lived and pinned for this. Typically, the way you model this kind of thing is that you have two types (e.g., <code>UnmappedSgTable</code> and <code>MappedSgTable</code>), and whenever you call <code>dev_map</code> or <code>dev_unmap</code>, then this takes a table of one type and returns one of the other. But if the table is a pinned field of a long-lived struct, then this design does not work, because it requires that you can \"take\" the table out of the struct, and put it back afterwards once you have the other type.</p>",
+        "id": 435178907,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713961984
+    },
+    {
+        "content": "<p>One thing you can do is to have the sg table in its own allocation and then the two types can carry around owned pointers to it. But this prevents you from storing the sg table inline in another struct.</p>",
+        "id": 435179324,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713962143
+    },
+    {
+        "content": "<p>Another possibility is that <code>dma_map</code> and <code>dma_unmap</code> are unsafe functions and require the caller to not mess it up. Then you could have a safe wrapper on top of it. For example, store a boolean next to it keeping track of whether it is mapped, and use the boolean to prevent incorrect calls (and use it in the destructor too to unmap first before cleanup).</p>",
+        "id": 435179572,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713962215
+    },
+    {
+        "content": "<p>How do most drivers keep track of whether the sg table is mapped?</p>",
+        "id": 435179604,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1713962230
+    }
+]

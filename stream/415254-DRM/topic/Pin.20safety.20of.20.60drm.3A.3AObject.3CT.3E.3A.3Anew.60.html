@@ -1,0 +1,155 @@
+<html>
+<head><meta charset="utf-8"><title>Pin safety of `drm::Object&lt;T&gt;::new` · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html">Pin safety of `drm::Object&lt;T&gt;::new`</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="565380198"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565380198" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565380198">(Dec 25 2025 at 16:16)</a>:</h4>
+<p>Hi, I have a question about the following function : </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">   </span><span class="sd">/// Create a new GEM object.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">dev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">drm</span><span class="p">::</span><span class="n">Device</span><span class="o">&lt;</span><span class="n">T</span><span class="p">::</span><span class="n">Driver</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ARef</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">obj</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span>
+<span class="w">            </span><span class="n">try_pin_init</span><span class="o">!</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">obj</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">bindings</span><span class="p">::</span><span class="n">drm_gem_object</span><span class="p">::</span><span class="n">default</span><span class="p">()),</span>
+<span class="w">                </span><span class="n">data</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">T</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">dev</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">),</span>
+<span class="w">            </span><span class="p">}),</span>
+<span class="w">            </span><span class="n">GFP_KERNEL</span><span class="p">,</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: `obj.as_raw()` is guaranteed to be valid by the initialization above.</span>
+<span class="w">        </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">obj</span><span class="p">.</span><span class="n">as_raw</span><span class="p">()).</span><span class="n">funcs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">Self</span><span class="p">::</span><span class="n">OBJECT_FUNCS</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: The arguments are all valid per the type invariants.</span>
+<span class="w">        </span><span class="n">to_result</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">drm_gem_object_init</span><span class="p">(</span><span class="n">dev</span><span class="p">.</span><span class="n">as_raw</span><span class="p">(),</span><span class="w"> </span><span class="n">obj</span><span class="p">.</span><span class="n">obj</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: We never move out of `Self`.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">into_raw</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Pin</span><span class="p">::</span><span class="n">into_inner_unchecked</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: `ptr` comes from `KBox::into_raw` and hence can't be NULL.</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">NonNull</span><span class="p">::</span><span class="n">new_unchecked</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// SAFETY: We take over the initial reference count from `drm_gem_object_init()`.</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ARef</span><span class="p">::</span><span class="n">from_raw</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>How can we guarantee that we will never move out of Self ? Is this a property of ARef&lt;T&gt; ? I feel that we are losing the fact that Self was pinned since its init when ARef&lt;Self&gt; is returned</p>
+
+
+
+<a name="565380272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565380272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565380272">(Dec 25 2025 at 16:18)</a>:</h4>
+<p>ARef is pinned</p>
+
+
+
+<a name="565380592"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565380592" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565380592">(Dec 25 2025 at 16:27)</a>:</h4>
+<p>Right thanks !</p>
+<p>Maybe adding that ARef provide the pinning guarentee in the safety comment of <code>Pin::into_inner_unchecked</code> would make sense then.</p>
+
+
+
+<a name="565380659"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565380659" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565380659">(Dec 25 2025 at 16:30)</a>:</h4>
+<p>Or maybe we can add a method to convert from a<code>Pin&lt;KBox&lt;T&gt;&gt; where T: AlwaysRefCounted</code> to <code>ARef&lt;T&gt;</code> because this is ultimately what the 3 last unsafe lines does</p>
+
+
+
+<a name="565380906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565380906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565380906">(Dec 25 2025 at 16:37)</a>:</h4>
+<p>But I guess this can not be easily generalizedbecause of the callback needed to convert back to a <code>KBox</code> when putting the last reference</p>
+
+
+
+<a name="565382748"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382748" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382748">(Dec 25 2025 at 17:23)</a>:</h4>
+<p>having a safe <code>Pin&lt;KBox&lt;T&gt;&gt;</code> to <code>ARef&lt;T&gt;</code> conversion function sounds like a good idea</p>
+
+
+
+<a name="565382816"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382816" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382816">(Dec 25 2025 at 17:24)</a>:</h4>
+<p>though we'd need to ensure that the refcount already is exactly 1 at that point, which in this case is done by <code>drm_gem_object_init</code>, so we'd still need to make the function unsafe</p>
+
+
+
+<a name="565382834"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382834" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382834">(Dec 25 2025 at 17:24)</a>:</h4>
+<p>It cannot possibly be a safe conversion.</p>
+
+
+
+<a name="565382868"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382868" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382868">(Dec 25 2025 at 17:25)</a>:</h4>
+<p>Well, having a <code>KBox&lt;T&gt;</code> to an <code>AlwaysRefcounted</code> isn't sound to begin with. Such values cannot escape into arbitrary user code.</p>
+
+
+
+<a name="565382891"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382891" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382891">(Dec 25 2025 at 17:26)</a>:</h4>
+<p>did you mean "must not" instead of "cannot"?</p>
+
+
+
+<a name="565382962"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565382962" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565382962">(Dec 25 2025 at 17:28)</a>:</h4>
+<p>I suppose</p>
+
+
+
+<a name="565383003"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383003" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383003">(Dec 25 2025 at 17:29)</a>:</h4>
+<p>Another problem is the handling of the deallocation when the refcount reaches 0. In the case of <code>drm_gem_object</code> there is a callback function to let the rust code convert the last reference back to a <code>KBox</code> so it can be properly dropped. I don't know if this behavior can be generalized in a nice way</p>
+
+
+
+<a name="565383048"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383048" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383048">(Dec 25 2025 at 17:30)</a>:</h4>
+<p>Fundamentally, the goal of <code>AlwaysRefcounted</code> is to handle the long list of special cases that can't be generalized in a nice way.</p>
+
+
+
+<a name="565383119"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383119" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383119">(Dec 25 2025 at 17:32)</a>:</h4>
+<p>Of having such a <code>KBox</code> isn't sound, shouldn't <code>ARef</code> provide the way to perform the first allocation ?</p>
+
+
+
+<a name="565383451"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383451" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383451">(Dec 25 2025 at 17:41)</a>:</h4>
+<p>Why? What the code does is perfectly fine. The KBox isn't part of the public API of <code>drm::Object</code>.</p>
+
+
+
+<a name="565383461"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383461" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383461">(Dec 25 2025 at 17:41)</a>:</h4>
+<p>Normally, the first allocation is carried out by C code.</p>
+
+
+
+<a name="565383468"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565383468" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565383468">(Dec 25 2025 at 17:41)</a>:</h4>
+<p>Using a KBox here is a bit of a special case.</p>
+
+
+
+<a name="565385604"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565385604" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ewan Chorynski <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565385604">(Dec 25 2025 at 18:33)</a>:</h4>
+<p>To conclude on this, I think the safety comment when unwrapping from <code>Pin</code> can be improved. I can submit a patch on this unless the code is expected to change soon with another patch set if you think it is relevant</p>
+
+
+
+<a name="565385840"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Pin%20safety%20of%20%60drm%3A%3AObject%3CT%3E%3A%3Anew%60/near/565385840" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Pin.20safety.20of.20.60drm.3A.3AObject.3CT.3E.3A.3Anew.60.html#565385840">(Dec 25 2025 at 18:41)</a>:</h4>
+<p>I think that makes sense; feel free.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

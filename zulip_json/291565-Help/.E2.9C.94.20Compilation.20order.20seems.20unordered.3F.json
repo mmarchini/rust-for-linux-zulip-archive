@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Context: I'm trying to apply tag-std to unsafe code in Rust for Linux. Tag-std is a safety property checker, currently as a study for Rust's stdlib. Also see some links and backgrounds in <a href=\"https://github.com/Artisan-Lab/tag-std/issues/3\">#3</a>.</p>\n<p>I'm writting a rustc and rustdoc wrapper to include <code>libsafety_macro.so</code> when compiling rfl code. </p>\n<p>But sometimes I got rust_minimal compiled in the first place, before any <code>linux/rust/</code> code is compiled:<br>\n<a href=\"https://github.com/os-checker/tag-std/issues/5\">https://github.com/os-checker/tag-std/issues/5</a><br>\nIt leads to compilation failure.</p>\n<p>While sometimes I got the right order to compile, and everything just compiles.</p>\n<p><strong>So my question is why the order is out of control sometimes, and how to fix this.</strong></p>\n<p>Here's the make command:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code><span class=\"nv\">BUILD_TARGETS</span><span class=\"o\">=</span><span class=\"s2\">\"</span>\n<span class=\"s2\">    samples/rust/rust_minimal.o</span>\n<span class=\"s2\">\"</span>\n\nmake<span class=\"w\"> </span>-C<span class=\"w\"> </span>linux<span class=\"w\"> </span><span class=\"nv\">LLVM</span><span class=\"o\">=</span><span class=\"m\">1</span><span class=\"w\"> </span>-j<span class=\"k\">$(($(</span>nproc<span class=\"k\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"k\">))</span><span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span><span class=\"nv\">RUSTC</span><span class=\"o\">=</span><span class=\"k\">$(</span>which<span class=\"w\"> </span>safety-tool-rfl<span class=\"k\">)</span><span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span><span class=\"nv\">RUSTDOC</span><span class=\"o\">=</span><span class=\"k\">$(</span>which<span class=\"w\"> </span>safety-tool-rfl-rustdoc<span class=\"k\">)</span><span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span><span class=\"nv\">$BUILD_TARGETS</span>\n</code></pre></div>\n<p>full check script is <a href=\"https://github.com/os-checker/tag-std/blob/100652dd662aa9dfb2dee3efd66695a6bf1bcd08/.github/rust-for-linux/check.sh#L63\">here</a>.</p>",
+        "id": 526723105,
+        "sender_full_name": "Vague",
+        "timestamp": 1751434711
+    },
+    {
+        "content": "<p>I've seen that happen if you compile a sample that is disabled in the config. Make sure that the sample is enabled.</p>",
+        "id": 526723647,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1751435082
+    },
+    {
+        "content": "<p>I copied the config from rfl ci script in Rust lang repo, and <code>CONFIG_SAMPLE_RUST_MINIMAL</code> is set to <code>m</code> there.</p>\n<p>Now I set the value to <code>y</code>, but rust_minimal is still compiled first.</p>\n<p>Currently build config:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code><span class=\"c1\"># Prepare Rust for Linux config</span>\ncat<span class=\"w\"> </span><span class=\"s\">&lt;&lt;EOF &gt;linux/kernel/configs/rfl-for-rust-ci.config</span>\n<span class=\"s\"># CONFIG_WERROR is not set</span>\n\n<span class=\"s\">CONFIG_RUST=y</span>\n\n<span class=\"s\">CONFIG_SAMPLES=y</span>\n<span class=\"s\">CONFIG_SAMPLES_RUST=y</span>\n\n<span class=\"s\">CONFIG_SAMPLE_RUST_MINIMAL=y</span>\n<span class=\"s\">CONFIG_SAMPLE_RUST_PRINT=y</span>\n\n<span class=\"s\">CONFIG_RUST_PHYLIB_ABSTRACTIONS=y</span>\n<span class=\"s\">CONFIG_AX88796B_PHY=y</span>\n<span class=\"s\">CONFIG_AX88796B_RUST_PHY=y</span>\n\n<span class=\"s\">CONFIG_KUNIT=y</span>\n<span class=\"s\">CONFIG_RUST_KERNEL_DOCTESTS=y</span>\n<span class=\"s\">EOF</span>\n\n<span class=\"c1\"># Merge linux config</span>\nmake<span class=\"w\"> </span>-C<span class=\"w\"> </span>linux<span class=\"w\"> </span><span class=\"nv\">LLVM</span><span class=\"o\">=</span><span class=\"m\">1</span><span class=\"w\"> </span>-j<span class=\"k\">$(($(</span>nproc<span class=\"k\">)</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"k\">))</span><span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span>rustavailable<span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span>defconfig<span class=\"w\"> </span><span class=\"se\">\\</span>\n<span class=\"w\">  </span>rfl-for-rust-ci.config\n</code></pre></div>",
+        "id": 526724303,
+        "sender_full_name": "Vague",
+        "timestamp": 1751435603
+    },
+    {
+        "content": "<p>Targets such as rust_minimal.o in <code>samples/rust/Makefile</code>are not tied to target prerequisites in rust folder. <br>\nSo it means the order is not guaranteed at all?</p>\n<p>Maybe <code>rust/kernel.o</code> should be built first in one make command, and these samples are then built in another command.</p>",
+        "id": 526727111,
+        "sender_full_name": "Vague",
+        "timestamp": 1751437207
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"931980\">Vague</span> <a href=\"#narrow/channel/291565-Help/topic/Compilation.20order.20seems.20unordered.3F/near/526727111\">said</a>:</p>\n<blockquote>\n<p>Targets such as rust_minimal.o in <code>samples/rust/Makefile</code>are not tied to target prerequisites in rust folder.<br>\nSo it means the order is not guaranteed at all?</p>\n</blockquote>\n<p>There is a dependency. If you touch anything in the kernel crate and rebuild one of the samples, the kernel crate will be rebuilt.</p>",
+        "id": 526738454,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1751442066
+    },
+    {
+        "content": "<p>Not sure where that dependency is added though.</p>",
+        "id": 526738536,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1751442098
+    },
+    {
+        "content": "<p>I have this in the generated file <code>.rust_minimal.o.cmd</code>:</p>\n<div class=\"codehilite\" data-code-language=\"Makefile\"><pre><span></span><code><span class=\"nf\">deps_samples/rust/rust_minimal.o </span><span class=\"o\">:</span>= \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libcore</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libcompiler_builtins</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libkernel</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libffi</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libpin_init</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libmacros</span>.<span class=\"n\">so</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libpin_init_internal</span>.<span class=\"n\">so</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libbuild_error</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libbindings</span>.<span class=\"n\">rmeta</span> \\\n  /<span class=\"n\">home</span>/<span class=\"n\">aeh</span>/<span class=\"n\">src</span>/<span class=\"n\">linux</span>-<span class=\"n\">rust</span>/<span class=\"n\">linux</span>-<span class=\"n\">next</span>-<span class=\"n\">build</span>-<span class=\"n\">x</span>86<span class=\"n\">_</span>64-1.78.0/<span class=\"n\">rust</span>/<span class=\"n\">libuapi</span>.<span class=\"n\">rmeta</span> \\\n</code></pre></div>",
+        "id": 526739200,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1751442356
+    },
+    {
+        "content": "<p>Yes, building a target does work, there is no need for a <code>make</code> first.</p>\n<p><span class=\"user-mention\" data-user-id=\"931980\">@Vague</span> Could you please confirm it works for you when you don't have any wrapper or custom tooling?</p>\n<p>I suspect your <code>RUSTC</code> etc. are not satisfying our <code>rustavailable</code> logic and thus Rust gets disabled automatically (this is confusing, but this is how we were requested to set it up originally -- we may change it eventually).</p>",
+        "id": 526740486,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751442887
+    },
+    {
+        "content": "<p>If that works, then check that you actually succeed on <code>make ...... rustavailable</code> adding your custom <code>RUSTC</code> (and please note that you should add it everywhere, not just in your last <code>make</code>).</p>\n<p>That will also give you an explanation of why it may not be satisfied, which will probably help.</p>",
+        "id": 526741245,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751443163
+    },
+    {
+        "content": "<p>e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Bash Session\"><pre><span></span><code><span class=\"gp\">$ </span>make<span class=\"w\"> </span><span class=\"nv\">LLVM</span><span class=\"o\">=</span><span class=\"m\">1</span><span class=\"w\"> </span><span class=\"nv\">RUSTC</span><span class=\"o\">=</span><span class=\"nb\">test</span><span class=\"w\"> </span>rustavailable\n<span class=\"go\">***</span>\n<span class=\"go\">*** Running 'test' to check the Rust compiler version did not return</span>\n<span class=\"go\">*** an expected output. See output and docs below for details:</span>\n<span class=\"go\">***</span>\n</code></pre></div>",
+        "id": 526741817,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751443324
+    },
+    {
+        "content": "<p>If your wrapper behaves similar to a normal <code>rustc</code>, things should work. Otherwise, it may need tweaks either on your side or the kernel side.</p>",
+        "id": 526742105,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751443397
+    },
+    {
+        "content": "<p>I hope that helps!</p>",
+        "id": 526742149,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751443411
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/291565-Help/topic/Compilation.20order.20seems.20unordered.3F/near/526739200\">said</a>:</p>\n<blockquote>\n<p>I have this in the generated file <code>.rust_minimal.o.cmd</code>:</p>\n</blockquote>\n<p>Thx for telling me that file. I just see it! </p>\n<p><span class=\"user-mention silent\" data-user-id=\"411477\">Miguel Ojeda</span> <a href=\"#narrow/channel/291565-Help/topic/Compilation.20order.20seems.20unordered.3F/near/526740486\">said</a>:</p>\n<blockquote>\n<p>I suspect your <code>RUSTC</code> etc. are not satisfying our <code>rustavailable</code> logic and thus Rust gets disabled automatically</p>\n</blockquote>\n<p>Yeah! That's the problem. Appreciate for the saver <code>rustavailable</code>.<br>\nI've tweaked the RUSTC wrappers by supporting <code>--version</code>and variants. But it's my mistake in my script not to call rustavailable on wrappers, otherwise I should noticed a bug in wrappers.</p>\n<p>Anyways, glad to know  <code>rustavailable</code> and the output without right \"RUSTC\". <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 526760691,
+        "sender_full_name": "Vague",
+        "timestamp": 1751449327
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"931980\">Vague</span> has marked this topic as resolved.</p>",
+        "id": 526761052,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1751449446
+    },
+    {
+        "content": "<p>Glad it helped!</p>",
+        "id": 526778790,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1751455373
+    }
+]

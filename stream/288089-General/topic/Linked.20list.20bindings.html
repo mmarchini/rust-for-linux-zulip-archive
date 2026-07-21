@@ -1,0 +1,525 @@
+<html>
+<head><meta charset="utf-8"><title>Linked list bindings · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html">Linked list bindings</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="364561185"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/364561185" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#364561185">(Jun 08 2023 at 13:24)</a>:</h4>
+<p>I've been thinking about how to write linked list bindings. The current ones need updating because there are some remaining soundness issues and it doesn't use pin-init. Here are my thoughts:</p>
+<p>The links field of a struct has these components:</p>
+<ol>
+<li>Prev/next pointers.</li>
+<li>Some way to synchronize concurrent insertions.</li>
+<li>Some way to identify the type of element and perform a container_of.</li>
+</ol>
+<p>In Binder, I have these use-cases:</p>
+<ol>
+<li>Boxed values that can be pushed to just one linked list. We need mutable access.</li>
+<li>Reference counted values that are pushed to a linked list where the concrete type is known. The type also needs to be enqueued to a workqueue at the same time.</li>
+<li>A trait implemented by many types where the linked list can hold any implementer of the type.</li>
+<li>A list like the one in use-case 3, except that it holds only one specific concrete type. Ideally, we want to use the same link pointers as use-case 3.</li>
+</ol>
+<p>Based on the above use-cases and inspired by the workqueue, I designed this API that supports all of them:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">LinkedList</span><span class="o">&lt;</span><span class="n">T</span>: <span class="nc">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="cp">#[repr(C)]</span>
+<span class="k">struct</span> <span class="nc">LinkPtrs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">next</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">,</span>
+<span class="w">    </span><span class="n">prev</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">trait</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// If the first argument is none, then inserting failed. In either case,</span>
+<span class="w">    </span><span class="c1">// pushing returns the push result.</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">try_into_raw</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="p">(</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">NonNull</span><span class="o">&lt;</span><span class="n">LinkPtrs</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="bp">Self</span>::<span class="n">PushResult</span><span class="p">);</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">from_raw</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">access_raw</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span>::<span class="n">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Mutable cursors always make sense. Even if we can't mutate the item, we</span>
+<span class="w">    </span><span class="c1">// can still remove it from the list.</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">access_with_cursor</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span>::<span class="n">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="sd">/// Implemented for types where a mutable iterator makes sense.</span>
+<span class="k">trait</span><span class="w"> </span><span class="n">LLIterMutRef</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span>: <span class="nc">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">IterMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">access_with_iter</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">Self</span>::<span class="n">IterMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>For the first use-case, we can have this helper:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">LLBox</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span>: <span class="nb">Box</span><span class="o">&lt;</span><span class="n">LLBoxInner</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span> <span class="nc">LLBoxInner</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">     </span><span class="n">links</span>: <span class="nc">LinkPtrs</span><span class="p">,</span>
+<span class="w">     </span><span class="n">value</span>: <span class="nc">T</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">LLBox</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">IterMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">LLBox</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">IterMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>For the reference counted use-cases, we can have the following API:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">trait</span><span class="w"> </span><span class="n">LLItem</span><span class="o">&lt;</span><span class="n">Ptr</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">ContainerOfStrategy</span>: <span class="nc">ContainerOfStrategy</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">struct</span> <span class="nc">Links</span><span class="o">&lt;</span><span class="n">S</span><span class="p">,</span><span class="w"> </span><span class="n">D</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">links</span>: <span class="nc">LinkPtrs</span><span class="p">,</span>
+<span class="w">    </span><span class="sd">/// Used to synchronize insertions to several lists in parallel.</span>
+<span class="w">    </span><span class="n">sync</span>: <span class="nc">S</span><span class="p">,</span>
+<span class="w">    </span><span class="sd">/// Extra data used for the container_of operation.</span>
+<span class="w">    </span><span class="n">data</span>: <span class="nc">D</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">trait</span><span class="w"> </span><span class="n">HasLinks</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">OFFSET</span>: <span class="kt">usize</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">Data</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nb">Sync</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// Or use named wrappers around AtomicBool and ().</span>
+<span class="k">type</span> <span class="nc">ArcLinks</span><span class="o">&lt;</span><span class="n">D</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(),</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span> <span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Links</span><span class="o">&lt;</span><span class="n">AtomicBool</span><span class="p">,</span><span class="w"> </span><span class="n">D</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="k">type</span> <span class="nc">BoxLinks</span><span class="o">&lt;</span><span class="n">D</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(),</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span> <span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Links</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">D</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="p">,</span><span class="w"> </span><span class="n">T</span>: <span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">LLItem</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="nb">Sync</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AtomicBool</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArcBorrow</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArcBorrow</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// Giving out mutable access to the contents while it is in the list is</span>
+<span class="c1">// problematic. You could overwrite the links pointers.</span>
+<span class="c1">//</span>
+<span class="c1">// Even if we give the links pointers a destructor, its still problematic.</span>
+<span class="c1">// Sure, we can remove the item from the list, but this leaks the allocation.</span>
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="p">,</span><span class="w"> </span><span class="n">T</span>: <span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">LLItem</span><span class="o">&lt;</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="p">,</span><span class="w"> </span><span class="n">T</span>: <span class="o">?</span><span class="nb">Sized</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LLItemPtr</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">LLItem</span><span class="o">&lt;</span><span class="n">Pin</span><span class="o">&lt;</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">PushResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">InnerRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">CursorMutRef</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">trait</span><span class="w"> </span><span class="n">ContainerOfStrategy</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">container_of</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">LinkPtrs</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">enum</span> <span class="nc">SizedTypeCOS</span><span class="w"> </span><span class="p">{}</span>
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="k">const</span>: <span class="nc">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ContainerOfStrategy</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SizedTypeCOS</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sized</span><span class="p">,</span>
+<span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="k">enum</span> <span class="nc">MetadataCOS</span><span class="w"> </span><span class="p">{}</span>
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="k">const</span>: <span class="nc">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ContainerOfStrategy</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MetadataCOS</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="n">ID</span><span class="p">,</span><span class="w"> </span><span class="n">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Pointee</span><span class="o">&gt;</span>::<span class="n">Metadata</span><span class="o">&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="p">,</span>
+<span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// or without ptr_metadata feature</span>
+<span class="k">enum</span> <span class="nc">SelfPtrCOS</span><span class="w"> </span><span class="p">{}</span>
+<span class="k">impl</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="k">const</span>: <span class="nc">ID</span>: <span class="kt">u64</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ContainerOfStrategy</span><span class="o">&lt;</span><span class="n">T</span><span class="p">,</span><span class="w"> </span><span class="n">ID</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SelfPtrCOS</span>
+<span class="k">where</span>
+<span class="w">    </span><span class="n">T</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="n">ID</span><span class="p">,</span><span class="w"> </span><span class="n">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NonNull</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">?</span><span class="nb">Sized</span><span class="p">,</span>
+<span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>This solve each use-case:</p>
+<p><strong>Usecase 1.</strong> Using <code>LLBox</code> lets us do this. (We can't use a normal <code>Box</code> because it doesn't give mutable access.)</p>
+<p><strong>Usecase 2.</strong> We can do this like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">MyStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">links</span>: <span class="nc">ArcLinks</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">impl_has_links</span><span class="o">!</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">impl</span><span class="w"> </span><span class="n">HasLinks</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">type</span> <span class="nb">Sync</span> <span class="o">=</span><span class="w"> </span><span class="n">AtomicBool</span><span class="p">;</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">links</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">LLItem</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">ContainerOfStrategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SizedTypeCOS</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Usecase 3.</strong> We can do this like this:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">Transaction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">links</span>: <span class="nc">Links</span><span class="o">&lt;</span><span class="n">AtomicBool</span><span class="p">,</span><span class="w"> </span><span class="n">Meta</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">impl_has_links</span><span class="o">!</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">impl</span><span class="w"> </span><span class="n">HasLinks</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Transaction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">type</span> <span class="nb">Sync</span> <span class="o">=</span><span class="w"> </span><span class="n">AtomicBool</span><span class="p">;</span>
+<span class="w">        </span><span class="k">type</span> <span class="nc">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Meta</span><span class="p">;</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">links</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">type</span> <span class="nc">Meta</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">MyTrait</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Pointee</span><span class="o">&gt;</span>::<span class="n">Metadata</span><span class="p">;</span>
+<span class="c1">// or we could use NonNull&lt;Transaction&gt; as the extra data.</span>
+
+<span class="k">trait</span><span class="w"> </span><span class="n">MyTrait</span>: <span class="nc">HasLinks</span><span class="o">&lt;</span><span class="nb">Sync</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AtomicBool</span><span class="p">,</span><span class="w"> </span><span class="n">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Meta</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">LLItem</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">MyTrait</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="k">dyn</span><span class="w"> </span><span class="n">MyTrait</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">ContainerOfStrategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MetadataCOS</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Usecase 4.</strong></p>
+<p>We also add this impl:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">LLItem</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Transaction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// This doesn't care about the type of the extra data, so it's okay that it</span>
+<span class="w">    </span><span class="c1">// is `Meta`.</span>
+<span class="w">    </span><span class="k">type</span> <span class="nc">ContainerOfStrategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SizedTypeCOS</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Simpler alternatives:</strong></p>
+<p>We can also move further towards the existing linked list solution. With that solution, we always perform the atomic CAS when inserting into the list even when the items are unique. It also doesn't support use-case 4. </p>
+<p>Another alternative is to provide two completely separate linked list implementations. One of them only works with <code>LLBox</code> and the other only works with <code>Arc</code>. There are some advantages to this, e.g. we could let the user insert a UniqueArc into a linked list of Arcs to avoid the CAS on insert. The only disadvantages are code duplication and that we can't easily support new smart pointers. (Note that this is similar to the rbtree, where we currently only have what is analogous to the <code>LLBox</code>-only implementation.)</p>
+<p>Thoughts?</p>
+
+
+
+<a name="364734301"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/364734301" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#364734301">(Jun 09 2023 at 05:31)</a>:</h4>
+<p>First thought is spell out names of the types :) I’ll take a closer look next week.</p>
+
+
+
+<a name="366104151"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366104151" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366104151">(Jun 14 2023 at 09:09)</a>:</h4>
+<p>Not following the mutable cursor ref here. Can you explain that further?</p>
+
+
+
+<a name="366104490"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366104490" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366104490">(Jun 14 2023 at 09:10)</a>:</h4>
+<p>Basically, the mutable cursor will have a method that removes an item from the linked list. This is always possible, even if the item is an Arc and hence immutable.</p>
+
+
+
+<a name="366106888"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366106888" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366106888">(Jun 14 2023 at 09:19)</a>:</h4>
+<p>So would it insert the item again when the cursor moves to the next item? I assume a cursor would be something that moves across the list ?</p>
+
+
+
+<a name="366107199"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366107199" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366107199">(Jun 14 2023 at 09:20)</a>:</h4>
+<p>Could you provide usage examples?</p>
+
+
+
+<a name="366107425"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366107425" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366107425">(Jun 14 2023 at 09:21)</a>:</h4>
+<p>Also, maybe move the proposal to github or hackmd?</p>
+
+
+
+<a name="366108558"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366108558" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366108558">(Jun 14 2023 at 09:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="498029">Andreas Hindborg</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/366106888">said</a>:</p>
+<blockquote>
+<p>So would it insert the item again when the cursor moves to the next item? I assume a cursor would be something that moves across the list ?</p>
+</blockquote>
+<p>No, it would be like calling <code>pop</code> in the middle of the list. The item is removed for good, and the cursor moves to the next or prevoius item.</p>
+
+
+
+<a name="366108786"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366108786" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366108786">(Jun 14 2023 at 09:26)</a>:</h4>
+<p>For example, if you have a list of <code>Arc&lt;MyStruct&gt;</code> with each struct having an id, then you can remove the item with a given id by using a mutable cursor to move through the list to find the item with the right id, then remove it from the list.</p>
+
+
+
+<a name="366110081"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366110081" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366110081">(Jun 14 2023 at 09:31)</a>:</h4>
+<p>There's no race because it requires mutable access to the list itself, so there can only be one such cursor at any given time. (The struct could be accessed in parallel, but the links field cannot.)</p>
+
+
+
+<a name="366110468"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366110468" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366110468">(Jun 14 2023 at 09:32)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> for the first case, do you need the list to be doubly linked? or would it be sufficient for the cursor to be able to remove the current item without backtracking?</p>
+
+
+
+<a name="366110693"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366110693" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366110693">(Jun 14 2023 at 09:33)</a>:</h4>
+<p>I have assumed that all lists are doubly linked, and haven't really considered if I can get away with single links.</p>
+
+
+
+<a name="366111026"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366111026" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366111026">(Jun 14 2023 at 09:34)</a>:</h4>
+<p>I think if you do not want to walk the list backwards and only want to scan through the list, searching for a particular item that you want to remove, then a singly linked list would be much easier for the first case (and an argument to split the design)</p>
+
+
+
+<a name="366111738"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366111738" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366111738">(Jun 14 2023 at 09:36)</a>:</h4>
+<p>I also sometimes remove items from the middle of the list, which requires walking the list if singly linked.</p>
+
+
+
+<a name="366111836"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366111836" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366111836">(Jun 14 2023 at 09:36)</a>:</h4>
+<p>Like, given the <code>Arc&lt;MyStruct&gt;</code> and <code>LinkedList</code>, I call <code>remove</code></p>
+
+
+
+<a name="366111935"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366111935" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366111935">(Jun 14 2023 at 09:37)</a>:</h4>
+<p>I am just talking about the first case with <code>Box</code></p>
+
+
+
+<a name="366112099"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366112099" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366112099">(Jun 14 2023 at 09:37)</a>:</h4>
+<p>Right, there are definitely some cases where a singly linked list is enough.</p>
+
+
+
+<a name="366112232"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366112232" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366112232">(Jun 14 2023 at 09:38)</a>:</h4>
+<p>So it's true that we could split the design in that way too.</p>
+
+
+
+<a name="366112269"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366112269" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366112269">(Jun 14 2023 at 09:38)</a>:</h4>
+<p>Since we dont need unsafe code for such a list, I think we could just split that off</p>
+
+
+
+<a name="366112683"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366112683" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366112683">(Jun 14 2023 at 09:39)</a>:</h4>
+<p>Writing it safely is probably pretty annoying because you need a pointer to the current and previous element when searching for something to remove, but I agree. And even if that is done unsafely, it's still a minor amount of unsafe.</p>
+
+
+
+<a name="366112969"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366112969" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366112969">(Jun 14 2023 at 09:39)</a>:</h4>
+<p>You do not, you can simply just have a pointer to the previous element and then do a double deref although that might not perfom as well...</p>
+
+
+
+<a name="366113083"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366113083" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366113083">(Jun 14 2023 at 09:40)</a>:</h4>
+<p>anyways thats implementation details</p>
+
+
+
+<a name="366113202"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366113202" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ariel Miculas <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366113202">(Jun 14 2023 at 09:40)</a>:</h4>
+<p>is the cursor concept the same as described here? <a href="https://rust-unofficial.github.io/too-many-lists/sixth-cursors-intro.html">https://rust-unofficial.github.io/too-many-lists/sixth-cursors-intro.html</a></p>
+
+
+
+<a name="366114262"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/366114262" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#366114262">(Jun 14 2023 at 09:44)</a>:</h4>
+<p>the concept should be similar, but I havent read that document.</p>
+<p>a cursor is just an iterator that "remembers" its position and allows to perform list operation at that position.</p>
+
+
+
+<a name="392980201"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392980201" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392980201">(Sep 25 2023 at 11:18)</a>:</h4>
+<p>Currently I'm just using the old linked list bindings from the rust branch. However, my flamegraphs are showing that modifying the list is crazy slow compared to what C is doing. Any thoughts on how we should design our linked list bindings so that it optimizes well?</p>
+
+
+
+<a name="392980984"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392980984" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392980984">(Sep 25 2023 at 11:21)</a>:</h4>
+<p>IIUC you are using <code>raw_list.rs</code>, right? Because there we have an atomic bool that is used to ensure that the entry is inserted only in a single list</p>
+
+
+
+<a name="392981044"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392981044" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392981044">(Sep 25 2023 at 11:21)</a>:</h4>
+<p>Yes.</p>
+
+
+
+<a name="392981163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392981163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392981163">(Sep 25 2023 at 11:22)</a>:</h4>
+<p>how does the C side ensure that? is it just through convention and praying that it works?</p>
+
+
+
+<a name="392981269"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392981269" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392981269">(Sep 25 2023 at 11:22)</a>:</h4>
+<p>I think they just hold the process lock when touching the list.</p>
+
+
+
+<a name="392981695"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392981695" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392981695">(Sep 25 2023 at 11:24)</a>:</h4>
+<p>I see, do you have a link to your usage of the bindings?</p>
+
+
+
+<a name="392982208"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392982208" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392982208">(Sep 25 2023 at 11:27)</a>:</h4>
+<p>For example:<br>
+<a href="https://github.com/Darksonn/linux/blob/ddaabdf0951cb88d940dff61ef7d5f83b6122cc2/drivers/android/thread.rs#L297">https://github.com/Darksonn/linux/blob/ddaabdf0951cb88d940dff61ef7d5f83b6122cc2/drivers/android/thread.rs#L297</a></p>
+
+
+
+<a name="392982284"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/392982284" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#392982284">(Sep 25 2023 at 11:27)</a>:</h4>
+<p>or this one:<br>
+<a href="https://github.com/Darksonn/linux/blob/ddaabdf0951cb88d940dff61ef7d5f83b6122cc2/drivers/android/range_alloc.rs#L142">https://github.com/Darksonn/linux/blob/ddaabdf0951cb88d940dff61ef7d5f83b6122cc2/drivers/android/range_alloc.rs#L142</a></p>
+
+
+
+<a name="393047250"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/393047250" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#393047250">(Sep 25 2023 at 15:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/392981269">said</a>:</p>
+<blockquote>
+<p>I think they just hold the process lock when touching the list.</p>
+</blockquote>
+<p>Hmm.. haven't checked the code yet (it was a while ago), but I think the list locks don't protect the attempt of inserting one entry into two lists?</p>
+
+
+
+<a name="393814835"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/393814835" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#393814835">(Sep 28 2023 at 22:37)</a>:</h4>
+<p>I have taken a look and found several things:</p>
+<ol>
+<li>our current list implementation does not conform to miri, it gets the pointer provenance wrong and errors when inserting just two elements.</li>
+<li>for the range_alloc usage, I think it would be sufficient to have a more rusty version without intrusion, what do you think? Do we want two different lists in the kernel?</li>
+<li>for the other cases, I would have to take a closer look, maybe something similar to <code>LockedBy</code> can be reused there.</li>
+</ol>
+
+
+
+<a name="393814911"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/393814911" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#393814911">(Sep 28 2023 at 22:38)</a>:</h4>
+<p>regarding 2, I have implemented a rusty list, if you are interested, I can push it.</p>
+
+
+
+<a name="393970614"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/393970614" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#393970614">(Sep 29 2023 at 16:51)</a>:</h4>
+<p>Please do ;-) I think it makes sense to have a simple linked list if we don't need the interoperatiblity on the existing C code.</p>
+
+
+
+<a name="394090173"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090173" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090173">(Sep 30 2023 at 14:31)</a>:</h4>
+<p><span class="user-mention" data-user-id="519727">@Alice Ryhl</span> do you know if the codepath of adding an item to a list that already is in one gets triggered by your use case?</p>
+
+
+
+<a name="394090227"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090227" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090227">(Sep 30 2023 at 14:32)</a>:</h4>
+<p>Yes, there is one case where it can happen.</p>
+
+
+
+<a name="394090231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090231">(Sep 30 2023 at 14:32)</a>:</h4>
+<p>because if it does not, you could maybe try and see what happens if you remove the atomic bool</p>
+
+
+
+<a name="394090267"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090267" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090267">(Sep 30 2023 at 14:33)</a>:</h4>
+<p>I already tried replacing it with an <code>UnsafeCell&lt;bool&gt;</code>, which improves performance somewhat.</p>
+
+
+
+<a name="394090277"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090277" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090277">(Sep 30 2023 at 14:33)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/394090227">said</a>:</p>
+<blockquote>
+<p>Yes, there is one case where it can happen.</p>
+</blockquote>
+<p>oh I see, because aside from the atomic bool, I am not so sure what the perf issue source could be</p>
+
+
+
+<a name="394090678"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394090678" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394090678">(Sep 30 2023 at 14:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/394090227">said</a>:</p>
+<blockquote>
+<p>Yes, there is one case where it can happen.</p>
+</blockquote>
+<p>where exactly could it happen?</p>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/394090267">said</a>:</p>
+<blockquote>
+<p>I already tried replacing it with an <code>UnsafeCell&lt;bool&gt;</code>, which improves performance somewhat.</p>
+</blockquote>
+<p>that is interesting. as I said before, I think I have a solution for <code>range_alloc</code> that does not require any synchronization, since it only supports adding <code>Box</code>ed values, so if that is the main performance bottle neck then I could polish that and push it</p>
+
+
+
+<a name="394091904"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394091904" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394091904">(Sep 30 2023 at 15:01)</a>:</h4>
+<p>The main performance bottleneck is the <code>Arc&lt;dyn DeliverToRead&gt;</code> stuff. Another perf issues was the <code>get_links</code> call, whose fix had an even bigger perf improvement.</p>
+
+
+
+<a name="394091911"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394091911" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394091911">(Sep 30 2023 at 15:01)</a>:</h4>
+<p>Besides, the range allocator should probably be a rbtree and not a linked list at all.</p>
+
+
+
+<a name="394093868"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/394093868" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#394093868">(Sep 30 2023 at 15:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/Linked.20list.20bindings/near/394091904">said</a>:</p>
+<blockquote>
+<p>The main performance bottleneck is the <code>Arc&lt;dyn DeliverToRead&gt;</code> stuff. Another perf issues was the <code>get_links</code> call, whose fix had an even bigger perf improvement.</p>
+</blockquote>
+<p>I see, then I will take a look at that.</p>
+
+
+
+<a name="426137467"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Linked%20list%20bindings/near/426137467" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Linked.20list.20bindings.html#426137467">(Mar 12 2024 at 14:27)</a>:</h4>
+<p>Just a status update: I got around to splitting up the linked list into several patches. I was a bit surprised about how many patches I ended up with. Check it out at <a href="https://github.com/Darksonn/linux/commits/b4/linked-list/">https://github.com/Darksonn/linux/commits/b4/linked-list/</a></p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

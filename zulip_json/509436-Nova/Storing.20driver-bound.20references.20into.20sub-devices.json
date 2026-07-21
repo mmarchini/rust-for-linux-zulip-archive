@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>With the HRT series being merged, we now have the option of getting rid of a pattern we used in Nova since the beginning, namely the constant passing of a <code>&amp;Bar0</code> to every method that needs to perform I/O and, to a lesser extend, the passing of a bound <code>Device</code> to do things like allocating memory.</p>\n<p>Instead, we now can store references to these elements into each type that needs them, and access them from <code>self</code>, pretty much like what Nouveau does.</p>\n<p>The most obvious candidate is <code>Falcon</code>. If we do this, method invocations like</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">falcon</span><span class=\"p\">.</span><span class=\"n\">dma_load</span><span class=\"p\">(</span><span class=\"n\">dev</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">bar</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">fw</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>can be simplified into</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">falcon</span><span class=\"p\">.</span><span class=\"n\">dma_load</span><span class=\"p\">(</span><span class=\"n\">fw</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>This makes a difference in the code: converting falcon to use this removes more than 50 LoCs in the codebase. On the other hand, <code>Falcon</code> gains a lifetime parameter, meaning that <code>Falcon&lt;Gsp&gt;</code> is now referred to as <code>Falcon&lt;'_, Gsp&gt;</code>.</p>\n<p>To summarize:</p>\n<p>Pros:</p>\n<ul>\n<li>Less distracting arguments to methods,</li>\n<li>Overall reduction of code,</li>\n<li>That's probably how we would have done it since the beginning, had we had the<br>\n  option.</li>\n</ul>\n<p>Cons:</p>\n<ul>\n<li>\n<p>Every structure gains a lifetime, both in their declaration and when referred<br>\n  to.</p>\n</li>\n<li>\n<p>Structures get slightly bigger (although we are talking 16 bytes on average<br>\n  for a very limited number of instances, so that's really negligible?).</p>\n</li>\n<li>\n<p><code>bar</code> becomes <code>self.bar</code> in methods' code.</p>\n</li>\n</ul>\n<p>I think we should only apply these to top types like <code>Falcon</code> and <code>Gsp</code> - HALs which are only called locally can work efficiently with arguments. But IMHO the global readability improvement is a win.</p>\n<p>Opinions? This sounds like a \"good first issue\", but since it is rather consequential for the direction of the project I'd like to see it done quickly if possible (but after merging Blackwell <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span> ) if we decide this is the right way to proceed.</p>\n<p>I can post a diff for <code>Falcon</code> somewhere if folks would like to see what it looks like in practice.</p>",
+        "id": 599137882,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1780314950
+    },
+    {
+        "content": "<p>It is expected that lifetimes propagate through and I don't think it is a bad thing. I considered whether I want to send a patch series that does those changes, but also figured it would be a good first task for a new contributor.</p>\n<p>In terms of where I would draw the line:</p>\n<ul>\n<li>If a type only needs it in the constructor or a single method that is always called from a context where the device resource is already available, don't store the device resource in the type.</li>\n<li>If a Device&lt;Bound&gt; is not needed, ARef&lt;Device&gt; can still be used.</li>\n</ul>",
+        "id": 599139756,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1780315424
+    },
+    {
+        "content": "<p>How quickly are you talking about, a few weeks? I'd love to work on this now that I have a lot of free time and it's a good second issue :)</p>",
+        "id": 599139882,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1780315454
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"1020615\">@Tim Kovalenko</span> I'd say wait at least one week as we will try to land the (large) Blackwell series, then it should be doable without too many conflicts. This can also be done incrementally; <code>Gsp</code> would be a first good, smaller candidate, then you can look at other types that would benefit from it. <code>Falcon</code> is likely to be the largest, but also the one that will benefit the most.</p>",
+        "id": 599141080,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1780315789
+    },
+    {
+        "content": "<blockquote>\n<p>If a Device&lt;Bound&gt; is not needed, ARef&lt;Device&gt; can still be used.</p>\n</blockquote>\n<p>What would be the benefit, especially if we need to add a lifetime to the type because it stores the <code>bar</code>?</p>",
+        "id": 599141306,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1780315857
+    },
+    {
+        "content": "<p>although I tend to agree that if we only need the <code>Device</code> for logging purposes, we should probably not expose more features that needed</p>",
+        "id": 599141973,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1780316017
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/599141080\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"1020615\">Tim Kovalenko</span> I'd say wait at least one week as we will try to land the (large) Blackwell series, then it should be doable without too many conflicts. This can also be done incrementally; <code>Gsp</code> would be a first good, smaller candidate, then you can look at other types that would benefit from it. <code>Falcon</code> is likely to be the largest, but also the one that will benefit the most.</p>\n</blockquote>\n<p>Finally I can use my Blackwell card to test :) I'll start looking at the code and the places where I'll need to change it.<br>\nOnce Blackwell is here, I'll start the incremental change. </p>\n<p>Do you think it could be helpful for me or others to also review the Blackwell patch?</p>",
+        "id": 599157271,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1780320013
+    },
+    {
+        "content": "<p>It has received some attention during the last few revisions (especially the first half, which I consider for merging very soon), but reviews (or fixes if the problem could not be flagged in time) are of course always welcome!</p>",
+        "id": 599158025,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1780320207
+    },
+    {
+        "content": "<p>Hello <span class=\"user-mention\" data-user-id=\"1020615\">@Tim Kovalenko</span>, are you still planning to work on this? <code>drm-rust-next</code> should be in good shape now. If you are busy with other stuff it is also fine, just want to know if someone else should take this over. <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 605886338,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782173892
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/605886338\">said</a>:</p>\n<blockquote>\n<p>Hello <span class=\"user-mention silent\" data-user-id=\"1020615\">Tim Kovalenko</span>, are you still planning to work on this? <code>drm-rust-next</code> should be in good shape now. If you are busy with other stuff it is also fine, just want to know if someone else should take this over. <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>\n</blockquote>\n<p>Hey, I'm actually working on it right now. It's a bit slower as I have issues with rust-analyzer in the editor. Should be done soon :)</p>",
+        "id": 605887090,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782174028
+    },
+    {
+        "content": "<p>Sounds good! <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span> Thanks for following up</p>",
+        "id": 605887186,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782174057
+    },
+    {
+        "content": "<p>Actully, quick question, does rust analyzer usually have issue on your setup with type errors and especially trait implementation?</p>",
+        "id": 605887253,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782174076
+    },
+    {
+        "content": "<p>it's working well generally speaking, with the occasional loss of track in <code>pin_init!</code> blocks</p>",
+        "id": 605887309,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782174107
+    },
+    {
+        "content": "<p>I wrote a small nvim macro to kinda output compiler results into a trouble list but it's still a bit of a pain.</p>",
+        "id": 605887316,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782174117
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/509436-Nova/topic/Storing.20driver-bound.20references.20into.20sub-devices/near/605887309\">said</a>:</p>\n<blockquote>\n<p>it's working well generally speaking, with the occasional loss of track in <code>pin_init!</code> blocks</p>\n</blockquote>\n<p>huh, so maybe it's an issue with my setup as it works well within the file but sometimes it doesn't catch errors. I did this <code>make LLVM=1 prepare rust-analyzer</code> and it helped but not fully.</p>",
+        "id": 605887532,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782174180
+    },
+    {
+        "content": "<p>ah, now that you mention it some errors are indeed not always well reported by rust-analyzer</p>",
+        "id": 605887720,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782174233
+    },
+    {
+        "content": "<p>Might be intersting to take a look, as who knows, maybe I could figure something out after this task</p>",
+        "id": 605888050,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782174383
+    },
+    {
+        "content": "<p>Addressed the feedback and send a new version. After this is merged, I'll continue with other parts of the refactor. I'm moving this weekend, so I might not get much time until mid-next week.</p>\n<p>Also, unrelated; do you know why <code>b4 prep --auto-to-cc</code> generates a bigger send list than V1 eventhough the files changed are the same? The same happened on my previous Patch. Could it be due to another patch being merged between V1 and V2?</p>",
+        "id": 606623596,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1782441108
+    },
+    {
+        "content": "<p>Thanks, will take a look shortly!</p>",
+        "id": 606647387,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782456250
+    },
+    {
+        "content": "<p>re: <code>--auto-to-cc</code>, I think the RISC-V maintainers get added whenever <code>riscv</code> appears in a patch - and yours touches fields that carry this name. What I usually do is remove the RISC-V maintainers when they get added like that</p>",
+        "id": 606647602,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1782456339
+    },
+    {
+        "content": "<p>Hey <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span>, I'm still spending a lot of time on moving, ie unpacking and stuff. I plan to continue working on the second patch soon ish. If it's needed before, please let me know and I'll find time sooner <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span> Apologies I didn't update earlier</p>",
+        "id": 610714059,
+        "sender_full_name": "Tim Kovalenko",
+        "timestamp": 1784088878
+    }
+]

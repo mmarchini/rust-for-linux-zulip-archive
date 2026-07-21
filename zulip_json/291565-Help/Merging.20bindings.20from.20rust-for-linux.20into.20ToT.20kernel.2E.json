@@ -1,0 +1,74 @@
+[
+    {
+        "content": "<p>I'm trying to get the Rust binder driver (based on Wedson's and Alice's work) building/running on the upstream 6.2 kernel in preparation to start upstreaming it. Missing bindings is a big challenge. Many bindings exist in rust-for-linux, but are missing upstream. The commit history of these files makes it extremely challenging to cherry-pick the individual changes. A lot of reorganization has occurred (e.g. rust/kernel/src/file_operations -&gt; rust/kernel/file_operations.rs -&gt; rust/kernel/file.rs) and many of the commits have already been partially upstreamed. There are hundreds of commits missing or partially missing from the bindings that I need.</p>\n<p>What is the best way to go about getting these bindings into my tree? I hate to must copy them over without preserving git history, but at the same time, trying to keep that git history feels impractical.</p>",
+        "id": 327958010,
+        "sender_full_name": "Jeff Vander Stoep",
+        "timestamp": 1676452821
+    },
+    {
+        "content": "<p>Yeah, it is fairly involved -- I can relate.</p>\n<p>If the branch is meant to be used only for upstreaming (i.e. rather than something more persistent), then I would suggest you create a branch where you put your changes on top of the unrelated-to-Binder abstractions/patches you may need. For those, you don't need to keep the exact history, so it should be much simpler  -- you can e.g. pick the final files you need, and see who contributed to each, which should be much simpler (or even just saying it is a draft, without signing off the commit). </p>\n<p>After that, you can submit an RFC to the mailing list using as base commit that branch (and indicating so in the cover letter), so that the patches you submit are Binder-related, and not other core abstractions/prerequisites. That way reviewers can focus on the Binder changes and not the prerequisite bits. Then, you can rebase that branch (and the patches on top) as needed as the abstractions get upstreamed in the interim.</p>\n<p>It is also great to have such a branch, because it tells us exactly what abstractions should be prioritized, if you can share it with us. The Asahi Linux project is doing something similar here: <a href=\"https://github.com/Rust-for-Linux/linux/pull/952\">https://github.com/Rust-for-Linux/linux/pull/952</a>.</p>",
+        "id": 327965712,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676455165
+    },
+    {
+        "content": "<p>I see. So your suggestion is to base this off the rust-for-linux instead of the upstream kernel?</p>\n<p>I was hoping to test this on some actual Android hardware instead of just an emulator, so doing this work in rust-for-linux solves the bindings issues but likely creates different challenges. I'll likely be missing a separate set of patches needed to boot the device.</p>",
+        "id": 327970192,
+        "sender_full_name": "Jeff Vander Stoep",
+        "timestamp": 1676456444
+    },
+    {
+        "content": "<blockquote>\n<p>So your suggestion is to base this off the rust-for-linux instead of the upstream kernel?</p>\n</blockquote>\n<p>If you mean the <code>rust</code> branch, no, I meant <code>rust-next</code> (i.e. upstream kernel). In other words, you would have 6.2 in your tree.</p>\n<p>In other words, the stack would look something like this:</p>\n<ul>\n<li>Binder patches N...1, i.e. the ones sent as an RFC to the mailing lists to start the conversation around it.</li>\n<li>Prerequisite Rust patches to make your Binder bits compile, in a public branch somewhere, i.e. anything unrelated to Binder but that you need, e.g. <code>file_operations</code>. These will eventually land through the Rust tree, and it is useful to know which parts you need to prioritize those.</li>\n<li><code>rust-next</code> (currently with some patches on top of Linus' <code>v6.2-rc4</code> that will land in 6.3).</li>\n<li>Linus tag (e.g. currently <code>v6.2-rc4</code>).</li>\n</ul>\n<p>Then, in a few weeks, Linus creates <code>v6.3-rc1</code> and <code>rust-next</code> will rebase to that one (for example), landing more Rust patches there, ideally including ideally some abstractions you need. Then, if you wanted to send RFC v2 because there was some feedback on the RFC, you can rebase your \"Prerequisite Rust patches\" branch into the new <code>rust-next</code>, which should then be smaller if you something you needed is now in mainline, and you rebase the Binder RFC patches on top of that branch, and submit them again. Eventually, there will be no more prerequisite patches you need, and you can finally send the actual patches to be picked by the Binder maintainers, ideally basing it on a Linus' tag directly.</p>",
+        "id": 327973944,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676457554
+    },
+    {
+        "content": "<p>Of course, you can also send all the patches (i.e. \"Binder patches N...1\" + \"Prerequisite Rust patches\") -- I would recommend that if they are not too many, so that context is clear (marking those clearly as prerequisites).</p>",
+        "id": 327975833,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676458184
+    },
+    {
+        "content": "<p>In any case, to be clear, we are not preserving full history of the <code>rust</code> branch either way (though we do our best to keep all contributors via <code>Co-developed-by</code> tags, which is why the original series had so many). So you need to worry about that for Binder patches that you are upstreaming, but for most of the prerequisites, it will be done by whoever upstreams them (which should be the original author(s) ideally).</p>",
+        "id": 327976853,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676458498
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"589086\">@Jeff Vander Stoep</span> I have the same issue with the NVMe driver. I decided to stay on <code>rust</code> for now until the delta to upstream becomes smaller. It is a super time consuming ask to pick apart the changes required for the NVMe driver and rebasing those on <code>rust-next</code> - and then keeping them there as stuff enters upstream from <code>rust</code>.</p>",
+        "id": 327981479,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1676459958
+    },
+    {
+        "content": "<p>That is of course an option, but I understood Jeff wants to start the conversation with upstream (and that using 6.2 was needed). If sending an RFC/patches is not intended, then I would suggest waiting a bit until we make the <code>rust</code> branch a bit closer to upstream, which would help on that.</p>\n<p>On the rebasing: it is definitely time consuming to rebase, but most of the work is making the patches suitable for upstreaming (i.e. splitting the changes properly, writing proper commit messages, linking things, keeping track of contributors and signatures, and so on). That is why for the RFC approach I suggested sending only the Binder patches, because it allows them to ignore the bulk of that work.</p>",
+        "id": 327987392,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676461749
+    },
+    {
+        "content": "<p>How do I checkout a rust-for-linux 6.1 kernel that include all the bindings that were available there? If I download it from github and checkout the rust branch I'm on ToT rust-for-linux, not 6.1. If I checkout rust-v6.1-rc1 I'm on a normal 6.1-rc1 kernel without all the additional rust-for-linux bindings.</p>",
+        "id": 328185673,
+        "sender_full_name": "Jeff Vander Stoep",
+        "timestamp": 1676538883
+    },
+    {
+        "content": "<p>perhaps <code>git checkout bc10cbc9826875aa8f3fe61304bb703063fb3a1d</code> does what I want. Checking...</p>",
+        "id": 328187750,
+        "sender_full_name": "Jeff Vander Stoep",
+        "timestamp": 1676539504
+    },
+    {
+        "content": "<p><code>rust</code> is the branch that has \"everything\" (modulo divergence with upstream), and the last sync (merge) I did with Linus' was v6.1-rc1. That means it is mostly 6.1 minus the usual fixes/development that goes during the later <code>-rc</code>s.</p>",
+        "id": 328193156,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676541167
+    },
+    {
+        "content": "<p><code>bc10cbc9826875aa8f3fe61304bb703063fb3a1d</code> is a slightly older <code>rust</code>.</p>",
+        "id": 328193433,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1676541256
+    }
+]

@@ -1,0 +1,123 @@
+<html>
+<head><meta charset="utf-8"><title>✔ Arc containing an atomic · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html">✔ Arc containing an atomic</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="538837392"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538837392" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538837392">(Sep 11 2025 at 11:52)</a>:</h4>
+<p>Ahoi.<br>
+I've got an Arc that contains an atomic.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[pin_data]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DmaFenceCtx</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">lock</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">spinlock_t</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">nr</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<span class="w">    </span><span class="n">seqno</span><span class="p">:</span><span class="w"> </span><span class="nc">AtomicU64</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">DmaFenceCtx</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Feed in a non-Rust spinlock for now, since the Rust side never needs the lock.</span>
+<span class="w">            </span><span class="n">lock</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Opaque</span><span class="p">::</span><span class="n">ffi_init</span><span class="p">(</span><span class="o">|</span><span class="n">slot</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">spinlock</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// SAFETY: `slot` is a valid pointer to an uninitialized `struct spinlock_t`.</span>
+<span class="w">                </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">spin_lock_init</span><span class="p">(</span><span class="n">slot</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="p">}),</span>
+<span class="w">            </span><span class="c1">// SAFETY: `dma_fence_context_alloc()` merely works on a global atomic. Parameter `1`</span>
+<span class="w">            </span><span class="c1">// is the number of contexts we want to allocate.</span>
+<span class="w">            </span><span class="n">nr</span><span class="p">:</span><span class="w"> </span><span class="nc">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bindings</span><span class="p">::</span><span class="n">dma_fence_context_alloc</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">},</span>
+<span class="w">            </span><span class="n">seqno</span><span class="p">:</span><span class="w"> </span><span class="nc">AtomicU64</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+<span class="w">        </span><span class="p">});</span>
+
+<span class="w">        </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">get_new_fence_seqno</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">u64</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">seqno</span><span class="p">.</span><span class="n">fetch_add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">Ordering</span><span class="p">::</span><span class="n">Relaxed</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Rust won't allow me to borrow the arc as mutable. I.e. I can't do  <code>my_arc.get_new_fence_seqno()</code>.<br>
+Presumably because it wants to enforce that locking be used, since Arcs are usually shared.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">error</span><span class="p">[</span><span class="n">E0596</span><span class="p">]:</span><span class="w"> </span><span class="nc">cannot</span><span class="w"> </span><span class="n">borrow</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">dereference</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="err">`</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">DmaFenceCtx</span><span class="o">&gt;</span><span class="err">`</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">mutable</span>
+<span class="w">   </span><span class="o">-</span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">rust</span><span class="o">/</span><span class="n">kernel</span><span class="o">/</span><span class="n">sync</span><span class="o">/</span><span class="n">dma_fence</span><span class="p">.</span><span class="n">rs</span><span class="p">:</span><span class="mi">107</span><span class="p">:</span><span class="mi">26</span>
+<span class="w">    </span><span class="o">|</span>
+<span class="mi">107</span><span class="w"> </span><span class="o">|</span><span class="w">         </span><span class="kd">let</span><span class="w"> </span><span class="n">seqno</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fctx</span><span class="p">.</span><span class="n">get_new_fence_seqno</span><span class="p">();</span>
+<span class="w">    </span><span class="o">|</span><span class="w">                          </span><span class="o">^^^^</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">borrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">mutable</span>
+<span class="w">    </span><span class="o">|</span>
+<span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="n">help</span><span class="p">:</span><span class="w"> </span><span class="nc">trait</span><span class="w"> </span><span class="err">`</span><span class="n">DerefMut</span><span class="err">`</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">modify</span><span class="w"> </span><span class="n">through</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">dereference</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">implemented</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="err">`</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">DmaFenceCtx</span><span class="o">&gt;</span><span class="err">`</span>
+</code></pre></div>
+<p>I don't need locking in this case, however. How do I solve that idiomatically. Do I have to implement <code>DerefMut</code>, as the compiler is suggesting?</p>
+
+
+
+<a name="538839376"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538839376" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538839376">(Sep 11 2025 at 12:01)</a>:</h4>
+<p>The method should be <code>&amp;self</code> to take a shared reference instead of an exclusive reference. You can't get an exclusive reference to something in an <code>Arc</code> because an <code>Arc</code> is always considered shared.</p>
+
+
+
+<a name="538843715"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538843715" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538843715">(Sep 11 2025 at 12:21)</a>:</h4>
+<p>I need a mutable (exclusive?) reference for modifying the atomic.</p>
+
+
+
+<a name="538844163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538844163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538844163">(Sep 11 2025 at 12:23)</a>:</h4>
+<p>Hmm, or maybe I don't?<br>
+How is it allowed / possible to modify an atomic through a non-mutable reference?</p>
+
+
+
+<a name="538844636"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538844636" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538844636">(Sep 11 2025 at 12:26)</a>:</h4>
+<p>It's because mutable is a misnomer. <code>&amp;mut</code> really means exclusive and <code>&amp;</code> really means shared. Modifying atomics through shared access is ok, therefore you can do it with an <code>&amp;</code>.</p>
+
+
+
+<a name="538844957"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538844957" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538844957">(Sep 11 2025 at 12:28)</a>:</h4>
+<p>Yeah, I know it's OK – but how does the compiler know / understand?</p>
+
+
+
+<a name="538845149"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538845149" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538845149">(Sep 11 2025 at 12:28)</a>:</h4>
+<p>Because the <code>AtomicU64::fetch_add</code> method is declared as <code>&amp;self</code>.</p>
+
+
+
+<a name="538845249"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538845249" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538845249">(Sep 11 2025 at 12:29)</a>:</h4>
+<p>btw, I would just use <code>SpinLock&lt;()&gt;</code> for your spinlock</p>
+
+
+
+<a name="538845282"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538845282" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538845282">(Sep 11 2025 at 12:29)</a>:</h4>
+<p>no need to roll your own</p>
+
+
+
+<a name="538845941"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/538845941" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#538845941">(Sep 11 2025 at 12:31)</a>:</h4>
+<p>Thx so far.<br>
+Regarding the lock, we can discuss that in an RFC</p>
+
+
+
+<a name="539738482"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/%E2%9C%94%20Arc%20containing%20an%20atomic/near/539738482" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/.E2.9C.94.20Arc.20containing.20an.20atomic.html#539738482">(Sep 16 2025 at 10:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

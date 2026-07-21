@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>Is it possible for a built-in module to unload itself? Functions marked <code>__init</code> get unloaded after init even for built-ins, so clearly it's not entirely impossible to unload code.</p>\n<p>Use-case is a built-in module that's only used conditionally depending on a kernel parameter. When it's not used, I just want to unload all of the module's machine code so it doesn't take up ram.</p>",
+        "id": 447000412,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719350490
+    },
+    {
+        "content": "<p>Isn't this already done in <code>free_initmem()</code>?</p>",
+        "id": 447003283,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719351617
+    },
+    {
+        "content": "<p>I also want to free the non-init stuff</p>",
+        "id": 447003371,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719351651
+    },
+    {
+        "content": "<p>Ah, I see.</p>",
+        "id": 447003408,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719351669
+    },
+    {
+        "content": "<p>How much code are we talking about? For data, I think we could just use kalloc() which allocates on-demand. For memory that code takes, wouldn't it usually be relatively small?</p>",
+        "id": 447003873,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719351873
+    },
+    {
+        "content": "<p>I think the driver is 0.9 MB</p>",
+        "id": 447003907,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719351899
+    },
+    {
+        "content": "<p>Like, I want the init function to check a boolean, and if it's set to true then it currently just returns from init without initializing anything. When that happens, I want the module's machine code to go away because we're not going to use it.</p>",
+        "id": 447004009,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719351946
+    },
+    {
+        "content": "<p>Yeah, I know, it's not impossible, but it's complicated: you will need to make sure the code of the module get loaded into a particular area that you could do unmap later. Usually people just use loadable modules for that purpose, since it won't complicate the kernel loading process.</p>",
+        "id": 447004394,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719352118
+    },
+    {
+        "content": "<p>We already have a separate object file that has the logic for setting the boolean used to choose a driver. Could I put some logic in there?</p>",
+        "id": 447004546,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719352199
+    },
+    {
+        "content": "<p>Or would it require surgery on the driver's object file?</p>",
+        "id": 447004652,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719352230
+    },
+    {
+        "content": "<p>IIUC, built-in functions will be linked into the vmlinux, so to unmap the code section, you will need to mark them (similar to <code>__init</code>) somehow, and link script can put the information into the init code.</p>\n<p>Before we do that, why don't loadable modules work for you? You will just need to put it in initramfs and load them if needed.</p>",
+        "id": 447005227,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719352425
+    },
+    {
+        "content": "<p>We found out that the partition that holds the modules is using some disc encryption logic, but the thing that is able to decrypt it depends on the driver already being loaded.</p>",
+        "id": 447005442,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719352483
+    },
+    {
+        "content": "<p>Usually bootloaders will handle the decryption, but I guess your case is special. IIUC, you could also put the initramfs into the kernel itself.</p>",
+        "id": 447005876,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719352666
+    },
+    {
+        "content": "<p>I mean, we may be able to put the module in another partition that is loaded earlier, but that essentially involves adding an entirely new <em>kind</em> of module.</p>",
+        "id": 447005988,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719352712
+    },
+    {
+        "content": "<p>I'm just trying to understand our options.</p>",
+        "id": 447006151,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719352788
+    },
+    {
+        "content": "<p>What I suggest is: <a href=\"https://docs.kernel.org/driver-api/early-userspace/early_userspace_support.html#cpio-archive-method\">https://docs.kernel.org/driver-api/early-userspace/early_userspace_support.html#cpio-archive-method</a></p>\n<p>You can put a initramfs (which contains a module) into the final kernel image. In this way, you don't need to worry about the decrytion of the other partition.</p>",
+        "id": 447006656,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353012
+    },
+    {
+        "content": "<p>And needless to say, after boot, kernel can free the memory that the initramfs takes and you can also unload the module you put it in the intramfs.</p>",
+        "id": 447006989,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353151
+    },
+    {
+        "content": "<p>And so in that case, init would need to load the module from the new initramfs manually?</p>",
+        "id": 447007110,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353191
+    },
+    {
+        "content": "<p>init is just a normal userspace program, you can program it to load the new module automatically.</p>",
+        "id": 447007288,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353280
+    },
+    {
+        "content": "<p>Yes, that's fine.</p>",
+        "id": 447007374,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353305
+    },
+    {
+        "content": "<p>Okay, well, it sounds like the built-in route requires accepting the cost even when not used.</p>",
+        "id": 447007717,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353438
+    },
+    {
+        "content": "<p>I haven't done this before, but in theory, this is how it works.</p>\n<p>Normally, a bootloader will set up the kernel image and the initramfs via something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">linux</span><span class=\"w\">   </span><span class=\"o\">/</span><span class=\"n\">vmlinuz</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"w\"> </span><span class=\"n\">root</span><span class=\"o\">=</span><span class=\"n\">UUID</span><span class=\"o\">=</span><span class=\"mi\">258</span><span class=\"n\">c5484</span><span class=\"o\">-</span><span class=\"n\">fbc9</span><span class=\"o\">-</span><span class=\"mi\">413</span><span class=\"n\">e</span><span class=\"o\">-</span><span class=\"n\">b6f7</span><span class=\"o\">-</span><span class=\"mi\">072</span><span class=\"n\">d6081e264</span><span class=\"w\"> </span><span class=\"n\">rw</span><span class=\"w\">  </span><span class=\"n\">loglevel</span><span class=\"o\">=</span><span class=\"mi\">3</span><span class=\"w\"> </span><span class=\"n\">quiet</span>\n<span class=\"n\">initrd</span><span class=\"w\">  </span><span class=\"o\">/</span><span class=\"n\">initramfs</span><span class=\"o\">-</span><span class=\"n\">linux</span><span class=\"p\">.</span><span class=\"n\">img</span>\n</code></pre></div>\n<p>but actually, if you're creating the vmlinuz file, you can put a initramfs into it. So you won't need to rely on bootloaders' filesystem driver to load the initramfs, because it's already in the ram (loaded along with kernel).</p>",
+        "id": 447008551,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353646
+    },
+    {
+        "content": "<p>I mean, we already <em>have</em> other partitions that are mounted early enough.</p>",
+        "id": 447008766,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353700
+    },
+    {
+        "content": "<p>Ok, so you can put the module there if you want to avoid to load it.</p>",
+        "id": 447009034,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353813
+    },
+    {
+        "content": "<p>It raises issues with updatability though, since the intent is that you can update the kernel without changing these partitions.</p>",
+        "id": 447009193,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353868
+    },
+    {
+        "content": "<p>Anyway, gotta go.</p>",
+        "id": 447009276,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1719353889
+    },
+    {
+        "content": "<p>I mean it's only 0.9M memory ;-)</p>",
+        "id": 447009401,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1719353959
+    },
+    {
+        "content": "<p>The thing with the init section is that you cannot use it after initialization. What you need is different, and to my knowledge there is no such feature upstream. You can absolutely do it, as Boqun says. Make a section similar to the init section, but conditionally free it later. It probably requires quite a bit of surgery.</p>",
+        "id": 447171923,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1719395513
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/stream/288089-General/topic/Built-in.20module.20disabling.20itself/near/447007110\">said</a>:</p>\n<blockquote>\n<p>And so in that case, init would need to load the module from the new initramfs manually?</p>\n</blockquote>\n<p>Yes, this is how most PC and server systems work. You load a kernel and an initial in-memory file system. This file system has the init user space program and some drivers that <em>may</em> be required to mount the root partition. The init program then tries to decide what modules to load, loads them, and tries to mount the root file system.</p>\n<p>Linking in all modules for all possible root file systems would make a huge kernel image that would take long to load and initialize. Baking in only the right ones is faster, but requires precise knowledge of the system you are booting. That would not work for something like a generic Ubuntu kernel that needs to boot on a wide selection of systems. The in-memory root file system is the halfway point.</p>",
+        "id": 447173007,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1719395848
+    }
+]

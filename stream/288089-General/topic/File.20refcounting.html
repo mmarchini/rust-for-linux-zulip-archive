@@ -1,0 +1,349 @@
+<html>
+<head><meta charset="utf-8"><title>File refcounting · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html">File refcounting</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="408216416"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408216416" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408216416">(Dec 15 2023 at 16:18)</a>:</h4>
+<p>I was thinking about how to justify the file descriptor stuff that I'm doing in my <a href="https://lore.kernel.org/all/20231206-alice-file-v2-0-af617c0d9d94@google.com/">file patchset</a> and I came up with the following comment:</p>
+<blockquote>
+<p>Wraps the kernel's <code>struct file</code>.</p>
+<h1>Refcounting</h1>
+<p>Instances of this type are ref-counted according to the following rules. There are three kinds of refcounts:</p>
+<ul>
+<li>Normal refcounts. These are created with <code>fget</code>/<code>get_file</code> and dropped with <code>fput</code>.</li>
+<li>Fd refcounts. These correspond to an fd that a process has. Dropped when the fd is closed.</li>
+<li>A light refcount. Created with <code>fdget</code>, dropped with <code>fdput</code>.</li>
+</ul>
+<p>The two first kinds of refcounts are tracked using the <code>f_count</code> atomic in <code>struct file</code>. Both types of refcount correspond to one increment of <code>f_count</code>. Light refcounts are not tracked anywhere. The <code>ARef&lt;File&gt;</code> type corresponds to a normal refcount.</p>
+<p>Fd refcounts are normally held by a <code>struct files_struct</code> for a process. Closing a file is done by removing the file from the <code>struct files_struct</code> with <code>close_fd_get_file</code> and then using <code>filp_close</code> to actually close the file. The <code>filp_close</code> method takes ownership of a refcount and drops it. Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>
+<p>Light refcounts are always associated with an fd refcount. The idea is that we will not close the file between the <code>fdget</code> and <code>fdput</code> calls, which means that the fd refcount is guaranteed to be active between those two calls. Note that this doesn't work if another thread could close the file in that period, so <code>fdget</code> only creates a light refcount if the <code>struct files_struct</code> is not shared with other threads. Otherwise, <code>fdget</code> creates a normal refcount.</p>
+<h1>Invariants</h1>
+<ul>
+<li>Instances of this type are refcounted with three types of refcounts: normal refcounts, fd refcounts, light refcounts.</li>
+<li>The <code>f_count</code> field holds the total number of normal and fd refcounts.</li>
+<li>Each light refcount is associated with an fd refcount and can only be created when the associated <code>struct files_struct</code> is not shared.</li>
+<li>A light refcount must be dropped before returning to userspace.</li>
+<li>An fd refcount must not be dropped if there are active light refcounts associated with it.</li>
+</ul>
+</blockquote>
+<p>Thoughts?</p>
+
+
+
+<a name="408217642"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408217642" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408217642">(Dec 15 2023 at 16:25)</a>:</h4>
+<p>Is this how we want to format this kind of thing?</p>
+
+
+
+<a name="408219617"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408219617" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408219617">(Dec 15 2023 at 16:36)</a>:</h4>
+<p>The "refcounting" part looks good to me.</p>
+<p>So if we do any FFI that we pass a <code>struct file</code> pointer or an fd, we need also to reason about behaviors on light refcounts, right? Like "this FFI doesn't inc or dec the light refcount".</p>
+
+
+
+<a name="408219740"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408219740" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408219740">(Dec 15 2023 at 16:37)</a>:</h4>
+<p>I don't think we need to say "this doesn't touch the refcounts" for every single ffi call</p>
+
+
+
+<a name="408220002"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408220002" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408220002">(Dec 15 2023 at 16:38)</a>:</h4>
+<p>Like, if we drop an fd refcount, we for sure need to justify why there are no light refcounts. But that's just that particular ffi call that drops it.</p>
+
+
+
+<a name="408220141"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408220141" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408220141">(Dec 15 2023 at 16:39)</a>:</h4>
+<p>Ok, so if an FFI does nothing on the file refcount, we say nothing, otherwise, justify how the drop works with the type invariants.</p>
+
+
+
+<a name="408220759"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408220759" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408220759">(Dec 15 2023 at 16:44)</a>:</h4>
+<p>r? <span class="user-mention" data-user-id="546447">@Benno Lossin</span> <br>
+(hope I'm using "r?" correctly ;-))</p>
+
+
+
+<a name="408327646"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408327646" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408327646">(Dec 16 2023 at 10:15)</a>:</h4>
+<p>Some things about the text itself:</p>
+<ul>
+<li>there are "fd refcounts", but you do not increase/decrease them with <code>fdget</code>/<code>fdput</code>.</li>
+<li>how are "fd refcounts" created?</li>
+<li>are "fd refcounts" not just a normal refcount that are automatically managed (i.e. by opening and closing a file?)</li>
+</ul>
+<p>What did you mean by </p>
+<blockquote>
+<p>Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>
+</blockquote>
+<p><code>filp_close</code> takes two arguments, the file and the <code>fl_owner_t</code>, is this "fd refcount" contained in that?</p>
+
+
+
+<a name="408327683"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408327683" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408327683">(Dec 16 2023 at 10:15)</a>:</h4>
+<p>I am not sure I understand the need for light refcounts, but that isn't part of what this should explain.</p>
+
+
+
+<a name="408327814"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408327814" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408327814">(Dec 16 2023 at 10:17)</a>:</h4>
+<p>if you could explain that, I can better understand how to create an API for it.</p>
+
+
+
+<a name="408328363"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408328363" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408328363">(Dec 16 2023 at 10:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/408219740">said</a>:</p>
+<blockquote>
+<p>I don't think we need to say "this doesn't touch the refcounts" for every single ffi call</p>
+</blockquote>
+<p>I understand why you don't want to do this, but I am a bit skeptical...</p>
+<p>Normally refcounts are a runtime thing, so any safe function might increment the refcount. And as long as you have an object, you still have a refcount. So the only operation that is interesting is decrementing the refcount, since that can drop the object. But with the filedescriptors you have the extra burden of these weird "light refcounts" where you somehow™ (I don't actually know how you ensure this aside from doing it locally in a function) ensure that there are none left when you finally destroy it.</p>
+<p>Can I think of the "light refcounts" as borrowed values? So you only take a light refcount when you know somebody above you has an actual refcount? If so, we might be able to completely go without light refcounts on the Rust side (though I still wonder how this would be for files that are shared and where no light refcounts exist...)?</p>
+<p>The only problem is that the C side might take light refcounts at any time... Are there some rules in C on how to use them?</p>
+
+
+
+<a name="408347888"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408347888" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408347888">(Dec 16 2023 at 14:15)</a>:</h4>
+<p>Fd refcounts are created whenever a new fd appears in a process. This could be because it opens the file, or because some other process sent it that file using e.g. unix sockets or binder. Fd refcounts are dropped whenever the fd is removed from the process' file table, usually because the file is closed.</p>
+
+
+
+<a name="408348001"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348001" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348001">(Dec 16 2023 at 14:16)</a>:</h4>
+<p>The <code>fdget</code>/<code>fdput</code> functions have those names because they _take_ an fd (that is, an integer), looks up that fd in the current task's fd table, then returns a pointer to the file it corresponds to.</p>
+
+
+
+<a name="408348070"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348070" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348070">(Dec 16 2023 at 14:18)</a>:</h4>
+<p>Basically, <code>fdget</code>/<code>fdput</code> return an</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">enum</span> <span class="nc">FdGet</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">NotShared</span><span class="p">(</span><span class="o">&amp;'</span><span class="na">a</span><span class="w"> </span><span class="n">File</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Shared</span><span class="p">(</span><span class="n">ARef</span><span class="o">&lt;</span><span class="n">File</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>the light refcount is the first case.</p>
+
+
+
+<a name="408348163"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348163" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348163">(Dec 16 2023 at 14:18)</a>:</h4>
+<p>With the logic being that between the <code>fdget</code> and <code>fdput</code> calls, there will not be anything that removes the fd from the current process's fd table. Therefore, an <code>&amp;File</code> is enough.</p>
+
+
+
+<a name="408348187"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348187" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348187">(Dec 16 2023 at 14:19)</a>:</h4>
+<p>(It only returns a <code>&amp;File</code> if the fd table is not shared with other threads, so there can't be some other thread removing the fd either.)</p>
+
+
+
+<a name="408348275"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348275" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348275">(Dec 16 2023 at 14:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/408328363">said</a>:</p>
+<blockquote>
+<p>The only problem is that the C side might take light refcounts at any time... Are there some rules in C on how to use them?</p>
+</blockquote>
+<p>Yes. You can't close the file between <code>fdget</code> and <code>fdput</code>, and you must call <code>fdput</code> before the task in which you called <code>fdget</code> returns to userspace.</p>
+
+
+
+<a name="408348343"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348343" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348343">(Dec 16 2023 at 14:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/408327646">said</a>:</p>
+<blockquote>
+<p>What did you mean by </p>
+<blockquote>
+<p>Normally, <code>filp_close</code> is given the fd refcount being closed, but this isn't a requirement: The <code>filp_close</code> method can also accept a normal refcount instead to keep the fd refcount alive for longer.</p>
+</blockquote>
+<p><code>filp_close</code> takes two arguments, the file and the <code>fl_owner_t</code>, is this "fd refcount" contained in that?</p>
+</blockquote>
+<p>It takes two arguments: a pointer to the file being closed, and a pointer to the fd table that used to hold an fd to that file.</p>
+
+
+
+<a name="408348484"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348484" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348484">(Dec 16 2023 at 14:23)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="546447">Benno Lossin</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/408328363">said</a>:</p>
+<blockquote>
+<p>Normally refcounts are a runtime thing, so any safe function might increment the refcount. And as long as you have an object, you still have a refcount. So the only operation that is interesting is decrementing the refcount, since that can drop the object. But with the filedescriptors you have the extra burden of these weird "light refcounts" where you somehow™ (I don't actually know how you ensure this aside from doing it locally in a function) ensure that there are none left when you finally destroy it.</p>
+</blockquote>
+<p>It is still the case that only decrementing the refcount is interesting. It's just that decrementing a refcount you got by removing the file from an fd table is more involved than refcount decrements usually are.</p>
+
+
+
+<a name="408348637"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408348637" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408348637">(Dec 16 2023 at 14:24)</a>:</h4>
+<p>It would perhaps be reasonable to say that fd refcounts are not special. Rather, they're just normal refcounts owned by a collection (the process fd table) that has extra invariants about the refcounts it holds.</p>
+
+
+
+<a name="408367799"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408367799" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408367799">(Dec 16 2023 at 18:55)</a>:</h4>
+<p>hmm I guess this (light refcount inc/dec) is similar to the requirement that C doesn't just randomly destroy pointers</p>
+
+
+
+<a name="408367899"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/408367899" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#408367899">(Dec 16 2023 at 18:56)</a>:</h4>
+<p>so for example we do not write down that e.g. <code>finish_wait(wait_list, wait_entry)</code> does not deallocate <code>wait_list</code> and <code>wait_entry</code>.</p>
+
+
+
+<a name="413137518"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/413137518" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#413137518">(Jan 16 2024 at 11:50)</a>:</h4>
+<p>New proposed wording:</p>
+<blockquote>
+<p>Wraps the kernel's <code>struct file</code>.</p>
+<h1>Refcounting</h1>
+<p>Instances of this type are reference-counted. The reference count is incremented by the <code>fget</code>/<code>get_file</code> functions and decremented by <code>fput</code>. The Rust type <code>ARef&lt;File&gt;</code> represents a pointer that owns a reference count on the file.</p>
+<p>Whenever a process opens a file descriptor (fd), it stores a pointer to the file in its <code>struct files_struct</code>. This pointer owns a reference count to the file, ensuring the file isn't prematurely deleted while the file descriptor is open. In Rust terminology, the pointers in <code>struct files_struct</code> are <code>ARef&lt;File&gt;</code> pointers.</p>
+<h2>Light refcounts</h2>
+<p>Whenever a process has an fd to a file, it may use something called a "light refcount" as a performance optimization. Light refcounts are acquired by calling <code>fdget</code> and released with <code>fdput</code>. The idea behind light refcounts is that if the fd is not closed between the calls to <code>fdget</code> and <code>fdput</code>, then the refcount cannot hit zero during that time, as the <code>struct files_struct</code> holds a reference until the fd is closed. This means that it's safe to access the file even if <code>fdget</code> does not increment the refcount.</p>
+<p>The requirement that the fd is not closed during a light refcount applies globally across all threads - not just on the thread using the light refcount. For this reason, light refcounts are only used when the <code>struct files_struct</code> is not shared with other threads, since this ensures that other unrelated threads cannot suddenly start using the fd and close it. Therefore, calling <code>fdget</code> on a shared <code>struct files_struct</code> creates a normal refcount instead of a light refcount.</p>
+<p>Note that if the <code>struct files_struct</code> becomes shared during a light refcount, then the requirement that the fd is not closed before the <code>fdput</code> call also applies to the other threads that it was shared with. That is, making a <code>struct files_struct</code> shared does not "upgrade" existing light refcounts to full refcounts; it just prevents the creation of new light refcounts. This also means that checking whether the <code>struct files_struct</code> is shared cannot be used to determine whether an fd has active light refcounts, since it could have light refcounts that were created before it was shared.</p>
+<p>Light reference counts must be released with <code>fdput</code> before the system call returns to userspace. This means that if you wait until the current system call returns to userspace, then all light refcounts that existed at the time have gone away.</p>
+<h2>Rust references</h2>
+<p>The reference type <code>&amp;File</code> is similar to light refcounts:</p>
+<ul>
+<li><code>&amp;File</code> references don't own a reference count. They can only exist as long as the reference count stays positive, and can only be created when there is some mechanism in place to ensure this.</li>
+<li>The Rust borrow-checker normally ensures this by enforcing that the <code>ARef&lt;File&gt;</code> from which a <code>&amp;File</code> is created outlives the <code>&amp;File</code>.</li>
+<li>Using the unsafe [<code>File::from_ptr</code>] means that it is up to the caller to ensure that the <code>&amp;File</code> only exists while the reference count is positive.</li>
+<li>You can think of <code>fdget</code> as using an fd to look up an <code>ARef&lt;File&gt;</code> in the <code>struct files_struct</code> and create an <code>&amp;File</code> from it. The "fd cannot be closed" rule is like the Rust rule "the <code>ARef&lt;File&gt;</code> must outlive the <code>&amp;File</code>".</li>
+<li>Light refcounts can only be created from <code>ARef&lt;File&gt;</code> pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</li>
+</ul>
+<h1>Invariants</h1>
+<ul>
+<li>Instances of this type are refcounted using the <code>f_count</code> field.</li>
+<li>If an fd with active light refcounts is closed, then it must be the case that the file refcount is positive until there are no more light refcounts created from the fd that got closed.</li>
+<li>A light refcount must be dropped before returning to userspace.</li>
+</ul>
+</blockquote>
+
+
+
+<a name="416077150"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416077150" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Benno Lossin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416077150">(Jan 17 2024 at 16:55)</a>:</h4>
+<p>What I am a bit confused about -- and this is probably just the general design of  the <code>struct file</code> stuff -- is that you are allowed to share a <code>struct files_struct</code> even when you have light refcounts. Or that you have to upgrade those refcounts.<br>
+But I guess we cannot really do anything about this.</p>
+<p>Do you also have an abstraction for light refcounts, or are they still exclusive to the C side?</p>
+<p>I would recommend the following wording change in the invariants:</p>
+<blockquote>
+<ul>
+<li>If an fd with active light refcounts is closed, then it must be the case that the file refcount is positive until there are no more light refcounts to the file of the fd that got closed.</li>
+</ul>
+</blockquote>
+
+
+
+<a name="416085927"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416085927" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Valentin Obst <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416085927">(Jan 17 2024 at 17:42)</a>:</h4>
+<blockquote>
+<p>Note that if the <code>struct files_struct</code> becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>
+</blockquote>
+<p>I'd be interested how that could happen, only by cloning the current task after taking a light refount, or are there other scenarios (like <code>fdget</code>ting an fd from another task, if that is even legal)?</p>
+<blockquote>
+<p>Light refcounts can only be created from ARef&lt;File&gt; pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</p>
+</blockquote>
+<p>Just given the context of this post the above is a bit confusing to me. <br>
+Is this something that is enforced in your patch via the type system (i.e. there is a special type representing a light refcount that can only be created from <code>ARef&lt;File&gt;</code>s stored in the <code>files_struct</code>)?. <br>
+Or is it more of an analogy (i.e. <code>&amp;File</code> derived from an <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> is analogous to a C light reference)? <br>
+Or does it mean that only <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> may have light references to it from the C side pending?</p>
+
+
+
+<a name="416089864"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416089864" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416089864">(Jan 17 2024 at 18:05)</a>:</h4>
+<blockquote>
+<p>Note that if the struct files_struct becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>
+</blockquote>
+<p>I thought we cannot share the files_struct during a light refcount, because we <a href="https://github.com/Rust-for-Linux/linux/blob/rust-next/fs/file.c#L1111">must not clone the task</a>, is there anything I'm missing here? Maybe the comments are out-of-date?</p>
+
+
+
+<a name="416339183"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416339183" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416339183">(Jan 17 2024 at 21:30)</a>:</h4>
+<p>It's possible that the C side just doesn't allow you to make the files_struct shared while you have a light refcount.</p>
+
+
+
+<a name="416339289"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416339289" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416339289">(Jan 17 2024 at 21:31)</a>:</h4>
+<p>Maybe I should just take that part out.</p>
+
+
+
+<a name="416570548"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416570548" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416570548">(Jan 18 2024 at 13:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="678978">Valentin Obst</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/416085927">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>Light refcounts can only be created from ARef&lt;File&gt; pointers stored in a <code>struct files_struct</code>, whereas <code>&amp;File</code> references can be created from any <code>ARef&lt;File&gt;</code>.</p>
+</blockquote>
+<p>Just given the context of this post the above is a bit confusing to me. <br>
+Is this something that is enforced in your patch via the type system (i.e. there is a special type representing a light refcount that can only be created from <code>ARef&lt;File&gt;</code>s stored in the <code>files_struct</code>)?. <br>
+Or is it more of an analogy (i.e. <code>&amp;File</code> derived from an <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> is analogous to a C light reference)? <br>
+Or does it mean that only <code>ARef&lt;File&gt;</code> stored in the <code>files_struct</code> may have light references to it from the C side pending?</p>
+</blockquote>
+<p>Light refcounts are created by <code>fdget</code>. The argument for <code>fdget</code> is a file descriptor, not a pointer to a file. Therefore, light refcounts can only created from file descriptors, and not arbitrary file pointers.</p>
+
+
+
+<a name="416571204"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416571204" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416571204">(Jan 18 2024 at 13:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/416089864">said</a>:</p>
+<blockquote>
+<blockquote>
+<p>Note that if the struct files_struct becomes shared during a light refcount, then the requirement that the fd is not closed before the fdput call also applies to the other threads that it was shared with.</p>
+</blockquote>
+<p>I thought we cannot share the files_struct during a light refcount, because we <a href="https://github.com/Rust-for-Linux/linux/blob/rust-next/fs/file.c#L1111">must not clone the task</a>, is there anything I'm missing here? Maybe the comments are out-of-date?</p>
+</blockquote>
+<p>In some sense, what I described was less restrictive than what <code>file.c</code> explains. I'm taking out this paragraph entirely to remove the discrepancy.</p>
+<p>(But we <em>do</em> need to be less restrictive than what <code>file.c</code> with regards to calling <code>filp_close</code>.)</p>
+
+
+
+<a name="416588707"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416588707" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416588707">(Jan 18 2024 at 14:59)</a>:</h4>
+<p>Sent</p>
+
+
+
+<a name="416588908"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416588908" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416588908">(Jan 18 2024 at 15:00)</a>:</h4>
+<p><a href="https://lore.kernel.org/all/20240118-alice-file-v3-0-9694b6f9580c@google.com/">https://lore.kernel.org/all/20240118-alice-file-v3-0-9694b6f9580c@google.com/</a></p>
+
+
+
+<a name="416620534"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416620534" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416620534">(Jan 18 2024 at 17:44)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/288089-General/topic/File.20refcounting/near/416571204">said</a>:</p>
+<blockquote>
+<p>(But we <em>do</em> need to be less restrictive than what <code>file.c</code> with regards to calling <code>filp_close</code>.)</p>
+</blockquote>
+<p>Ah, good point, maybe we better update the comments in <code>__fget_light()</code> in C side as well.</p>
+
+
+
+<a name="416620834"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/File%20refcounting/near/416620834" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/File.20refcounting.html#416620834">(Jan 18 2024 at 17:46)</a>:</h4>
+<p>I included a change on the C side.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

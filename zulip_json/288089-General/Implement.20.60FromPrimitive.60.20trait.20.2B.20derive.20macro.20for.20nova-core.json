@@ -1,0 +1,224 @@
+[
+    {
+        "content": "<p>Hi all,</p>\n<p>I'd like to take on <a href=\"https://github.com/Rust-for-Linux/linux/blob/19272b37aa4f83ca52bdf9c16d5d81bdd1354494/Documentation/gpu/nova/core/todo.rst#fromprimitive-api\">the following task from the nova-core TODO list</a>, if it's open to external contributors:</p>\n<blockquote>\n<p>FromPrimitive API</p>\n<hr>\n<p>Sometimes the need arises to convert a number to a value of an enum or a<br>\nstructure.</p>\n<p>A good example from nova-core would be the <code>Chipset</code> enum type, which defines<br>\nthe value <code>AD102</code>. When probing the GPU the value <code>0x192</code> can be read from a<br>\ncertain register indication the chipset AD102. Hence, the enum value <code>AD102</code><br>\nshould be derived from the number <code>0x192</code>. Currently, nova-core uses a custom<br>\nimplementation (<code>Chipset::from_u32</code> for this.</p>\n<p>Instead, it would be desirable to have something like the <code>FromPrimitive</code><br>\ntrait [1] from the num crate.</p>\n<p>Having this generalization also helps with implementing a generic macro that<br>\nautomatically generates the corresponding mappings between a value and a number.</p>\n</blockquote>\n<p>As far as I can tell from the mailing list, no one is currently working on it.</p>\n<p>Here's what I plan to implement:</p>\n<ol>\n<li>A <code>FromPrimitive</code> trait</li>\n</ol>\n<ul>\n<li>excluding float support for now, since it doesn't seem necessary and can be added later if needed</li>\n</ul>\n<ol start=\"2\">\n<li>A corresponding derive macro</li>\n</ol>\n<ul>\n<li>along with lightweight helpers to parse enums, since it looks like such functionality isn't currently available</li>\n</ul>\n<p>Some design questions I'd like to get feedback on:</p>\n<ul>\n<li>Do we also want a <code>ToPrimitive</code> trait?</li>\n<li>Should the derive macro support single-field tuple structs in addition to enums?</li>\n</ul>\n<p>Open to any thoughts or suggestions. Thanks in advance!</p>",
+        "id": 524335626,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750109008
+    },
+    {
+        "content": "<p>(I briefly moved it to the Nova channel, but I guess the details will apply generally, so I moved it back.)</p>",
+        "id": 524336673,
+        "sender_full_name": "Miguel Ojeda",
+        "timestamp": 1750109572
+    },
+    {
+        "content": "<p>As for float support, we do not use floats in the kernel so do not add that.</p>",
+        "id": 524336864,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1750109698
+    },
+    {
+        "content": "<p>I don't think we need <code>ToPrimitive</code>. After all, for that direction you can use <code>as</code> casts to turn the enum into an integer.</p>",
+        "id": 524336919,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1750109733
+    },
+    {
+        "content": "<p><code>FromPrimitive</code> support would definitely be cool to have, not only for <code>Chipset</code> but also for the many custom types we implement for register fields (see for instance <a href=\"https://github.com/Gnurou/linux/blob/nova-gsp/drivers/gpu/nova-core/falcon.rs\">here</a>). I agree <code>ToPrimitive</code> does not seem necessary. Limiting support to <code>enum</code> types sounds good for now.</p>\n<p>I am not aware of anyone working on this at the moment, so please feel free to give it a go!</p>",
+        "id": 524360938,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1750127140
+    },
+    {
+        "content": "<p>Thanks everyone for the feedback!</p>",
+        "id": 524417968,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750155500
+    },
+    {
+        "content": "<p>By the way, I think it's reasonable for all methods of the <code>FromPrimitive</code> trait to return <code>Option&lt;Self&gt;</code>, so that the trait remains generic and allows users to handle errors in a way that suits their use cases.</p>\n<p>However, adopting this design would require a bit of extra cleanup in <code>nova-core</code>. For example, in <a href=\"https://github.com/Gnurou/linux/blob/eb55a7d4fd780ab1cc770b519b13a1871ce11fa1/drivers/gpu/nova-core/regs.rs#L29-L33\">this code</a>:</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"w\"> </span>    pub(crate) fn architecture(self) -&gt; Result&lt;Architecture&gt; {\n<span class=\"gd\">-        Architecture::try_from(</span>\n<span class=\"gi\">+        Architecture::from_u8(</span>\n<span class=\"w\"> </span>            self.architecture_0() | (self.architecture_1() &lt;&lt; Self::ARCHITECTURE_0.len()),\n<span class=\"gd\">-        )</span>\n<span class=\"gi\">+        ).ok_or(ENODEV)</span>\n<span class=\"w\"> </span>    }\n</code></pre></div>\n<p>If returning <code>Option&lt;Self&gt;</code> sounds reasonable to you as well, and if it feels like an obstacle, I'd be happy to help with the necessary adjustments in <code>nova-core</code> once this patch successfully lands. <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span></p>",
+        "id": 524418026,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750155526
+    },
+    {
+        "content": "<p>Returning <code>Option</code> is fine - each user needs to decide what error they want to return anyway, and they can write a wrapper function if they want to.</p>",
+        "id": 524426598,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1750158605
+    },
+    {
+        "content": "<p>Got it, thanks!</p>",
+        "id": 524427350,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750158856
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"907854\">@Jesung Yang</span> I think <code>ToPrimitive</code> would actually be useful too. We have a case where we have to implement <code>From&lt;$enum&gt; for u32</code> for a couple of enum types in order to be able to feed the type into a macro that expects <code>u32::from()</code>. Please see [1], [2] and [3] for details.</p>\n<p>Link: <a href=\"https://lore.kernel.org/r/20250615-ptr-as-ptr-v12-5-f43b024581e8@gmail.com\">https://lore.kernel.org/r/20250615-ptr-as-ptr-v12-5-f43b024581e8@gmail.com</a> [1]<br>\nLink: <a href=\"https://lore.kernel.org/all/20250624173114.3be38990@canb.auug.org.au/\">https://lore.kernel.org/all/20250624173114.3be38990@canb.auug.org.au/</a> [2]<br>\nLink: <a href=\"https://lore.kernel.org/rust-for-linux/20250624132337.2242-1-dakr@kernel.org/\">https://lore.kernel.org/rust-for-linux/20250624132337.2242-1-dakr@kernel.org/</a> [3]</p>",
+        "id": 525610067,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750807459
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> I see your point, and I'm also happy to work on <code>ToPrimitive</code> as well. Since I've already sent the <code>FromPrimitive</code> patch [1], which is currently waiting for feedback, I can include <code>ToPrimitive</code> along with its derive macro in v2 once I've got some input. Please let me know if you'd prefer a separate patch series dedicated for <code>ToPrimitive</code>.</p>\n<p>[1]: <a href=\"https://lore.kernel.org/rust-for-linux/cover.1750689857.git.y.j3ms.n@gmail.com/\">https://lore.kernel.org/rust-for-linux/cover.1750689857.git.y.j3ms.n@gmail.com/</a></p>",
+        "id": 525617953,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750812776
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"907854\">@Jesung Yang</span> Thanks, I suggest to add it to the end of your existing patch series.</p>",
+        "id": 525660594,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1750840310
+    },
+    {
+        "content": "<p>Looked at the series and tried it, the derive macro worked like a charm!</p>\n<p>I have been thinking a bit about the API though, and whether we want to mimic what userspace does in the kernel or not. Let me elaborate on the list - but for <code>ToPrimitive</code> in particular, I think we really want non-fallible methods that are limited to the types that make sense.</p>",
+        "id": 525704147,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1750855359
+    },
+    {
+        "content": "<p>Glad to here that! I'll keep an eye out for any further comments on the list.</p>",
+        "id": 525716717,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1750859176
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"907854\">@Jesung Yang</span> Looks like we haven't got any more review so far, what do you think about the idea of just making it easier to provide <code>TryFrom</code> implementation for specific integer types?</p>",
+        "id": 527617269,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1751958637
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/stream/288089-General/topic/Implement.20.60FromPrimitive.60.20trait.20.2B.20derive.20macro.20for.20nova-core/near/527617269\">said</a>:</p>\n<blockquote>\n<p>what do you think about the idea of just making it easier to provide <code>TryFrom</code> implementation for specific integer types?</p>\n</blockquote>\n<p>Sounds good to me. I think we need a bit more discussion about the API though.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[derive(TryFrom, Into)]</span>\n<span class=\"cp\">#[try_from(u8, /* and more if needed */)]</span>\n<span class=\"cp\">#[into(u8, /* and more if needed */)]</span>\n<span class=\"cp\">#[repr(u8)]</span><span class=\"w\"> </span><span class=\"c1\">// Defaults to this if the helper attributes are omitted.</span>\n<span class=\"c1\">// Falls back to `isize` if nothing is provided.</span>\n<span class=\"k\">enum</span><span class=\"w\"> </span><span class=\"nc\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">A</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">B</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">7</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Does this direction seem reasonable to you?</p>\n<p>One thing I'm unsure about is the use of the name <code>Into</code> here. It would actually generate <code>impl From&lt;Foo&gt; for u8</code>, since <code>From</code> automatically provides the corresponding <code>Into</code> implementation. So the naming might be slightly misleading at first glance.</p>",
+        "id": 527650074,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1751969752
+    },
+    {
+        "content": "<p>I think the <code>into</code> is appropriate (even if it actually generates a <code>From</code> implementation), and the API you showed looks great to me. I think it fits the needs of the kernel more than `FromPrimitive (because less potential for run-time failure), but I'd like to hear other opinions before we switch away from the latter...</p>",
+        "id": 527696361,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1751982875
+    },
+    {
+        "content": "<p>Hmm... it's been quite a while since the last discussion. Should I take further action to gather more input, or wait a bit longer?</p>",
+        "id": 529809288,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1753087851
+    },
+    {
+        "content": "<p>Sending a new version might be a good way to re-ignite discussion</p>",
+        "id": 529809629,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1753087906
+    },
+    {
+        "content": "<p>Okay, I'll start working on a new version based on the API we've discussed.</p>",
+        "id": 529810620,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1753088067
+    },
+    {
+        "content": "<p>Thanks. Be sure to use your judgment and push back if you see something that wouldn't work down the road - I suggested that with my own use-case in mind, so it might not be able to cover everything</p>",
+        "id": 529810919,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1753088117
+    },
+    {
+        "content": "<p>Hi everyone,</p>\n<p>I would just like to bring some attention to the series submitted by <span class=\"user-mention\" data-user-id=\"907854\">@Jesung Yang</span> some time ago:</p>\n<p><a href=\"https://lore.kernel.org/rust-for-linux/cover.1755235180.git.y.j3ms.n@gmail.com/\">https://lore.kernel.org/rust-for-linux/cover.1755235180.git.y.j3ms.n@gmail.com/</a></p>\n<p>It is super handy to have in Nova (and I believe in the kernel in general), but has yet to get some feedback. I will do my best to educate myself on proc-macros and provide a review, but if someone with the required knowledge would want to take a look at it, that's obviously better! :)</p>",
+        "id": 536539413,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1756362964
+    },
+    {
+        "content": "<p>Thanks for bringing this up again! If anyone has time for a review, I'm happy to work on any feedback that comes up. :)</p>",
+        "id": 536590537,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1756382577
+    },
+    {
+        "content": "<p>Hi! I hope it’s okay to ask — I just wanted to check on this series [1]. I noticed it wasn’t in the v6.18 update [2], and was wondering what the current plan is for it. Thanks!</p>\n<p>[1]: <a href=\"https://lore.kernel.org/rust-for-linux/cover.1755235180.git.y.j3ms.n@gmail.com/\">https://lore.kernel.org/rust-for-linux/cover.1755235180.git.y.j3ms.n@gmail.com/</a><br>\n[2]: <a href=\"https://lore.kernel.org/rust-for-linux/20250928173541.229298-1-ojeda@kernel.org/\">https://lore.kernel.org/rust-for-linux/20250928173541.229298-1-ojeda@kernel.org/</a></p>",
+        "id": 541971389,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1759134631
+    },
+    {
+        "content": "<p>I was just about to ask too! We could make another use of it in the patch series that extracts the bitfield logic from the register macro</p>",
+        "id": 541971854,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1759134772
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"890884\">@Alexandre Courbot</span>, could you take a look at [1] when you have a moment? It's about enabling error customization for the <code>TryFrom</code> derive macro, which I think is needed by Nova and serves as a nice generalization. I'd appreciate your opinion on this before I proceed :)</p>\n<p>[1] <a href=\"https://lore.kernel.org/rust-for-linux/DG7C1LYQ4SOQ.1HBJ8WH923JHW@gmail.com/\">https://lore.kernel.org/rust-for-linux/DG7C1LYQ4SOQ.1HBJ8WH923JHW@gmail.com/</a></p>",
+        "id": 573429882,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1770867836
+    },
+    {
+        "content": "<p>Whoops, absolutely! Thanks for grabbing my attention on this, I definitely will want to think about it.</p>\n<p>Things have moved on little bit with the way registers and I/O are working, so let me check whether the problem is still relevant first - although I guess it will be to some degree.</p>",
+        "id": 573536012,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1770906473
+    },
+    {
+        "content": "<p>Sent a reply. It may sound a bit inconclusive, so maybe we can discuss whether we want to keep <code>EINVAL</code> or introduce a single-value error type here. I think I would be fine with either way.</p>",
+        "id": 574206052,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1771293411
+    },
+    {
+        "content": "<p>Given <code>EINVAL</code>'s conventional meaning, I think it should cover general use cases, including Nova and future users. A single-value error type could be an option, but I'm hesitant to introduce a new error type just for <code>TryFrom</code> if we can avoid it.</p>\n<p>Cc: <span class=\"user-mention\" data-user-id=\"612003\">@Charalampos Mitrodimas</span> (for visibility)</p>",
+        "id": 574696164,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1771497740
+    },
+    {
+        "content": "<p>I think that's reasonable. I'll try to update Nova with your v5 to get a feel and report if anything feels off.</p>",
+        "id": 574696532,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1771497853
+    },
+    {
+        "content": "<p>Thanks for pinging <span class=\"user-mention\" data-user-id=\"907854\">@Jesung Yang</span> , I'll keep an eye out. Seems reasonable to me also.</p>",
+        "id": 574699454,
+        "sender_full_name": "Charalampos Mitrodimas",
+        "timestamp": 1771498761
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"890884\">Alexandre Courbot</span> <a href=\"#narrow/channel/288089-General/topic/Implement.20.60FromPrimitive.60.20trait.20.2B.20derive.20macro.20for.20nova-core/near/574696532\">said</a>:</p>\n<blockquote>\n<p>I think that's reasonable. I'll try to update Nova with your v5 to get a feel and report if anything feels off.</p>\n</blockquote>\n<p>Thanks! If you haven't had a chance to look at the cover letter yet, there are still a few unsettled design decisions left. It would help a lot if you could leave some comments from a user's perspective.</p>",
+        "id": 574700195,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1771498998
+    },
+    {
+        "content": "<p>Yup! I've been looking forward to using this feature. <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span> Thanks for the hard work so far!</p>",
+        "id": 574704438,
+        "sender_full_name": "Alexandre Courbot",
+        "timestamp": 1771500422
+    },
+    {
+        "content": "<p>My pleasure :)</p>",
+        "id": 574708149,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1771501832
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"546447\">@Benno Lossin</span>, could you take a look at [1] when you get a chance? It's a revision of the <code>Into</code> and <code>TryFrom</code> derive macros. The cover letter highlights how I addressed your feedback, so you might find it useful. Thanks!</p>\n<p>[1] <a href=\"https://lore.kernel.org/rust-for-linux/20260129-try-from-into-macro-v5-0-dd011008118c@gmail.com/\">https://lore.kernel.org/rust-for-linux/20260129-try-from-into-macro-v5-0-dd011008118c@gmail.com/</a></p>",
+        "id": 580617720,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1774001321
+    },
+    {
+        "content": "<p>I still have it on my too-long todo list, sorry I'll try to take a look next week</p>",
+        "id": 580623455,
+        "sender_full_name": "Benno Lossin",
+        "timestamp": 1774003045
+    },
+    {
+        "content": "<p>No worries :)</p>",
+        "id": 580628740,
+        "sender_full_name": "Jesung Yang",
+        "timestamp": 1774004531
+    }
+]

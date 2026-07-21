@@ -1,0 +1,662 @@
+[
+    {
+        "content": "<p>So - now that I'm finally at a point where all of the dependencies for rvkms are waiting for review on the mailing list, I've started rebasing rvkms back onto the more recent DRM work and I ran into an issue that had slipped my mind.<br>\nA while back we tried having users only create <code>Registration</code> objects for new DRM drivers, and then acquire the actual DRM <code>Device</code> from that. We ended up changing this for Tyr but, unfortunately the current solution that we have doesn't work for rvkms (or any KMS driver) without changing it.<br>\nThe main one being the ordering of when registration happens. Currently, the whole set of KMS bindings that I have for rust rely on the assumption that we will never get a fully fledged <code>Device</code> until the KMS initialization has completed, which we can't guarantee at all if there's a split between device creation and device registration - since the user would have access to a <code>Device</code> well before KMS initialization finished. Checking if KMS init at runtime would be a really ugly fix I'm not really willing to do, because \"calling a KMS function too early\" doesn't really have a reasonable recovery path in a driver. And then there's the issue of: if <code>Device</code> is our default device type, and we already have plenty of object types that can return references to their owning devices (like GEM objects), any of those objects can also be used to retrieve a <code>Device</code> and call KMS methods on it before KMS has been setup.<br>\nSo - I'd really like to again propose the idea of not exposing <code>Device</code> before registration finishes, and instead come up with a pre-registration type that could be used for various pre-registration init purposes (like creating the gem objects that Tyr needs early on, though I do really wish we could create these outside of gem). And I'd definitely like to some feedback here.</p>\n<p>My main goals:</p>\n<ul>\n<li>Keep having a <code>Device</code> type, but make it so that this type is <em>only</em> ever exposed in contexts where we're fully registered, and then design pre-reg <code>De vice</code> types</li>\n<li>Not breaking Tyr's usecase for early gem object creation</li>\n<li>Not handling this in reverse. E.g. I would strongly like to avoid a <code>RegisteredDevice</code> type, because it is a lot easier to define the surface for a restricted <code>Device </code> variant then it is to assume our default <code>Device</code> type might not even be registered yet. Remember: there's a lot of types in DRM that can (and need to) return backpointers to their owning device, and we want to avoid making all of those backpointers return what might not be a registered device since that means the caller can never use those backpointers without having to check the registration state at runtime. And we should probably be designing bindings around registered drivers in the first place.</li>\n</ul>\n<p>The one idea I've had so far is adding a sort of \"UnregisteredDevice\" type, and then adding traits for the various capabilities that we need before registration. For instance: <code>GemDevice</code> could represent any type that can return a <code>drm_device</code> pointer and is known to be in a state where it can create gem objects. We could also add a type market to gem objects that indicates what type of device was used for creating the device and have it default to <code>Device</code> so that users don't need to check registration status outside of gem objects they created before registration.</p>",
+        "id": 547794571,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761765190
+    },
+    {
+        "content": "<p>Also since I forgot: <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> ^</p>",
+        "id": 547794694,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761765232
+    },
+    {
+        "content": "<p>That sounds good, I already had a patch for exactly this, but before I reworked <code>drm::Device</code> to the subclassing pattern.</p>\n<p>With the subclassing pattern it becomes slightly more complicated, because we now have to track whether we have to call <code>drop()</code> for <code>drm::Device::data</code> in the <code>release()</code> callback.</p>",
+        "id": 547810195,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761771365
+    },
+    {
+        "content": "<p>I assume you will pick this work up, Lyude?</p>",
+        "id": 547810309,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761771414
+    },
+    {
+        "content": "<p>yeah I'm happy to!</p>",
+        "id": 547812207,
+        "sender_full_name": "Lyude",
+        "timestamp": 1761772045
+    },
+    {
+        "content": "<p>Great, thanks for doing this!</p>",
+        "id": 547813686,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1761772562
+    },
+    {
+        "content": "<p>I thought I didn't like the <code>DeviceCtx</code> solution that <code>kernel::device::Device</code> had when I first saw it a little while ago, but actually it's incredible and ended up being the basis for how I was able to come up with a solution to this problem that I think I'm extremely happy with :).</p>",
+        "id": 554188140,
+        "sender_full_name": "Lyude",
+        "timestamp": 1762462571
+    },
+    {
+        "content": "<p><a href=\"https://gitlab.freedesktop.org/lyudess/linux/-/commit/3e61960c7d2bd10ba84e6cad4c1b9e45a157d14b\">https://gitlab.freedesktop.org/lyudess/linux/-/commit/3e61960c7d2bd10ba84e6cad4c1b9e45a157d14b</a> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> if you two are curious btw<br>\nThe idea is pretty much the same as <code>DeviceCtx</code>: we introduce a type parameter representing the registration state of the device and then generalize any DRM objects that can exist before registration over said parameter. So like:</p>\n<p><code>drm::Device&lt;T&gt;</code> -&gt; <code>drm::Device&lt;T, R: RegistrationCtx = Registered&gt;</code><br>\n<code>drm::gem::Object&lt;T&gt;</code> -&gt; <code>drm::gem::Object&lt;T, R: RegistrationCtx = Registered&gt;</code></p>\n<p>etc.</p>\n<p>You can even take references to a device before it's registered! Though, all such references will be <code>drm::Device&lt;T, Any&gt;</code></p>",
+        "id": 554194715,
+        "sender_full_name": "Lyude",
+        "timestamp": 1762465320
+    },
+    {
+        "content": "<p>JFYI: Will be sending out another vesion of the patch series for this in the future, I had to make a few changes to get this working with RVKMS:</p>\n<ul>\n<li>We have 3 <code>DeviceCtx</code> now:<ul>\n<li><code>Uninitialized</code> (for very limited use in driver methods that have to be called before the device struct is fully initialized)</li>\n<li><code>Initialized</code>. <code>Device</code> is fully initialized but not guaranteed to be registered with userspace.</li>\n<li><code>Registered</code>.  <code>Device</code> is fully initialized and guaranteed to have been registered with userspace once.</li>\n</ul>\n</li>\n<li>No more <code>KmsDriver::create_objects()</code>, <code>UnregisteredDevice</code> can now be used for this<br>\nI think I'm quite happy with how this is working :).</li>\n</ul>",
+        "id": 555679300,
+        "sender_full_name": "Lyude",
+        "timestamp": 1763155081
+    },
+    {
+        "content": "<p><a href=\"https://lore.kernel.org/rust-for-linux/20251107193204.398657-1-lyude@redhat.com/\">https://lore.kernel.org/rust-for-linux/20251107193204.398657-1-lyude@redhat.com/</a> </p>\n<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> That's the latest version, right?</p>",
+        "id": 564498552,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1766073595
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> yeah, but I'm going to be rebasing rvkms and seeing how the design actually works out there before sending another version</p>",
+        "id": 564498813,
+        "sender_full_name": "Lyude",
+        "timestamp": 1766073646
+    },
+    {
+        "content": "<p>Just since I really want to make sure I get this bit right for KMS</p>",
+        "id": 564498904,
+        "sender_full_name": "Lyude",
+        "timestamp": 1766073664
+    },
+    {
+        "content": "<p>I think there will likely be three device contexts in the end, with one of them only being available in driver callbacks that are called before handing a <code>Device</code> back from <code>Device::new</code></p>",
+        "id": 564499171,
+        "sender_full_name": "Lyude",
+        "timestamp": 1766073728
+    },
+    {
+        "content": "<p>Hi! So danilo asked if I could handle getting back to work on this, I thought that I might need to implement this in rvkms to figure out the right way of doing this (so we don't need to rework everything for KMS). But it looks like what I really needed was just a vacation because I think I've got a much clearer idea of how to do this now that I've come back. my notes:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">Uninit</span><span class=\"w\"> </span><span class=\"err\">→</span><span class=\"w\"> </span><span class=\"n\">Initialized</span><span class=\"w\"> </span><span class=\"err\">→</span><span class=\"w\"> </span><span class=\"n\">Registered</span>\n\n<span class=\"n\">Uninit</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">No</span><span class=\"w\"> </span><span class=\"n\">KMS</span><span class=\"w\"> </span><span class=\"n\">operations</span>\n<span class=\"w\">        </span><span class=\"n\">No</span><span class=\"w\"> </span><span class=\"n\">device</span><span class=\"w\"> </span><span class=\"n\">data</span>\n<span class=\"n\">Init</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Device</span><span class=\"w\"> </span><span class=\"n\">data</span><span class=\"w\"> </span><span class=\"n\">present</span>\n<span class=\"w\">      </span><span class=\"n\">KMS</span><span class=\"w\"> </span><span class=\"n\">operations</span><span class=\"w\"> </span><span class=\"n\">allowed</span>\n<span class=\"n\">Registered</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Nothing</span><span class=\"w\"> </span><span class=\"n\">specific</span><span class=\"w\"> </span><span class=\"n\">yet</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">maybe</span><span class=\"w\"> </span><span class=\"n\">omit</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">now</span><span class=\"o\">?</span>\n\n<span class=\"n\">Context</span><span class=\"o\">-</span><span class=\"n\">specific</span><span class=\"w\"> </span><span class=\"n\">types</span><span class=\"p\">:</span>\n<span class=\"w\">  </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">UninitializedKmsDevice</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Uninit</span><span class=\"o\">&gt;</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">UninitializedDevice</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Uninit</span><span class=\"o\">&gt;</span><span class=\"p\">)</span>\n\n<span class=\"p\">(</span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">callback</span><span class=\"w\"> </span><span class=\"n\">that</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">performed</span><span class=\"w\"> </span><span class=\"n\">before</span><span class=\"w\"> </span><span class=\"n\">returning</span><span class=\"p\">)</span>\n\n<span class=\"n\">Device</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">()</span>\n<span class=\"w\">  </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">Kms</span><span class=\"p\">::</span><span class=\"n\">probe</span><span class=\"p\">(</span><span class=\"n\">d</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">UninitializedKmsDevice</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">SomeDriverArgType</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// setup various modesetting objects</span>\n<span class=\"w\">  </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">UninitializedDevice</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n<span class=\"n\">Registration</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">d</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">InitializedDevice</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">CustomDriverArgType</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">Kms</span><span class=\"p\">::</span><span class=\"n\">atomic_init</span><span class=\"p\">(</span><span class=\"n\">d</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Init</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\">// Setup initial atomic display state[1]</span>\n<span class=\"w\">  </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">Registration</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span>\n\n<span class=\"p\">[</span><span class=\"mi\">1</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"n\">This</span><span class=\"w\"> </span><span class=\"n\">likely</span><span class=\"w\"> </span><span class=\"n\">won</span><span class=\"o\">'</span><span class=\"na\">t</span><span class=\"w\"> </span><span class=\"n\">be</span><span class=\"w\"> </span><span class=\"n\">added</span><span class=\"w\"> </span><span class=\"n\">right</span><span class=\"w\"> </span><span class=\"n\">away</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"n\">we</span><span class=\"o\">'</span><span class=\"na\">ll</span><span class=\"w\"> </span><span class=\"n\">hard</span><span class=\"o\">-</span><span class=\"n\">code</span><span class=\"w\"> </span><span class=\"n\">resetting</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">atomic</span><span class=\"w\"> </span><span class=\"n\">display</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">now</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">but</span><span class=\"w\"> </span><span class=\"n\">still</span><span class=\"w\"> </span><span class=\"n\">important</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">keep</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">mind</span>\n</code></pre></div>",
+        "id": 568088194,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428205
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span>  Maybe this is about KMS specifics, but as we discussed today we need the Registered state to pass the DRM device private data in the register() call rather then on creation of the DRM device.</p>",
+        "id": 568088673,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768428392
+    },
+    {
+        "content": "<p>I think for the time being we are better off focusing on Uninit/Init rather than device registration. While the latter is important, KMS callbacks are unfortunately a bit less lucky then GEM's in that it's perfectly normal for them to be called before device registration - and presumably we actually do want access to the device data by that point so that KMS callbacks can always rely on having access to it. I assume we'll probably need <code>Registered</code> for something or other eventually, but for now it may just make sense to omit it.</p>",
+        "id": 568088700,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428402
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568088673\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span>  Maybe this is about KMS specifics, but as we discussed today we need the Registered state to pass the DRM device private data in the register() call rather then on creation of the DRM device.</p>\n</blockquote>\n<p>Yeah that's what we're doing here, Registration::new() would be expected to take the device data as an argument</p>",
+        "id": 568088786,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428432
+    },
+    {
+        "content": "<p>Cool, but then we need Device&lt;Registered&gt; as a type, which has the dereference to the private data.</p>",
+        "id": 568088879,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768428478
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> so, the slightly non-obvious thing here: Device&lt;Init&gt; would actually be the first one with access to the device data. Because I realized KMS is gong to need access to it pre-user registration. It's just you don't get Device&lt;Init&gt; from anywhere except callbacks invoked by Registration::new(), and Registration::new() itself would return Device&lt;Registered&gt; (which would also be able to access the user data).</p>",
+        "id": 568089136,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428584
+    },
+    {
+        "content": "<p>The reason I think it needs to be this way is because there's still an order of operations we have to maintain for driver registration, and at least for KMS two of those requirements are:</p>\n<ul>\n<li>Don't allow modesets before we finished creating all of the modesetting resources (CRTCs, connectors, etc.)</li>\n<li>Require a Device ensure it's atomic state is \"ready\" before allowing modesets, but after we can access the private device data (because ensuring the state is ready may actually involve needing to perform a modeset, which means all of the modesetting callbacks get called and we probably want access to the device data by that point)</li>\n</ul>",
+        "id": 568089543,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428750
+    },
+    {
+        "content": "<p>And this would still allow us to create gem objects in the same way we would pre-registration with just <code>Uninit/Registered</code>, so tyr could still create the gem objects it needs before registration and private device data availability</p>",
+        "id": 568089731,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768428829
+    },
+    {
+        "content": "<p>Ok, can you please split this up in two (or more) separate patches, where the first one only implements the registration / private data dance and types and then built KMS type states on top?</p>",
+        "id": 568094319,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768430969
+    },
+    {
+        "content": "<p>Oh yeah - the only thing that's going to be in the actual patches is just the devicectx stuff and unregistereddevice</p>",
+        "id": 568094946,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768431364
+    },
+    {
+        "content": "<p>The Kms mentions are mostly for my own notes and just knowing how KMS will eventually fit in with this</p>",
+        "id": 568095118,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768431468
+    },
+    {
+        "content": "<p>I assume you mean just Device and Device&lt;Registered&gt;? I don't think we need a UnregisteredDevice type.</p>\n<p>NIT: Let's be consistent with driver-core infrastructure and name it DeviceContext. :)</p>",
+        "id": 568095176,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768431480
+    },
+    {
+        "content": "<p>We do need the UninitializedDevice type because the type itself acts as a token that gets consumed by Registration::new</p>",
+        "id": 568095271,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768431533
+    },
+    {
+        "content": "<p>@Lyude so we would get a Device&lt;Init&gt; before registration, or UnregisteredDevice?</p>",
+        "id": 568095523,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1768431648
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568095523\">said</a>:</p>\n<blockquote>\n<p>@Lyude so we would get a Device&lt;Init&gt; before registration, or UnregisteredDevice?</p>\n</blockquote>\n<p>UninitializedDevice, but that would implement Deref&lt;Device&lt;T, Uninit&gt;&gt;. I'm realizing though Danilo is also right in that we can probably just have <code>Uninit</code>, and <code>Registered</code> for now since <code>Init</code> sits between <code>Uninit</code> and <code>Registered</code>, and is only really needed right now for KMS callbacks.</p>",
+        "id": 568095947,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768431899
+    },
+    {
+        "content": "<p>Device is drm::Device, right? Why do we need both UninitializedDevice and Device&lt;T, Uninit&gt;?</p>",
+        "id": 568096907,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1768432478
+    },
+    {
+        "content": "<p>Yes. And there's a few reasons but the relevant one: - <code>&amp;Device&lt;T, Uninit&gt;</code> just means that the device wasn't initialized or registered at the time the reference was taken. A <code>&amp;Device&lt;T, Uninit&gt;</code> could therefore be registered, which means we can't safely pass it to <code>Registration::new()</code> since registration can only happen once, and we also can't safely expose methods on it that could only be called before device registration for the same reason (which I assume we will probably want at some point).</p>",
+        "id": 568097663,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768432910
+    },
+    {
+        "content": "<p><code>UninitializedDevice</code> would also be <code>!Send</code> as well</p>",
+        "id": 568097767,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768432983
+    },
+    {
+        "content": "<p>Hm. So, the one thing I'm still working out is how to check on device drop whether or not we've initialized the driver private data - because it's possible for initializing the private data to fail in Register::new(), so the main <code>Device</code> needs to at least be aware of when it should/shouldn't drop it.<br>\nCurrently my solution is very simple:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">drm</span><span class=\"p\">::</span><span class=\"n\">Driver</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">C</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">DeviceContext</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">Registered</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Opaque</span><span class=\"o\">&lt;</span><span class=\"n\">bindings</span><span class=\"p\">::</span><span class=\"n\">drm_device</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">data_is_init</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">UnsafeCell</span><span class=\"o\">&lt;</span><span class=\"kt\">bool</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">MaybeUninit</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">::</span><span class=\"n\">Data</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">_ctx</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PhantomData</span><span class=\"o\">&lt;</span><span class=\"n\">C</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Where the idea is that <code>data_is_init</code> is only written to from one call-site, <code>Register::new()</code>, and is only read-back from a single call-site, <code>::Drop()</code>. Is there a cleaner way I could do this?</p>",
+        "id": 568304896,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768508720
+    },
+    {
+        "content": "<p>Could you swap out the drop function in the vtable?</p>",
+        "id": 568372292,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768548690
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568372292\">said</a>:</p>\n<blockquote>\n<p>Could you swap out the drop function in the vtable?</p>\n</blockquote>\n<p>No unfortunately, since our VTABLE is a const and I'm pretty sure we want to keep it const iirc</p>",
+        "id": 568486266,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768584383
+    },
+    {
+        "content": "<p>Is the device not being teared down in the failing path?</p>",
+        "id": 568487637,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768584790
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568487637\">said</a>:</p>\n<blockquote>\n<p>Is the device not being teared down in the failing path?</p>\n</blockquote>\n<p>It is (assuming all references to it have been dropped</p>",
+        "id": 568487729,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768584826
+    },
+    {
+        "content": "<p>oops, sorry i hit enter too early</p>",
+        "id": 568487755,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768584833
+    },
+    {
+        "content": "<p>It is assuming all references are dropped, but the main problem we're trying to solve here is that we're making it so that device data isn't available before registration - since drivers like Tyr need to be able to use the DRM device itself in order to construct some of the GEM objects they store in the driver private data</p>",
+        "id": 568487882,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768584877
+    },
+    {
+        "content": "<p>Which means that if we drop the device we need to know whether or not we got far enough that we initialized the private driver data so we can choose whether or not we need to tear it down in the drop path (or <code>Device::release()</code>, since that's what gets called on the last <code>drm_dev_put()</code>)</p>",
+        "id": 568488066,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768584946
+    },
+    {
+        "content": "<p>Okay, I see, so the additional refcnt can be already taken before data is initialized, and the cleanup is done by devres</p>",
+        "id": 568492173,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768586243
+    },
+    {
+        "content": "<p>In that case dynamic tracking would be necessary</p>",
+        "id": 568492217,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1768586253
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/568487637\">said</a>:</p>\n<blockquote>\n<p>Is the device not being teared down in the failing path?</p>\n</blockquote>\n<p>(Just to clarify, the term \"device teardown\" usually refers to the process of unbinding a bus device from a driver, while the reference count dropping to zero is referred to as \"device release\".)</p>\n<p>Of course, in this case there is no ambiguity anyways, since DRM is class device. :)</p>",
+        "id": 568492272,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768586270
+    },
+    {
+        "content": "<p>Regarding the cleanup question, I think we have to track the state unfortunately. Maybe we can make it a bit cleaner by encapsulating the tuple in a new type, but that's not adding a lot of value either I guess.</p>",
+        "id": 568492537,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768586353
+    },
+    {
+        "content": "<p>Gotcha - in that case I'm fine with this solution then ^^</p>",
+        "id": 568492609,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768586377
+    },
+    {
+        "content": "<p>could we swap out the entire vtable?</p>",
+        "id": 568499981,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1768588764
+    },
+    {
+        "content": "<p>As long as we ensure that the contents (except for the release callback) are exactly the same and we ensure proper memory barriers, that should work as well. But a simple atomic is probably easier. Size wise it doesn't matter, DRM device instances are huge structures anyways.</p>",
+        "id": 568502306,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1768589588
+    },
+    {
+        "content": "<p>ah right, I forgot about atomics. I can just switch it to <code>AtomicBool</code> then</p>",
+        "id": 568503068,
+        "sender_full_name": "Lyude",
+        "timestamp": 1768589832
+    },
+    {
+        "content": "<p>Hi Lyude, I saw your work on Rust-based DRM/KMS. I used to work on DC driver development in C (DRM/KMS) and am now shifting my work to Rust. I'm really interested in your progress.<br>\nWhere does it stand now? Is it in early stages or already functional? Would you mind if I join in to learn and help? I’m happy to start with small tasks or tests.</p>",
+        "id": 570548239,
+        "sender_full_name": "pengfuyuan",
+        "timestamp": 1769604741
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"949180\">pengfuyuan</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/570548239\">said</a>:</p>\n<blockquote>\n<p>Hi Lyude, I saw your work on Rust-based DRM/KMS. I used to work on DC driver development in C (DRM/KMS) and am now shifting my work to Rust. I'm really interested in your progress.<br>\nWhere does it stand now? Is it in early stages or already functional? Would you mind if I join in to learn and help? I’m happy to start with small tasks or tests.</p>\n</blockquote>\n<p>Right now it's in very early stages, and a bit out of date. Atm rvkms only really creates a device and then emulates vblanking with an hr timer. A lot of time has gotten spent just trying to push dependencies through, and there's likely going to still be design work to do when I actually start writing nova's display driver.</p>\n<p>This being said though, is AMD planning on moving away from DC or the like? My main worry would be trying to adapt DC to work with rust might run into a lot of friction considering we're really a lot stricter about correctness with rust then with C, and a really big goal right now is not to compromise that</p>",
+        "id": 570869056,
+        "sender_full_name": "Lyude",
+        "timestamp": 1769711573
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"670868\">@Dave Airlie</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>  btw, any thoughts on this?<br>\nTo be clear- I'm always down for more help. It's just my main concern is with how outside contributions are handled for DC and how flexible DC will be design-wise if it hits friction against how DRM works. But, maybe with nova this isn't as much of a concern?</p>",
+        "id": 570872213,
+        "sender_full_name": "Lyude",
+        "timestamp": 1769712735
+    },
+    {
+        "content": "<p>I'm fairly certain too DC would need to be rewritten in rust at a minimum?</p>",
+        "id": 570872761,
+        "sender_full_name": "Lyude",
+        "timestamp": 1769712942
+    },
+    {
+        "content": "<p>I think splitting a driver in a C and in a Rust part is calling for trouble.</p>",
+        "id": 570885459,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769717126
+    },
+    {
+        "content": "<p>We had the discussion with Panthor / Tyr in the beginning, and my position has always been that it would lead to fragmentation of the DRM core infrastructure in Rust as we would need to provide C interfaces at more or less arbitrary boundaries.</p>",
+        "id": 570886140,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769717359
+    },
+    {
+        "content": "<p>I.e. we'd probably need to make compromises feature wise to stay compatible with a C API, duplicate code, etc.</p>",
+        "id": 570886389,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769717442
+    },
+    {
+        "content": "<p>It would be different if it would be actual separate drivers connected only by the driver core, e.g. through the auxiliary bus, since then the API between the C and Rust driver is purely between the two drivers without any subsystem involvement.</p>",
+        "id": 570886897,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769717650
+    },
+    {
+        "content": "<p>But maybe I'm not getting the idea right, but AFAIK DC is essentially part of AMDGPU.</p>",
+        "id": 570887404,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1769717834
+    },
+    {
+        "content": "<p>btw <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> - do we want to try to get the device context fixes in for v7.0? or just hold off until 7.1</p>",
+        "id": 580299015,
+        "sender_full_name": "Lyude",
+        "timestamp": 1773871839
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span> Will take a look tomorrow or over the weekend, thanks!</p>",
+        "id": 580512230,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1773947769
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> been thinking about it and yeah - I definitely think we could remodel the device contexts to be <code>Uninit</code>, <code>Normal</code>, <code>Registered</code> if we only implement <code>AlwaysReferenceCounted</code> for the first two typestates (taking ARefs to <code>Registered</code> can't be allowed because we can't make guarantee that a <code>ARef&lt;Device&lt;_, Registered&gt;&gt;</code> remains registered for its lifetime, but we can do that for plain old references).<br>\nIs this something we'd want sooner or later? (Mostly asking since it would probably be good for me to make sure the KMS work is rebased on top of changes to be made here)</p>",
+        "id": 603500283,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781557031
+    },
+    {
+        "content": "<p>yeah - actually I think I might submit something sooner then later, since doing this now will prevent me from having to also pass through the <code>DeviceContext</code> to stuff like <code>Crtc</code></p>",
+        "id": 603889557,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781637168
+    },
+    {
+        "content": "<p>(which will make rebasing go faster)</p>",
+        "id": 603906581,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781641367
+    },
+    {
+        "content": "<p>I think we should only have an ARef impl for <code>drm::Device&lt;Normal&gt;</code>, what would we need the <code>Uninit</code>type state for? So far, if it does not hold the invariant that it is registered there's no different between <code>Uninit</code> and <code>Normal</code>. So I assume you want it for something in KMS?</p>",
+        "id": 603933807,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1781648677
+    },
+    {
+        "content": "<p>Yeah - it's so we have access to the <code>Device</code> during the various KMS setup callbacks which happen before returning the <code>UnregisteredDevice</code>.</p>",
+        "id": 603934051,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781648760
+    },
+    {
+        "content": "<p>So it should only really appear in a handful of places</p>",
+        "id": 603934114,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781648775
+    },
+    {
+        "content": "<p>And agree d- I also think ARef for Normal only is a good idea</p>",
+        "id": 603934322,
+        "sender_full_name": "Lyude",
+        "timestamp": 1781648836
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <a href=\"https://lore.kernel.org/rust-for-linux/20260620184924.2247517-1-dakr@kernel.org/#r\">[PATCH v4 00/16] rust: drm: Higher-Ranked Lifetime private data</a> is working well for Tyr. But it's causing conflicts with patches from <span class=\"user-mention\" data-user-id=\"690399\">@Lyude</span>  that are already in <code>drm-rust-next</code>. How will those conflicts be resolved?  Specifically these patches conflict:</p>\n<ul>\n<li>rust: drm: gem: shmem: Add vmap functions</li>\n<li>rust: drm: gem: shmem: Add DmaResvGuard helper</li>\n<li>rust: drm: gem: shmem: Fix Default implementation for ObjectConfig</li>\n</ul>",
+        "id": 606326109,
+        "sender_full_name": "Deborah Brouwer",
+        "timestamp": 1782328147
+    },
+    {
+        "content": "<p>FWIW I am sending out a follow-up patch for the DeviceContext stuff, and that is currently based off a rebase of Danilo's patch series against drm-rust-next</p>",
+        "id": 606326317,
+        "sender_full_name": "Lyude",
+        "timestamp": 1782328217
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/606326317\">said</a>:</p>\n<blockquote>\n<p>FWIW I am sending out a follow-up patch for the DeviceContext stuff, and that is currently based off a rebase of Danilo's patch series against drm-rust-next</p>\n</blockquote>\n<p>Ah yeah that's what i was wondering, great <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 606326755,
+        "sender_full_name": "Deborah Brouwer",
+        "timestamp": 1782328376
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"981233\">@Deborah Brouwer</span> Yeah, I'm aware of those, I will resolve them once I have the prerequisite series landed.</p>",
+        "id": 606326887,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1782328417
+    },
+    {
+        "content": "<p>yeah - though I mostly mentioned that in case you wanted a version of the series that doesn't have conflicts. it sounds like Danilo will be able to handle the conflicts though</p>",
+        "id": 606326934,
+        "sender_full_name": "Lyude",
+        "timestamp": 1782328436
+    },
+    {
+        "content": "<p>Hey, quick question <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span>  - was wondering if you might be able to help me understand why we added lifetime parameters to both <code>Core</code> and <code>CoreInternal</code> <code>DeviceContext</code>s?<br>\nNow that I'm back on rebasing rvkms, one of the things I'm doing is removing <code>UnregisteredKmsDevice</code> and just using <code>DeviceContext</code>, and adding a <code>Early</code> and <code>KmsProbe</code> context. I'm mainly wondering if we would want to add a lifetime parameter to the <code>KmsProbe</code> context since we'd only be using it for a single KMS callback once</p>",
+        "id": 609952092,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783971213
+    },
+    {
+        "content": "<p>Core derefs to Bound, but it lives shorter than it. So <code>&amp;'bound Device&lt;Core&lt;'core&gt;&gt;</code> is bound for <code>'bound</code> but it only has the device mutex taken for <code>'core</code></p>",
+        "id": 609952374,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783971327
+    },
+    {
+        "content": "<p>ahhh, so that's the reason for it. gotcha</p>",
+        "id": 609952432,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783971348
+    },
+    {
+        "content": "<p>Actually now you mentioned it, this might be unsound as well, because the implied bound would be <code>'core: 'bound</code> which isn't correct</p>",
+        "id": 609952735,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783971452
+    },
+    {
+        "content": "<p>hehe</p>",
+        "id": 609952764,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783971471
+    },
+    {
+        "content": "<p>We can probably fix this by making the lifetime on <code>Core</code> invariant, so it's just a marker of \"arbitrary lifetime\" and the code inside <code>probe</code> cannot cast and store it. Although this doesn't change that <code>'core: 'bound</code></p>",
+        "id": 609953504,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783971748
+    },
+    {
+        "content": "<p>It might be the case that <code>DeviceCtx</code> should be better represented by wrapper type instead of generics.</p>",
+        "id": 609954126,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972006
+    },
+    {
+        "content": "<p>E.g. <code>Bound&lt;Device&gt;</code> where <code>Bound</code> is a special <code>ARef</code> and <code>Core&lt;Device&gt;</code> where <code>Core</code> is somewhat similar to mutex guard.</p>",
+        "id": 609954228,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972033
+    },
+    {
+        "content": "<p>Do you mean the kernel's core devicecontext or DRM's?</p>",
+        "id": 609954247,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783972040
+    },
+    {
+        "content": "<p>ah the kernel core's</p>",
+        "id": 609954274,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783972056
+    },
+    {
+        "content": "<p>It kinda can do both. <code>Bound&lt;Foo&gt;</code> can be used for any foo, and it just means <code>Foo</code> but with special annotation that it is bound.</p>",
+        "id": 609954410,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972116
+    },
+    {
+        "content": "<p>I mean TBH - at least from DRM's side I do kind of like using generics for this over extra types, and only really using new types where needed (such as UnregisteredDevice) if only because it makes it a lot easier to share functionality between contexts</p>",
+        "id": 609954759,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783972252
+    },
+    {
+        "content": "<p>Possibly. You can still use deref chain for wrapper types, but it might indeed be difficult to write generics that turn one type with a specific context to different one with the same context</p>",
+        "id": 609955080,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972380
+    },
+    {
+        "content": "<p>Especially that arbitrary self type cannot be generic</p>",
+        "id": 609955249,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972456
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609953504\">said</a>:</p>\n<blockquote>\n<p>We can probably fix this by making the lifetime on <code>Core</code> invariant, so it's just a marker of \"arbitrary lifetime\" and the code inside <code>probe</code> cannot cast and store it. Although this doesn't change that <code>'core: 'bound</code></p>\n</blockquote>\n<p>We don't particular care about the lifetime on <code>Core</code>, so this fix is probably sufficient.</p>",
+        "id": 609955320,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972481
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"413824\">Gary Guo</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609952735\">said</a>:</p>\n<blockquote>\n<p>Actually now you mentioned it, this might be unsound as well, because the implied bound would be <code>'core: 'bound</code> which isn't correct</p>\n</blockquote>\n<p>This is purely a semantics mismatch; I don't think this can ever happen. Core must always deref to Bound, this is the type state contract. So 'bound can't ever actually outlive 'core, as that wouldn't make sense.</p>",
+        "id": 609955569,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783972561
+    },
+    {
+        "content": "<p>Currently <code>Core&lt;'a&gt;</code> has <code>PhantomData&lt;&amp;'a ()&gt;</code> so you can convert <code>&amp;'bound Device&lt;Core&lt;'_&gt;&gt;</code> to <code>&amp;'bound Device&lt;Core&lt;'bound&gt;&gt;</code>, essentially erasing the lifetime, so it is indeed problematic.</p>",
+        "id": 609955747,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972627
+    },
+    {
+        "content": "<p>So this doesn't prevent the case that motivate the addition of lifetime in the first place.</p>",
+        "id": 609955896,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972679
+    },
+    {
+        "content": "<p>Hm...you could indeed do:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">dev</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">bound</span><span class=\"w\"> </span><span class=\"nc\">pci</span><span class=\"p\">::</span><span class=\"n\">Device</span><span class=\"o\">&lt;</span><span class=\"n\">Core</span><span class=\"o\">&lt;'</span><span class=\"na\">bound</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">pdev</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 609956345,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783972843
+    },
+    {
+        "content": "<p>I'll send a quick fix</p>",
+        "id": 609956378,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1783972853
+    },
+    {
+        "content": "<p>BTW <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> might also be worth mentioning since we talked about this before: there is a private <code>EarlyInternal</code> context I'm going to be introducing as well, with the main idea being internal DRM helpers can take an <code>ARef</code> to it - primarily because it lets us rely on using devres for cleaning up the results of intermediate setup states if the driver fails when setting up the DRM device.</p>",
+        "id": 609956809,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783972990
+    },
+    {
+        "content": "<p>which I think should be fine, since the whole idea is that only the drm crate can use <code>EarlyInternal</code></p>",
+        "id": 609956878,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783973013
+    },
+    {
+        "content": "<p>Why do we need this to be an ARef?</p>",
+        "id": 609957074,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783973072
+    },
+    {
+        "content": "<p>It doesn't need to be, but after doing the SGTable work I realized it was a better idea to try to use RAII even for internal setup steps in DRM. and uhhh, lemme just copy the relevant code to a pastebin really quick so I can show you</p>",
+        "id": 609957209,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783973123
+    },
+    {
+        "content": "<p><a href=\"https://paste.centos.org/view/f5aeefad\">https://paste.centos.org/view/f5aeefad</a> <a href=\"http://kms.rs\">kms.rs</a><br>\n<a href=\"https://paste.centos.org/view/6d804910\">https://paste.centos.org/view/6d804910</a> <a href=\"http://device.rs\">device.rs</a></p>\n<p>Basically, the reason we want to be able to get an <code>ARef</code> (but only from the internal DRM bindings) is because we want the ability to make cleanup in the event of an error from the driver easy, and imo the most sensible way to do that i s to just use DRM's refcounting mechanism (along with hooking up KMS-specific resources to <code>devres</code>, so they only get released along with the <code>Device</code> if we actually got to setting up KMS before the failure).</p>",
+        "id": 609958001,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783973420
+    },
+    {
+        "content": "<p>doing it this way also acts as a preventative measure to stop us from causing UB if we were to have a <code>Normal</code> reference that early. Since ideally we're going to want KMS methods available on <code>Normal</code> that can't actually be used until all of the KMS initialization steps have completed, e.g. those methods would be UB to make available before said init</p>",
+        "id": 609958420,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783973599
+    },
+    {
+        "content": "<p>I think this should just get a lifetime for it to go into the drm::Registration private data. This way you don't need to keep the drm::Device alive with a reference count, as it can't outlive the drm::Device if it can't outlive the drm::Registration private data. Plus, the drm::Registration can theoretically be shorter lived than the bus device is bound, so devres isn't the best fit conceptually.</p>",
+        "id": 609959150,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783973887
+    },
+    {
+        "content": "<p>keep in mind: KMS is fully initialized by the point <code>UnregisteredDevice</code> is returned. it would need to be carried around until then</p>",
+        "id": 609959421,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783973991
+    },
+    {
+        "content": "<p>Also yeah - I had been worried about that with <code>devres</code>, which is why I had been curious about adding a binding for the drm managed devres stuff, since I believe that might get stuff in the right order?</p>",
+        "id": 609959537,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783974035
+    },
+    {
+        "content": "<p>also wait</p>",
+        "id": 609959661,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783974077
+    },
+    {
+        "content": "<p>I don't see why the registration portion would matter if it is shorter lived then the bus device is bound? The KMS teardown can happen before or after registration, the device being unregistered by the time we do it is completely fine</p>",
+        "id": 609959817,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783974132
+    },
+    {
+        "content": "<p>We're more concerned about the <code>drm_device</code> structure being accessible</p>",
+        "id": 609959866,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783974152
+    },
+    {
+        "content": "<p>KMS mode object private data and callbacks need to be scoped to the registration anyway, as they carry device resources, no?</p>",
+        "id": 609962792,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783975242
+    },
+    {
+        "content": "<p>I mean, I get your point it is technically OK if it outlives the drm::Registration as long as it does not outlive driver unbind. But there's no need for this. Tying it to the same lifetime is more consistent and allows mode setting object private data to share resources with the registration data, etc.</p>",
+        "id": 609963874,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783975710
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> and I guess that when dropping <code>Registration</code> we already have the guarantee of ioctls not getting called?</p>",
+        "id": 609964704,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783976041
+    },
+    {
+        "content": "<p>Yes, they're guarded.</p>",
+        "id": 609965030,
+        "sender_full_name": "Danilo Krummrich",
+        "timestamp": 1783976159
+    },
+    {
+        "content": "<p>ok - yeah, that actually should work then. I guess we could just carry around <code>KmsResources</code> in the <code>UnregisteredDevice</code>.</p>",
+        "id": 609965113,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783976189
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"671004\">Danilo Krummrich</span> <a href=\"#narrow/channel/415254-DRM/topic/Brainstorming.20on.20registration.20ordering.20issues.20in.20DRM/near/609959150\">said</a>:</p>\n<blockquote>\n<p>I think this should just get a lifetime for it to go into the drm::Registration private data. This way you don't need to keep the drm::Device alive with a reference count, as it can't outlive the drm::Device if it can't outlive the drm::Registration private data. Plus, the drm::Registration can theoretically be shorter lived than the bus device is bound, so devres isn't the best fit conceptually.</p>\n</blockquote>\n<p>FWIW: I still think it might not be a bad idea to allow some limited <code>ARef</code> in the way I described before, e.g. DRM bindings can get an early ARef in the <code>EarlyInternal</code> context but actual users can't. If not mostly just because in the <a href=\"http://device.rs\">device.rs</a> file I showed you: we still need to handle resource cleanup if say, we successfully create the <code>Device</code> before registration but fail on the KMS portion. We can currently clean that up, but that implies needing to manually call the destructor functions for the device (which we could just skip if we had an ARef to drop).</p>",
+        "id": 609983067,
+        "sender_full_name": "Lyude",
+        "timestamp": 1783984916
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> any chance y'all have any examples of implementing <code>ForLt</code> manually for something so I can double check I've got this correct? Trying to implement it for the <code>KmsResources</code> type I came up with atm</p>",
+        "id": 610664664,
+        "sender_full_name": "Lyude",
+        "timestamp": 1784061087
+    },
+    {
+        "content": "<p>ah, nevermind, it is not the thing I wanted here whoops :)</p>",
+        "id": 610668961,
+        "sender_full_name": "Lyude",
+        "timestamp": 1784062847
+    }
+]

@@ -1,0 +1,398 @@
+[
+    {
+        "content": "<p>(cc: <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> <span class=\"user-mention\" data-user-id=\"597998\">@FUJITA Tomonori</span> )<br>\nHey! So I mentioned in one of the RFL meetings that I've been rebasing rvkms and trying to figure out how to handle all of the time related changes, and one of the issues I hit was whether or not to actually be using <code>Instant</code> types in the modesetting vblank API - since timestamps for vblanks usually come from a timing source on the modesetting device itself and not one of the standard system clocks, but the C side  of DRM this uses <code>ktime_t</code> for vblank timestamps.<br>\n<code>ClockSource</code> on its own though doesn't really seem completely appropriate though, we can't provide a clock ID for a source like this since none exists.<br>\nSo I had the idea of potentially splitting <code>ClockSource</code> into two traits to deal with this: a <code>TimeSource</code> that any kind of timestamp providing source can implement (-maybe- with ktime_get(), but I'm not sure yet), and then <code>ClockSource</code> which would be a supertrait of <code>TimeSource</code> and handle all of the kernel timer specific bits, e.g. <code>ID</code>. Then we would be using <code>Instant&lt;T: TimeSource&gt;</code> and only binding <code>T</code> to <code>ClockSource</code> as needed. Does this seem reasonable?</p>",
+        "id": 528397173,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752262826
+    },
+    {
+        "content": "<p>It makes sense to me, for example <code>hrtimer</code> would require a <code>ClockSource</code> because these are supported with a hrtimer.</p>",
+        "id": 528399905,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752264441
+    },
+    {
+        "content": "<p>I guess my <a href=\"https://lore.kernel.org/rust-for-linux/aFIEAiDKnxsZQ8s4@tardis.local/\">comment on sealing <code>ClockSource</code></a> gets resolved in a different way with this <code>TimeSource</code> idea.</p>",
+        "id": 528399999,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752264491
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">TimeSource</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">now</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">ktime_t</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but does your <code>TimeSource</code> impl always return non-negative <code>ktime_t</code>?</p>",
+        "id": 528400193,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752264583
+    },
+    {
+        "content": "<p>Because <code>Instant - Instant</code> cannot overflow.</p>",
+        "id": 528400782,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752264881
+    },
+    {
+        "content": "<p>We were talking about just assigning an ID to your custom source. What would prevent this?</p>",
+        "id": 528404438,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1752266988
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528404438\">said</a>:</p>\n<blockquote>\n<p>We were talking about just assigning an ID to your custom source. What would prevent this?</p>\n</blockquote>\n<p>I'm not sure if anything would prevent it so much as I'm not really sure what the purpose would be? I was under the assumption that <code>clockid_t</code> was only relevant for core kernel clock sources, and something like a custom clock source for vblanks wouldn't necessarily correlate with a kernel timer at all. (-technically- it does correlate for rvkms, but that is the exception rather than the rule.</p>",
+        "id": 528408936,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752269500
+    },
+    {
+        "content": "<p>And having a distinction between non-core kernel time sources and core kernel time sources would let us do things we probably want anyway, like ensuring you can't try scheduling an <code>HrTimer</code> using an <code>Instant&lt;VblankTime&gt;</code> (or whatever we would call it).</p>",
+        "id": 528409034,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752269556
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528400193\">said</a>:</p>\n<blockquote>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">TimeSource</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">now</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">ktime_t</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but does your <code>TimeSource</code> impl always return non-negative <code>ktime_t</code>?</p>\n</blockquote>\n<p>Also - I believe it should. a negative vblank timestamp wouldn't make much sense</p>",
+        "id": 528422713,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752282788
+    },
+    {
+        "content": "<p>Do we actually use <code>ClockSource::ID</code>?</p>",
+        "id": 528422914,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752283046
+    },
+    {
+        "content": "<p>Ah, <code>hrtimer_setup</code> needs it.  What clockid_t does a driver that uses own clock source  pass to <code>hrtimer_setup</code>?</p>",
+        "id": 528423212,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752283465
+    },
+    {
+        "content": "<p>I thought that your driver uses hrtimer but hrtimer needs the proper clockid. The driver needs only Instant and Delta?</p>",
+        "id": 528425572,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752286527
+    },
+    {
+        "content": "<p>So: rvkms specifically uses an hrtimer using monotonic time for emulating vblanks - so it's a bit of an exception and not a typical usecase. display hardware typically has its own vertical blank timer that a driver usually reads from</p>",
+        "id": 528425628,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752286620
+    },
+    {
+        "content": "<p>So the places where we need our own TimeSource are just for returning the vblank timestamp to the DRM subsystem for drivers implementing vblank support. We never would actually want to use that TimeSource for scheduling an hrtimer</p>",
+        "id": 528425701,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752286715
+    },
+    {
+        "content": "<p>The places where uses own TimerSource needs Instant/Delta with the own ktime_get(); does not use hrtimer, right?</p>",
+        "id": 528425891,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752286991
+    },
+    {
+        "content": "<p>The idea to split the ClockSource  sounds reasonable.</p>",
+        "id": 528425993,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752287150
+    },
+    {
+        "content": "<p>TImeSource name is a bit confusing though. A clock is a source of time information, generating time values. So ClockSource name makes sense. But Time is a value from the clock source.</p>",
+        "id": 528426366,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752287659
+    },
+    {
+        "content": "<p>Yeah - though one thing to mention is they don't use <code>ktime_get()</code> either, it's really just on the C side of things DRM uses ktime_t for describing vblank timestamps - so ideally we want to be able to return an <code>Instant</code> type in vblank callbacks. We wouldn't be able to use the <code>ktime_get()</code> interface as-is anyhow because we need device context to access vblank timestamp registers</p>",
+        "id": 528426412,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752287746
+    },
+    {
+        "content": "<p>The name <code>ktime_get()</code>for the trait method might be a bad idea ;-) It should be called <code>now()</code>, right? ;-)</p>",
+        "id": 528431076,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752294333
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528426412\">said</a>:</p>\n<blockquote>\n<p>Yeah - though one thing to mention is they don't use <code>ktime_get()</code> either, it's really just on the C side of things DRM uses ktime_t for describing vblank timestamps - so ideally we want to be able to return an <code>Instant</code> type in vblank callbacks. We wouldn't be able to use the <code>ktime_get()</code> interface as-is anyhow because we need device context to access vblank timestamp registers</p>\n</blockquote>\n<p>you mean you won't call the <code>ktime_get()</code> C function, right? Surely you can implement a <code>now()</code> function for your <code>TimeSource</code>?</p>",
+        "id": 528431127,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752294404
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528431076\">said</a>:</p>\n<blockquote>\n<p>The name <code>ktime_get()</code>for the trait method might be a bad idea ;-) It should be called <code>now()</code>, right? ;-)</p>\n</blockquote>\n<p>Yeah, we should use <code>now()</code> or <code>current_time()</code> or something instead of ktime_get().</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">trait</span><span class=\"w\"> </span><span class=\"n\">Foo</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">now</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">ktime_t</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>IMHO, this trait implements a mechanism generating current time values, which is the definition of clock source. So I think that we should use <code>ClockSource</code> for this trait. We need a different name for clockid_t.</p>",
+        "id": 528431508,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752294769
+    },
+    {
+        "content": "<p>Also on the naming point - what about <code>ClockSource</code> and <code>KernelClock</code> or <code>KernelClockSource</code>?</p>",
+        "id": 528433079,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752296865
+    },
+    {
+        "content": "<p>My preference are ClockSource and ClockSourceId</p>",
+        "id": 528433774,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752297671
+    },
+    {
+        "content": "<p>or ClockSrouce and ClockId</p>",
+        "id": 528433996,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752297970
+    },
+    {
+        "content": "<p>because ClockId trait gives a valid clockid_t</p>",
+        "id": 528434059,
+        "sender_full_name": "FUJITA Tomonori",
+        "timestamp": 1752298027
+    },
+    {
+        "content": "<p>oh yeah that works</p>",
+        "id": 528434650,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752298885
+    },
+    {
+        "content": "<p>Honestly while thinking about this after a bit - while I don't think we're really supposed to return negative timestamps, I'm not really sure that we gain much using Instant here - especially since it would require us to make sure that the timestamp that we want to return isn't &lt; 0. So it might actually make sense to just use Delta here, and also add something so that we can convert Instant to Delta specifically for handling rvkms's case of emulating vblanks using an hrtimer</p>",
+        "id": 528728552,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522244
+    },
+    {
+        "content": "<p>You don't need to make <code>Instant</code> non-negative actually, you just need to make sure <code>Instant - Instant</code> won't overflow.</p>",
+        "id": 528729086,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752522478
+    },
+    {
+        "content": "<p>Oh. Though, that's still a check that we need the driver to do and I'm not totally sure it matters much to the vblank core.</p>",
+        "id": 528729414,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522620
+    },
+    {
+        "content": "<p>With other clock sources, an instant is in the range <code>[0,i32::MAX]</code>, which means that the difference can be anywhere in <code>[-i32::MAX,i32::MAX]</code>, i.e. it's the largest range so that differences don't overflow.</p>",
+        "id": 528729621,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522697
+    },
+    {
+        "content": "<p>(I think ktime_t is an i32?)</p>",
+        "id": 528729649,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522708
+    },
+    {
+        "content": "<p>no it's i64</p>",
+        "id": 528729668,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522714
+    },
+    {
+        "content": "<p>then i32 -&gt; i64 in what I said</p>",
+        "id": 528729681,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522721
+    },
+    {
+        "content": "<p>But it means that there's no need for overflow checks when subtracting instants - with the range they're in, it can never overflow.</p>",
+        "id": 528729756,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522753
+    },
+    {
+        "content": "<p>But it means that it does need to be non-negative.</p>",
+        "id": 528729823,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522780
+    },
+    {
+        "content": "<p>BTW on that note - would we be open to having some simple arithmatic for adding/subtracting Deltas from Instant? One issue I did definitely notice is that without this, it's pretty difficult to work with Instants in regards to scheduling a timer at a precise time in the future</p>",
+        "id": 528729866,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522801
+    },
+    {
+        "content": "<p>If we don't have methods for adding a duration to an instant, we should.</p>",
+        "id": 528729965,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522849
+    },
+    {
+        "content": "<p>It should probably force an overflow check, though.</p>",
+        "id": 528729977,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1752522856
+    },
+    {
+        "content": "<p>Yeah - I was thinking that with this sort of thing maybe we should just handle it the same way that rust handles arithmatic in general - panicking in situations where wrapping/saturating isn't explicitly specified and an over/underflow occurred</p>",
+        "id": 528730058,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522896
+    },
+    {
+        "content": "<p><code>Instant + Delta</code> should be supported</p>",
+        "id": 528730087,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752522909
+    },
+    {
+        "content": "<p><code>Delta + Delta</code> as well.</p>",
+        "id": 528730110,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752522921
+    },
+    {
+        "content": "<p>We need <code>Instant - Delta</code> as well, btw. And <code>Delta % Delta</code> (this one sounds silly but it is actually useful for figuring out where in a repeating interval of time we are from a given time</p>",
+        "id": 528730194,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752522955
+    },
+    {
+        "content": "<p>Yes <code>Instant - Delta</code> is fine.</p>",
+        "id": 528730235,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752522977
+    },
+    {
+        "content": "<p><code>Delta</code> itself is just a normal <code>i64</code></p>",
+        "id": 528730299,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752523003
+    },
+    {
+        "content": "<p>but we probably want to avoid hardware division implementation (software division is fine)</p>",
+        "id": 528730394,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752523043
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528730394\">said</a>:</p>\n<blockquote>\n<p>but we probably want to avoid hardware division implementation (software division is fine)</p>\n</blockquote>\n<p>What do you mean by this btw?</p>",
+        "id": 528730512,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752523098
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"690399\">Lyude</span> <a href=\"#narrow/channel/288089-General/topic/Splitting.20.60ClockSource.60.20into.20.60TimeSource.60.20and.20.60ClockSource.60.3F/near/528730512\">said</a>:</p>\n<blockquote>\n<p>What do you mean by this btw?</p>\n</blockquote>\n<p>When you implement <code>Delta % Delta</code>, you need to check the generated code, and it cannot use division instruction on the architectures that don't support them at the kernel context.</p>",
+        "id": 528731015,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752523297
+    },
+    {
+        "content": "<p>oh dear</p>",
+        "id": 528731070,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752523324
+    },
+    {
+        "content": "<p>I never realized there were architectures that didn't let you divide in kernel context</p>",
+        "id": 528731121,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752523344
+    },
+    {
+        "content": "<p><code>do_div()</code> exists for a purpose.</p>",
+        "id": 528731238,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752523395
+    },
+    {
+        "content": "<p>I might not be the expert for this topic, you need to consult linux-arch for this.</p>",
+        "id": 528731352,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752523451
+    },
+    {
+        "content": "<p>this really feels like something that the compiler should be handling and not the developer. Like, if I were bringing up an architecture it feels like it would be easy to spot these things. But I also am not an expert on ISAs, and I'm not really sure if I've got the time to put in for that even though I really do need to be able to do modulos here</p>",
+        "id": 528731797,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752523639
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"411647\">@Boqun Feng</span> is \"you can't do a % b` actually documented anywhere btw? I feel like I've seen code doing modulos in the kernel before</p>",
+        "id": 528732331,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752523860
+    },
+    {
+        "content": "<p>otherwise, tbh, i'm kind of just tempted to say we should ask upstream rust about this or see if this sort of thing can be handled (by someone else) as op implementations on <code>i8/16/32/64</code>/etc. otherwise i worry this code is never getting upstream :S</p>",
+        "id": 528733543,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752524384
+    },
+    {
+        "content": "<p>I did say \"consult\", didn't I? ;-)</p>",
+        "id": 528733780,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752524479
+    },
+    {
+        "content": "<p>So you're not going to face this alone.</p>",
+        "id": 528733941,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752524538
+    },
+    {
+        "content": "<p>For 32bit architectures, I think you will get a link error when doing 64bit division.</p>",
+        "id": 528734029,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752524566
+    },
+    {
+        "content": "<p>FYI: <a href=\"https://lore.kernel.org/rust-for-linux/CANiq72ke45eOwckMhWHvmwxc03dxr4rnxxKvx+HvWdBLopZfrQ@mail.gmail.com/\">https://lore.kernel.org/rust-for-linux/CANiq72ke45eOwckMhWHvmwxc03dxr4rnxxKvx+HvWdBLopZfrQ@mail.gmail.com/</a></p>",
+        "id": 528734902,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752524896
+    },
+    {
+        "content": "<p>so I was not accurate, it is “i64 / i64” that is not fully supported for all the architectures</p>",
+        "id": 528738327,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752526305
+    },
+    {
+        "content": "<p>honestly it's just that the change I made with rvkms that brought me down this rabbit hole was not supposed to be that difficult and i'm trying quite hard not to pile additional work on top of what I need to already get upstream.</p>",
+        "id": 528740449,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752527154
+    },
+    {
+        "content": "<p>is there a way i can just prevent this driver from being built on architectures that don't deal with this?</p>",
+        "id": 528740509,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752527184
+    },
+    {
+        "content": "<p>Make “Delta / Delta” only exists for CONFIG_64BIT, and make your driver depends on CONFIG_64BIT</p>",
+        "id": 528742107,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752527886
+    },
+    {
+        "content": "<p>looks like i'm fine if I just block this on 64 bit architectures, so i'll implement the other ops and just leave delta out of this and convert to/from nanos</p>",
+        "id": 528742131,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752527900
+    },
+    {
+        "content": "<p>sorry, 32 bit arches</p>",
+        "id": 528742158,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752527912
+    },
+    {
+        "content": "<p>I think making “Delta / Delta” depend on CONFIG_64BIT is the way to go, and if one accidentally do that on 32 bit kernel, compile can tell them.</p>",
+        "id": 528742486,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1752528037
+    },
+    {
+        "content": "<p>sgtm! thank you btw ♥\\</p>",
+        "id": 528742560,
+        "sender_full_name": "Lyude",
+        "timestamp": 1752528058
+    }
+]

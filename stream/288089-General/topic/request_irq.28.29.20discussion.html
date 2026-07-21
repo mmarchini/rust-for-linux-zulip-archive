@@ -1,0 +1,669 @@
+<html>
+<head><meta charset="utf-8"><title>request_irq() discussion · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html">request_irq() discussion</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="489484759"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489484759" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489484759">(Dec 17 2024 at 13:25)</a>:</h4>
+<p>Hi everybody,</p>
+<p>I've been working on <a href="https://lore.kernel.org/rust-for-linux/20241024-topic-panthor-rs-request_irq-v1-1-7cbc51c182ca@collabora.com/">this patch</a>, which specifically deals with IRQ registration and IRQ handlers.</p>
+<p>I've tested this on real hardware, so I know it's working. IOW, I can trigger an IRQ for the device I'm testing this with and the handler will be called correctly. The problem is that it's hard to access the shared data between the process context and the IRQ context for anything non-trivial.</p>
+<p>My initial idea was to share an <code>Arc&lt;SpinLockIrq&lt;Data&gt;&gt;</code>, but <span class="user-mention" data-user-id="519727">@Alice Ryhl</span> pointed out that this would create a circular reference, since we will usually have to go back to the driver's main structure for a variety of reasons:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Data shared between process context and IRQ context.</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="p">{</span>
+<span class="w">     </span><span class="c1">// We need to be able to get back to `MyDriver`.</span>
+<span class="w">     </span><span class="c1">// For example, we might need to enqueue work on a workqueue</span>
+<span class="w">     </span><span class="c1">// or read and write to some iomem that is owned by `struct MyDriver`.</span>
+<span class="w">     </span><span class="n">driver</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">MyDriver</span><span class="o">&gt;</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// The data we are sharing between the IRQ and the rest of the driver.</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">SpinLockIrq</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;&gt;</span>
+
+<span class="w">    </span><span class="c1">// `MyDriver` holds a reference to the registration so that it's not</span>
+<span class="w">    </span><span class="c1">// dropped while the driver is alive.</span>
+<span class="w">    </span><span class="c1">// The registration holds a reference to `Data`, and therefore to`MyDriver` so</span>
+<span class="w">    </span><span class="c1">// the handler can access the driver's structure</span>
+<span class="w">    </span><span class="n">registration</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">irq</span><span class="p">::</span><span class="n">Registration</span><span class="o">&lt;</span><span class="n">Handler</span><span class="o">&gt;&gt;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Alice's solution was to replicate the <code>HasWork</code> trait from <code>workqueue.rs</code> to give access to <code>MyDriver</code> without the <code>Arc</code> in <code>Data</code>, but it's a bit unclear what to do after getting a pointer to <code>MyDriver</code>. Sure this cannot simply be cast to a mutable reference.</p>
+<p>Any tips here? This is actually important if we want to be able to handle interrupts, which will be absolutely required for the majority of hardware we plan to support.</p>
+
+
+
+<a name="489485250"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489485250" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489485250">(Dec 17 2024 at 13:28)</a>:</h4>
+<p>One complication compared to the workqueue is that the irq handler can trigger many times, whereas a workqueue item is only triggered once. This makes the cleanup logic much less pleasant.</p>
+<p><span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> Does your timer series support timers that trigger multiple times? What did you do there?</p>
+
+
+
+<a name="489488352"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489488352" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489488352">(Dec 17 2024 at 13:43)</a>:</h4>
+<p>What is the difficulty <span class="user-mention" data-user-id="582628">@Daniel Almeida</span> ?</p>
+
+
+
+<a name="489488623"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489488623" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489488623">(Dec 17 2024 at 13:44)</a>:</h4>
+<p>Maybe I missed something in <code>hrtimer</code></p>
+
+
+
+<a name="489489206"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489489206" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489489206">(Dec 17 2024 at 13:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/channel/288089-General/topic/request_irq.28.29.20discussion/near/489485250">said</a>:</p>
+<blockquote>
+<p>@Andreas Hindborg Does your timer series support timers that trigger multiple times? What did you do there?</p>
+</blockquote>
+<p>In <code>hrtimer</code> we return a handle when we start a timer. The existence of the handle ensures the data accessed by the timer callback is live. When the handle is dropped, the timer is cancelled.</p>
+
+
+
+<a name="489489731"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489489731" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489489731">(Dec 17 2024 at 13:50)</a>:</h4>
+<p>One of the examples I am using below. Once <code>SpinLockIrq</code> is upstream and working,  I will move it over to that.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">kernel</span><span class="p">::{</span>
+<span class="w">    </span><span class="n">time</span><span class="p">::</span><span class="n">hrtimer</span><span class="p">::{</span><span class="n">ClockSource</span><span class="p">,</span><span class="w"> </span><span class="n">Timer</span><span class="p">,</span><span class="w"> </span><span class="n">TimerCallback</span><span class="p">,</span><span class="w"> </span><span class="n">TimerMode</span><span class="p">,</span><span class="w"> </span><span class="n">TimerPointer</span><span class="p">,</span><span class="w"> </span><span class="n">TimerRestart</span><span class="p">},</span>
+<span class="w">    </span><span class="n">impl_has_timer</span><span class="p">,</span><span class="w"> </span><span class="n">new_condvar</span><span class="p">,</span><span class="w"> </span><span class="n">new_mutex</span><span class="p">,</span>
+<span class="w">    </span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">,</span>
+<span class="w">    </span><span class="n">sync</span><span class="p">::{</span><span class="n">Arc</span><span class="p">,</span><span class="w"> </span><span class="n">ArcBorrow</span><span class="p">,</span><span class="w"> </span><span class="n">CondVar</span><span class="p">,</span><span class="w"> </span><span class="n">Mutex</span><span class="p">},</span>
+<span class="w">    </span><span class="n">time</span><span class="p">::</span><span class="n">Ktime</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="cp">#[pin_data]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">ArcIntrusiveTimer</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">timer</span><span class="p">:</span><span class="w"> </span><span class="nc">Timer</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">flag</span><span class="p">:</span><span class="w"> </span><span class="nc">Mutex</span><span class="o">&lt;</span><span class="kt">u64</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">cond</span><span class="p">:</span><span class="w"> </span><span class="nc">CondVar</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ArcIntrusiveTimer</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="n">PinInit</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">try_pin_init</span><span class="o">!</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">timer</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">Timer</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TimerMode</span><span class="p">::</span><span class="n">Relative</span><span class="p">,</span><span class="w"> </span><span class="n">ClockSource</span><span class="p">::</span><span class="n">Monotonic</span><span class="p">),</span>
+<span class="w">            </span><span class="n">flag</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">new_mutex</span><span class="o">!</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+<span class="w">            </span><span class="n">cond</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">new_condvar</span><span class="o">!</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">TimerCallback</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">ArcIntrusiveTimer</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">CallbackTarget</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">CallbackTargetParameter</span><span class="o">&lt;'</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArcBorrow</span><span class="o">&lt;'</span><span class="na">a</span><span class="p">,</span><span class="w"> </span><span class="bp">Self</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">this</span><span class="p">:</span><span class="w"> </span><span class="nc">Self</span><span class="p">::</span><span class="n">CallbackTargetParameter</span><span class="o">&lt;'</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">TimerRestart</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">pr_info</span><span class="o">!</span><span class="p">(</span><span class="s">"Timer called</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">guard</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">this</span><span class="p">.</span><span class="n">flag</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+<span class="w">        </span><span class="o">*</span><span class="n">guard</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="n">this</span><span class="p">.</span><span class="n">cond</span><span class="p">.</span><span class="n">notify_all</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="n">guard</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">TimerRestart</span><span class="p">::</span><span class="n">NoRestart</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">TimerRestart</span><span class="p">::</span><span class="n">Restart</span>
+
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">impl_has_timer</span><span class="o">!</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">impl</span><span class="w"> </span><span class="n">HasTimer</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">ArcIntrusiveTimer</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">timer</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+
+
+<span class="kd">let</span><span class="w"> </span><span class="n">has_timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span><span class="n">ArcIntrusiveTimer</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">_handle</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">has_timer</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">start</span><span class="p">(</span><span class="n">Ktime</span><span class="p">::</span><span class="n">from_ns</span><span class="p">(</span><span class="mi">200_000_000</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">guard</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">has_timer</span><span class="p">.</span><span class="n">flag</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+
+<span class="k">while</span><span class="w"> </span><span class="o">*</span><span class="n">guard</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">has_timer</span><span class="p">.</span><span class="n">cond</span><span class="p">.</span><span class="n">wait</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">guard</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">pr_info</span><span class="o">!</span><span class="p">(</span><span class="s">"Counted to 5</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+</code></pre></div>
+
+
+
+<a name="489492207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489492207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489492207">(Dec 17 2024 at 14:01)</a>:</h4>
+<p><span class="user-mention" data-user-id="582628">@Daniel Almeida</span> why do you need a back reference from <code>Data</code> to <code>MyDriver</code> ? I assume some kind of <code>Data</code> reference is passed to the irq handler when it fires?</p>
+
+
+
+<a name="489492476"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489492476" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489492476">(Dec 17 2024 at 14:02)</a>:</h4>
+<p>If you need to access <code>MyDriver</code> from the irq handler, why not pass a <code>MyDriver</code> reference to the irq handler when it fires and use that to access <code>Data</code>. Then you get rid of the cycle.</p>
+
+
+
+<a name="489493599"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489493599" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489493599">(Dec 17 2024 at 14:07)</a>:</h4>
+<p>For <code>rnvme</code> we are doing something similar. I am not sure how different the irq registration logic in the <code>rnvme</code> tree is compared to yours. But we just implement the handler on the top level data structure we want to access and then we get a graph without cycles: <a href="https://github.com/metaspace/linux/blob/1f702e2d9d45df0e4457b394c7c03df8cec1ff70/drivers/block/nvme_queue.rs#L253">https://github.com/metaspace/linux/blob/1f702e2d9d45df0e4457b394c7c03df8cec1ff70/drivers/block/nvme_queue.rs#L253</a></p>
+
+
+
+<a name="489494265"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489494265" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489494265">(Dec 17 2024 at 14:10)</a>:</h4>
+<p><span class="user-mention" data-user-id="498029">@Andreas Hindborg</span> yeah I added a few comments explaining why we need to go back, basically:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Data shared between process context and IRQ context.</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="p">{</span>
+<span class="w">     </span><span class="c1">// We need to be able to get back to `MyDriver`.</span>
+<span class="w">     </span><span class="c1">// For example, we might need to enqueue work on a workqueue</span>
+<span class="w">     </span><span class="c1">// or read and write to some iomem that is owned by `struct MyDriver`.</span>
+<span class="w">     </span><span class="n">driver</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">MyDriver</span><span class="o">&gt;</span>
+<span class="p">}</span>
+</code></pre></div>
+<blockquote>
+<p>If you need to access <code>MyDriver</code> from the irq handler, why not pass a <code>MyDriver</code> reference to the irq handler when it fires and use that to access <code>Data</code>. Then you get rid of the cycle.</p>
+</blockquote>
+<p>That is the same cycle, the IRQ handler would have a reference to <code>MyDriver</code>, and <code>MyDriver</code> would have a reference to the IRQ through <code>irq::Registration</code>.</p>
+<p>With a <code>HasWork</code>-like implementation you can get a <code>*mut MyDriver</code> when the handle fires. The question is what to do what that, can this simply be cast to <code>&amp;mut MyDriver</code>?</p>
+
+
+
+<a name="489495228"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489495228" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489495228">(Dec 17 2024 at 14:14)</a>:</h4>
+<p>Right. In <code>rnull</code> I get around that by leaking the timer handle.</p>
+
+
+
+<a name="489495307"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489495307" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489495307">(Dec 17 2024 at 14:14)</a>:</h4>
+<p>Which is similar to your registration.</p>
+
+
+
+<a name="489495438"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489495438" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489495438">(Dec 17 2024 at 14:14)</a>:</h4>
+<p>I can do that because I know the timer will fire, and since the handle owns the data referenced in the timer callback, it will not go away.</p>
+
+
+
+<a name="489495564"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489495564" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489495564">(Dec 17 2024 at 14:15)</a>:</h4>
+<p>Not really an option for you though.</p>
+
+
+
+<a name="489496105"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496105" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496105">(Dec 17 2024 at 14:18)</a>:</h4>
+<p>It's the same for the IRQ stuff, we can be sure that <code>MyDriver</code> is not going to go away, since it will call <code>free_irq()</code> on drop, which will block until all handlers complete</p>
+
+
+
+<a name="489496231"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496231" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496231">(Dec 17 2024 at 14:18)</a>:</h4>
+<p>You can't get rid of the registration, right?</p>
+
+
+
+<a name="489496262"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496262" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496262">(Dec 17 2024 at 14:18)</a>:</h4>
+<p>That would unregister the irq.</p>
+
+
+
+<a name="489496371"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496371" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496371">(Dec 17 2024 at 14:19)</a>:</h4>
+<p>yeah, that would unregister (free_irq)</p>
+
+
+
+<a name="489496452"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496452" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496452">(Dec 17 2024 at 14:19)</a>:</h4>
+<p>One option would be to implement weak references for <code>Arc</code>, or use a revocable resource type for one of the directions.</p>
+
+
+
+<a name="489496646"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489496646" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489496646">(Dec 17 2024 at 14:20)</a>:</h4>
+<p>I can't follow the <code>HasWork</code> approach. How would that work?</p>
+
+
+
+<a name="489497024"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497024" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497024">(Dec 17 2024 at 14:22)</a>:</h4>
+<p>You would have a <code>HasXX</code> trait that guarantees that <code>MyDriver</code> has a <code>Data</code> embedded somewhere?</p>
+
+
+
+<a name="489497285"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497285" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497285">(Dec 17 2024 at 14:23)</a>:</h4>
+<p>And they you would store a pointer to <code>MyDriver</code> in <code>Data</code>?</p>
+
+
+
+<a name="489497365"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497365" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497365">(Dec 17 2024 at 14:24)</a>:</h4>
+<p>And you know that <code>MyDriver</code> is live, because the irq handler is running.</p>
+
+
+
+<a name="489497418"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497418" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497418">(Dec 17 2024 at 14:24)</a>:</h4>
+<p>we can use <code>HasIrqHandler</code> to get an offset in the containing structure, and use something akin to <code>container_of</code> to go back to <code>*mut MyDriver</code> without any <code>Arc</code>s involved</p>
+
+
+
+<a name="489497729"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497729" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497729">(Dec 17 2024 at 14:25)</a>:</h4>
+<p>Right.</p>
+
+
+
+<a name="489497879"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489497879" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489497879">(Dec 17 2024 at 14:26)</a>:</h4>
+<p><code>MyDriver</code> OTOH, would be able to access the data directly</p>
+
+
+
+<a name="489498016"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489498016" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489498016">(Dec 17 2024 at 14:26)</a>:</h4>
+<p>You can only turn that pointer into a mutable reference if you can guarantee that it is unique though.</p>
+
+
+
+<a name="489498238"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489498238" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489498238">(Dec 17 2024 at 14:27)</a>:</h4>
+<p>You still need a lock of some kind, but I guess that is OK</p>
+
+
+
+<a name="489498416"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489498416" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489498416">(Dec 17 2024 at 14:28)</a>:</h4>
+<p>you can register multiple handlers :/ </p>
+<p>if both fire at the same time (which is possible if they're using two distinct IRQ lines, electrically) then you get more than one <code>&amp;mut MyDriver</code></p>
+
+
+
+<a name="489498576"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489498576" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489498576">(Dec 17 2024 at 14:28)</a>:</h4>
+<p>(I just realized this)</p>
+
+
+
+<a name="489498700"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489498700" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489498700">(Dec 17 2024 at 14:29)</a>:</h4>
+<p>That would be UB. But you can hand out immutable references instead and then synchronize to provide interior mutability.</p>
+
+
+
+<a name="489499115"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499115" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499115">(Dec 17 2024 at 14:30)</a>:</h4>
+<p>For <code>hrtimer</code> we allow mutable access when the target is a <code>Box</code>, because it is a unique pointer, and while the timer is running, the box is owned by the timer handle. The timer handle stores the box as a raw pointer and promises not to crate any references to the contents while the timer is running.</p>
+
+
+
+<a name="489499239"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499239" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499239">(Dec 17 2024 at 14:31)</a>:</h4>
+<p>The only lock possible is <code>SpinLockIrq</code>, since you can't sleep in interrupt context.  We can't wrap <code>MyDriver</code> in SpinLockIrq</p>
+
+
+
+<a name="489499359"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499359" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499359">(Dec 17 2024 at 14:31)</a>:</h4>
+<p>You only need to wrap the parts that you need concurrent access to.</p>
+
+
+
+<a name="489499565"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499565" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499565">(Dec 17 2024 at 14:32)</a>:</h4>
+<p>Basically, you would have a trait bound on <code>HasIrq: Sync</code></p>
+
+
+
+<a name="489499631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499631">(Dec 17 2024 at 14:32)</a>:</h4>
+<p>Or something like that.</p>
+
+
+
+<a name="489499698"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499698" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499698">(Dec 17 2024 at 14:33)</a>:</h4>
+<p>Btw, what about the weak references you suggested ?</p>
+
+
+
+<a name="489499806"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499806" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499806">(Dec 17 2024 at 14:33)</a>:</h4>
+<p>I wonder how others feel about this</p>
+
+
+
+<a name="489499841"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489499841" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489499841">(Dec 17 2024 at 14:33)</a>:</h4>
+<p>That is how shared pointers usually solve cycles. Std library <code>Arc</code> has them.</p>
+
+
+
+<a name="489500148"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500148" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500148">(Dec 17 2024 at 14:35)</a>:</h4>
+<p>Our <code>Arc</code> has this comment: "//! 2. It does not support weak references, which allows it to be half the size."</p>
+
+
+
+<a name="489500261"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500261" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500261">(Dec 17 2024 at 14:35)</a>:</h4>
+<p>Perhaps we could have another type that supports weak references.</p>
+
+
+
+<a name="489500463"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500463" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500463">(Dec 17 2024 at 14:36)</a>:</h4>
+<p>But the price you pay as a user is that accesses may fail for weak refcounts. So you basically have to check if the target is still present before accessing.</p>
+
+
+
+<a name="489500539"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500539" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500539">(Dec 17 2024 at 14:36)</a>:</h4>
+<p>I can look into that, if it's generally agreed that it's worthwhile</p>
+
+
+
+<a name="489500634"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500634" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500634">(Dec 17 2024 at 14:37)</a>:</h4>
+<p>I think that would solve the problem here</p>
+
+
+
+<a name="489500655"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500655" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500655">(Dec 17 2024 at 14:37)</a>:</h4>
+<p>with the least amount of "magic"</p>
+
+
+
+<a name="489500878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489500878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489500878">(Dec 17 2024 at 14:38)</a>:</h4>
+<p>maybe we can discuss this at the next call? </p>
+<p>(cc <span class="user-mention" data-user-id="411647">@Boqun Feng</span> )</p>
+
+
+
+<a name="489515413"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489515413" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489515413">(Dec 17 2024 at 15:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/stream/288089-General/topic/request_irq.28.29.20discussion/near/489498416">said</a>:</p>
+<blockquote>
+<p>you can register multiple handlers :/ </p>
+<p>if both fire at the same time (which is possible if they're using two distinct IRQ lines, electrically) then you get more than one <code>&amp;mut MyDriver</code></p>
+</blockquote>
+<p>That is exactly why converting a pointer to a mutable reference is unsafe. In this case, you cannot use a &amp;mut MyDriver, because two contexts can access the same object.</p>
+
+
+
+<a name="489516587"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489516587" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489516587">(Dec 17 2024 at 15:46)</a>:</h4>
+<p>Ok, so maybe the Weak thing?</p>
+
+
+
+<a name="489516631"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489516631" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489516631">(Dec 17 2024 at 15:46)</a>:</h4>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">MyDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// The data we are sharing between the IRQ and the rest of the driver.</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">SpinLockIrq</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;&gt;</span>
+
+<span class="w">    </span><span class="c1">// `MyDriver` holds a reference to the registration so that it's not</span>
+<span class="w">    </span><span class="c1">// dropped while the driver is alive.</span>
+<span class="w">    </span><span class="c1">// The registration holds a reference to `Data`, and therefore to`MyDriver` so</span>
+<span class="w">    </span><span class="c1">// the handler can access the driver's structure</span>
+<span class="w">    </span><span class="n">registration</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">irq</span><span class="p">::</span><span class="n">Registration</span><span class="o">&lt;</span><span class="n">Handler</span><span class="o">&gt;&gt;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Why <code>Arc&lt;irq::Registration&lt;Handler&gt;&gt;</code> here, who else is holding the reference to the registration?</p>
+
+
+
+<a name="489516822"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489516822" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489516822">(Dec 17 2024 at 15:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/request_irq.28.29.20discussion/near/489516587">said</a>:</p>
+<blockquote>
+<p>Ok, so maybe the Weak thing?</p>
+</blockquote>
+<p>Even with Weak reference count, you cannot get a <code>&amp;mut MyDriver</code> in this case.</p>
+
+
+
+<a name="489518221"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489518221" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489518221">(Dec 17 2024 at 15:53)</a>:</h4>
+<p>Why do you want a <code>&amp;mut MyDriver</code> then? In this case, it's clear that <code>MyDriver</code> is shared between interrupt handlers, so you will have to implement proper interior mutability as what Andreas suggested.</p>
+
+
+
+<a name="489518489"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489518489" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489518489">(Dec 17 2024 at 15:55)</a>:</h4>
+<blockquote>
+<p>Why <code>Arc&lt;irq::Registration&lt;Handler&gt;&gt;</code> here, who else is holding the reference to the registration?</p>
+</blockquote>
+<p>The idea was to offer more flexibility, so other parts of the driver could also access the registration and thus, the shared data, i.e.:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">///</span>
+<span class="sd">/// impl kernel::irq::Handler for Handler {</span>
+<span class="sd">///     // This is executing in IRQ context in some CPU. Other CPUs can still</span>
+<span class="sd">///     // try to access to data.</span>
+<span class="sd">///     fn handle_irq(&amp;self) -&gt; irq::IrqReturn {</span>
+<span class="sd">///         // We now have exclusive access to the data by locking the SpinLock.</span>
+<span class="sd">///         let mut handler = self.lock();</span>
+<span class="sd">///         handler.0 += 1;</span>
+<span class="sd">///</span>
+<span class="sd">///         IrqReturn::Handled</span>
+<span class="sd">///     }</span>
+<span class="sd">/// }</span>
+<span class="sd">///</span>
+<span class="sd">/// // This is running in process context.</span>
+<span class="sd">/// fn register_irq(irq: u32, handler: Handler) -&gt; Result&lt;irq::Registration&lt;Handler&gt;&gt; {</span>
+<span class="sd">///     let registration = Registration::register(irq, irq::flags::SHARED, "my-device", handler)?;</span>
+<span class="sd">///</span>
+<span class="sd">///     // You can have as many references to the registration as you want, so</span>
+<span class="sd">///     // multiple parts of the driver can access it.</span>
+<span class="sd">///     let registration = Arc::pin_init(registration)?;</span>
+<span class="sd">///</span>
+<span class="sd">///     // The handler may be called immediately after the function above</span>
+<span class="sd">///     // returns, possibly in a different CPU.</span>
+<span class="sd">///</span>
+<span class="sd">///     // The data can be accessed from the process context too.</span>
+<span class="sd">///     registration.handler().lock().0 = 42;</span>
+<span class="sd">///</span>
+<span class="sd">///     Ok(registration)</span>
+<span class="sd">/// }</span>
+</code></pre></div>
+
+
+
+<a name="489520157"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489520157" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489520157">(Dec 17 2024 at 16:02)</a>:</h4>
+<p>Sorry, I guess I lost track a bit here,</p>
+<p>a) I'm trying to solve the circular reference<br>
+b) Alice suggested the <code>HasWork</code> trait as an possible solution,<br>
+c) Using something like <code>HasIrqHandler</code> lets you get <code>*mut MyDriver</code><br>
+d) I didn't know what to do with this pointer, i.e.: whether I should cast that and etc<br>
+e) Among other things, <code>Weak</code> was suggested.</p>
+<p>I forgot that Weak would return a shared reference, which is why there's some confusion now with <code>&amp;mut MyDriver</code>. But then, even with a shared reference, we can still use SpinLockIrq to allow mutating the data.</p>
+
+
+
+<a name="489520463"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489520463" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489520463">(Dec 17 2024 at 16:04)</a>:</h4>
+<p>Well, even without reference count like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">MyDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
+<span class="w">    </span><span class="n">registration</span><span class="p">:</span><span class="w"> </span><span class="nc">irq</span><span class="p">::</span><span class="n">Registration</span><span class="o">&lt;</span><span class="n">Handler</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>multiple parts of the driver can access via:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">my_driver</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">MyDriver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="n">do_sth</span><span class="p">(</span><span class="n">my_driver</span><span class="p">.</span><span class="n">registration</span><span class="p">);</span>
+</code></pre></div>
+
+
+
+<a name="489520679"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489520679" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489520679">(Dec 17 2024 at 16:05)</a>:</h4>
+<p>True, the above is trivial, the problem is doing the same from the handler.</p>
+
+
+
+<a name="489520792"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489520792" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489520792">(Dec 17 2024 at 16:05)</a>:</h4>
+<p>You mean that I should remove the Arc from <code>Registration</code> ?</p>
+
+
+
+<a name="489521200"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489521200" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489521200">(Dec 17 2024 at 16:07)</a>:</h4>
+<p>Weak would get rid of the reference count cycle. Still need synchronization.</p>
+
+
+
+<a name="489521375"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489521375" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489521375">(Dec 17 2024 at 16:08)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/request_irq.28.29.20discussion/near/489520792">said</a>:</p>
+<blockquote>
+<p>You mean that I should remove the Arc from <code>Registration</code> ?</p>
+</blockquote>
+<p>We need to look into a usage, there are a few design options here.</p>
+
+
+
+<a name="489521425"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489521425" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489521425">(Dec 17 2024 at 16:08)</a>:</h4>
+<p>HasIrqHandler similarly would get rid of the cycle, but we would still need synchronization</p>
+
+
+
+<a name="489522546"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489522546" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489522546">(Dec 17 2024 at 16:14)</a>:</h4>
+<p>but honestly, I think you could define <code>Data</code> as the whole driver data to begin with. That is, all the data fields of a driver is in <code>Data</code>, therefore you don't need to reference back to <code>MyDriver</code> from <code>Data</code>.</p>
+
+
+
+<a name="489522970"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489522970" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489522970">(Dec 17 2024 at 16:16)</a>:</h4>
+<p>more like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">Data</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">work_head</span><span class="p">:</span><span class="w"> </span><span class="nc">Work</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">f1</span><span class="p">:</span><span class="w"> </span><span class="nc">SpinLock</span><span class="o">&lt;</span><span class="kt">i32</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="p">,</span>
+
+<span class="w">    </span><span class="n">registration</span><span class="p">:</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="489524220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489524220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489524220">(Dec 17 2024 at 16:22)</a>:</h4>
+<p><span class="user-mention" data-user-id="411647">@Boqun Feng</span> <a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_device.h#L315">here's an example usage:</a></p>
+<p>You can see that the first thing done is to get <code>struct panthor_device *</code>.</p>
+<p>This is piped down to a more polished version after some housekeeping, <a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_gpu.c#L145">like this handler here:</a></p>
+<p>Access to <code>panthor_device *</code> is needed to do everything, basically, including IO reads and writes, waking up tasks and etc.</p>
+<p><a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_gpu.c#L159">Synchronization is done using spinlocks (i.e. spin_lock(), spin_lock_irqsave(), etc)</a></p>
+
+
+
+<a name="489524747"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489524747" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489524747">(Dec 17 2024 at 16:24)</a>:</h4>
+<p>and</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">MyDriverHandler1</span><span class="p">(</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="p">);</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">irq</span><span class="p">::</span><span class="n">Handler</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyDriverHandler1</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">handle_irq</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">irq</span><span class="p">::</span><span class="n">ThreadedIrqReturn</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="n">do_sth</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="489525298"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489525298" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489525298">(Dec 17 2024 at 16:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <a href="#narrow/channel/288089-General/topic/request_irq.28.29.20discussion/near/489524220">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> <a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_device.h#L315">here's an example usage:</a></p>
+<p>You can see that the first thing done is to get <code>struct panthor_device *</code>.</p>
+<p>This is piped down to a more polished version after some housekeeping, <a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_gpu.c#L145">like this handler here:</a></p>
+<p>Access to <code>panthor_device *</code> is needed to do everything, basically, including IO reads and writes, waking up tasks and etc.</p>
+<p><a href="https://elixir.bootlin.com/linux/v6.12.5/source/drivers/gpu/drm/panthor/panthor_gpu.c#L159">Synchronization is done using spinlocks (i.e. spin_lock(), spin_lock_irqsave(), etc)</a></p>
+</blockquote>
+<p>So <code>panthor_device</code> is your <code>Data</code>, and you just need to make sure it doesn't reference back a driver, right?</p>
+
+
+
+<a name="489526917"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489526917" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489526917">(Dec 17 2024 at 16:35)</a>:</h4>
+<blockquote>
+<p>but honestly, I think you could define <code>Data</code> as the whole driver data to begin with. That is, all the data fields of a driver is in <code>Data</code>, therefore you don't need to reference back to <code>MyDriver</code> from <code>Data</code>.</p>
+</blockquote>
+<p>Ok, I think this makes sense and reduces the complexity.</p>
+<blockquote>
+<p>So <code>panthor_device</code> is your <code>Data</code>, and you just need to make sure it doesn't reference back a driver, right?</p>
+</blockquote>
+<p>If we do what you said above, then yes, <code>panthor_device</code> would be <code>Data</code>, or at least I do not see why this can't be the case now.</p>
+
+
+
+<a name="489527314"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489527314" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489527314">(Dec 17 2024 at 16:36)</a>:</h4>
+<p>we cannot wrap <code>Data</code> into <code>SpinLockIrq</code> though, it has to be more granular than that, because we may (and often will) access the contents without locking (if we know it's safe to do so, given the state of the hardware at that point)</p>
+
+
+
+<a name="489527421"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489527421" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489527421">(Dec 17 2024 at 16:37)</a>:</h4>
+<p>Yes, we shouldn't in this case.</p>
+
+
+
+<a name="489527455"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489527455" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489527455">(Dec 17 2024 at 16:37)</a>:</h4>
+<p>or wouldn't ?</p>
+
+
+
+<a name="489529540"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489529540" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489529540">(Dec 17 2024 at 16:48)</a>:</h4>
+<p>I think in general we shouldn't impose any locks, it's up to users to decide  if they want interior mutability, and where they want that</p>
+
+
+
+<a name="489532790"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/489532790" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#489532790">(Dec 17 2024 at 17:05)</a>:</h4>
+<p>Ok, so I think that your suggestion basically solves the problem even without Weak</p>
+
+
+
+<a name="496805547"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/496805547" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#496805547">(Jan 30 2025 at 15:33)</a>:</h4>
+<p>Hey - poking this again, what is currently the status of this? Since we've got two drivers interested in having this now</p>
+
+
+
+<a name="496807376"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/496807376" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#496807376">(Jan 30 2025 at 15:41)</a>:</h4>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span> there' s a recent-ish version at <a href="https://lore.kernel.org/rust-for-linux/20250122163932.46697-1-daniel.almeida@collabora.com/">https://lore.kernel.org/rust-for-linux/20250122163932.46697-1-daniel.almeida@collabora.com/</a></p>
+
+
+
+<a name="497757652"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/request_irq%28%29%20discussion/near/497757652" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/request_irq.28.29.20discussion.html#497757652">(Feb 04 2025 at 21:14)</a>:</h4>
+<p>ah whoops - I meant to ask this on the spinlockirq thread</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Both <a href=\"https://docs.kernel.org/core-api/mm-api.html#c.put_user\">put_user</a> and <a href=\"https://docs.kernel.org/core-api/mm-api.html#c.get_user\">get_user</a> are for reading predefined size variables from userspace.</p>\n<p>Currently in Rust abstractions, there's only UserSlice, which is for arbitrary sizes. I saw it being used in <code>samples/rust/rust_misc_device.rs</code>, in <code>ioctl</code>, even though the variable is just an i32.</p>\n<p>However, they are macros. Is it a good idea to make helper functions on the C side to access them?</p>",
+        "id": 540850437,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1758558439
+    },
+    {
+        "content": "<p>See <a href=\"https://rust.docs.kernel.org/kernel/uaccess/struct.UserSliceReader.html#method.read\"><code>UserSliceReader::read</code></a> and <a href=\"https://rust.docs.kernel.org/kernel/uaccess/struct.UserSliceWriter.html#method.write\"><code>UserSliceWriter::write</code></a>.</p>",
+        "id": 540851787,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1758558852
+    },
+    {
+        "content": "<p>What's wrong with <code>UserSlice</code>?</p>",
+        "id": 540851796,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758558855
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/540851787\">said</a>:</p>\n<blockquote>\n<p>See <a href=\"https://rust.docs.kernel.org/kernel/uaccess/struct.UserSliceReader.html#method.read\"><code>UserSliceReader::read</code></a> and <a href=\"https://rust.docs.kernel.org/kernel/uaccess/struct.UserSliceWriter.html#method.write\"><code>UserSliceWriter::write</code></a>.</p>\n</blockquote>\n<p>Yes that's what I meant by UserSlice, or at least generally.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/540851796\">said</a>:</p>\n<blockquote>\n<p>What's wrong with <code>UserSlice</code>?</p>\n</blockquote>\n<p>UserSlice uses <code>_copy_from_user</code> and <code>_copy_to_user</code>, which are meant for arrays.<br>\nThe ones I mentioned, <code>put_user</code> and <code>get_user</code> are faster at copying a single value referencing pointers, like <code>int*</code>. They also don't need a <code>len</code> because, the size is known at compile time.</p>",
+        "id": 540901803,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1758579128
+    },
+    {
+        "content": "<p>so the point is that <code>UserSliceReader::read()</code> and <code>UserSliceWriter::write()</code> are for reading/writing with predefined size variables. In theory you can optimize them, but not sure how much value you can get from the optimization.</p>",
+        "id": 540908282,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1758584213
+    },
+    {
+        "content": "<p>If you want to do that, you have to:</p>\n<ul>\n<li>figure out the performance difference between <code>_copy_{from,to}_user()</code> and <code>{put,get}_user()</code>.</li>\n<li>find a place where copy-from/to-user is the hotspot that is worth for optimization.</li>\n</ul>",
+        "id": 540908900,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1758584751
+    },
+    {
+        "content": "<p>Rust already skips the bounds checks for UserSlice when the size is known at compile time in Rust.</p>",
+        "id": 540978117,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758623203
+    },
+    {
+        "content": "<p>So I don't think there's any difference</p>",
+        "id": 540978134,
+        "sender_full_name": "Alice Ryhl",
+        "timestamp": 1758623212
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"519727\">Alice Ryhl</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/540978117\">said</a>:</p>\n<blockquote>\n<p>Rust already skips the bounds checks for UserSlice when the size is known at compile time in Rust.</p>\n</blockquote>\n<p>But it will still be a for-loop like code on the C side, albeit without bounds checking.</p>\n<p>I forgot that, In order to make the variable size known at compile time through a FFI, I can't have <code>void*</code> as a parameter. I need to implement a helper for every variable type, ex:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">int</span><span class=\"w\"> </span><span class=\"n\">rust_helper_put_user_u32</span><span class=\"p\">(</span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"n\">__user</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">to</span><span class=\"p\">)</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">__put_user</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n<span class=\"n\">int</span><span class=\"w\"> </span><span class=\"n\">rust_helper_put_user_u64</span><span class=\"p\">(</span><span class=\"kt\">u64</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u64</span><span class=\"w\"> </span><span class=\"n\">__user</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">to</span><span class=\"p\">)</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">__put_user</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Another problem is with <code>__get_user(x, ptr)</code>. Because it's a macro, when you pass <code>x</code> to it, it can actually reference and mutate it. So, when implementing a helper function, it should look like this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">int</span><span class=\"w\"> </span><span class=\"n\">rust_helper_get_user_u32</span><span class=\"p\">(</span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"n\">__user</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">from</span><span class=\"p\">)</span>\n<span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"n\">val</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"n\">int</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">__get_user</span><span class=\"p\">(</span><span class=\"n\">val</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">from</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"o\">*</span><span class=\"n\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">val</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Which is more overhead.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/540908900\">said</a>:</p>\n<blockquote>\n<p>If you want to do that, you have to:</p>\n<ul>\n<li>figure out the performance difference between <code>_copy_{from,to}_user()</code> and <code>{put,get}_user()</code>.</li>\n<li>find a place where copy-from/to-user is the hotspot that is worth for optimization.</li>\n</ul>\n</blockquote>\n<p>I did a very rough testing using <code>preempt_{disable, enable}</code> and <code>Instant::&lt;Monotonic&gt;::now()</code>. Running each one 10k times in  a virtual machine: <code>vng -r arch/x86/boot/bzImage --memory=1G --disable-microvm</code>:</p>\n<p><code>_copy_from_user</code>: 788ns<br>\n<code>get_user</code>: 604ns</p>\n<p><code>_copy_to_user</code>: 745ns<br>\n<code>put_user</code>: 763ns</p>\n<p>I'm not sure if a ~180ns is a significant value in the context of operating systems, but this experiment was insightful none the less.</p>\n<p>Thank you.</p>",
+        "id": 541519700,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1758824375
+    },
+    {
+        "content": "<p>Thanks for taking a look.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"947849\">ManeraKai</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/541519700\">said</a>:</p>\n<blockquote>\n<p><code>_copy_from_user</code>: 788ns<br>\n<code>get_user</code>: 604ns</p>\n<p><code>_copy_to_user</code>: 745ns<br>\n<code>put_user</code>: 763ns</p>\n</blockquote>\n<p>Now since <code>_copy_to_user()</code> performs better/similar to <code>put_user()</code>, I'm not sure the performance difference  between <code>_copy_from_user()</code> and <code>get_user()</code> comes from the loop (in x86 case it's the <code>rep movsb</code> instruction). How should we explain the difference?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"947849\">ManeraKai</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/541519700\">said</a>:</p>\n<blockquote>\n<p>I'm not sure if a ~180ns is a significant value in the context of operating systems, but this experiment was insightful none the less.</p>\n</blockquote>\n<p>You can maybe measure an empty syscall to see whether ~180ns is significant or not, but I'm a bit curious about what contributes to the difference.</p>",
+        "id": 541581914,
+        "sender_full_name": "Boqun Feng",
+        "timestamp": 1758861219
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"411647\">Boqun Feng</span> <a href=\"#narrow/channel/288089-General/topic/Should.20UserPtr.20implement.20put_user.20and.20get_user.3F/near/541581914\">said</a>:</p>\n<blockquote>\n<p>in x86 case it's the <code>rep movsb</code> instruction</p>\n</blockquote>\n<p>I ran gdb on the kernel, and when tracing through <code>_copy_to_user</code>, I found out that my virtual machine wasn't running with FSRM support (Fast Short Rep Mov), so rather than using <code>rep movsb</code>, it used an assembly function called <code>rep_movs_alternative</code> which copies the 4 bytes of my s32 just like a classic for-loop. Yet it was faster than the much simpler <code>put_user</code> that was basically <code>movl</code> <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>I think the benchmarks are deceiving since we are trying to measure a difference between a very small amount of intstructions on a GHz CPU.</p>\n<p>In theory, <code>put_user</code> should be faster on CPUs that don't support FSRM.</p>",
+        "id": 541828276,
+        "sender_full_name": "ManeraKai",
+        "timestamp": 1758997584
+    }
+]

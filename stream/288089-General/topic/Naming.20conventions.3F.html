@@ -1,0 +1,59 @@
+<html>
+<head><meta charset="utf-8"><title>Naming conventions? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Naming.20conventions.3F.html">Naming conventions?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="341704813"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Naming%20conventions%3F/near/341704813" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Naming.20conventions.3F.html#341704813">(Mar 14 2023 at 12:33)</a>:</h4>
+<p>Hi all, I have been working on some virtio and V4L2 bindings recently.</p>
+<p>I don't think it's clear when to  wrap over a  pointer vs when to wrap over the bindgen struct directly, i.e.:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w"> </span><span class="k">struct</span> <span class="nc">Wrapper</span><span class="p">(</span><span class="o">&lt;</span><span class="n">some</span><span class="w"> </span><span class="n">pointer</span><span class="o">&gt;</span><span class="p">)</span>
+</code></pre></div>
+<p>vs</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span> <span class="nc">Wrapper</span><span class="p">(</span><span class="n">UnsafeCell</span><span class="o">&lt;</span><span class="n">bindings</span>::<span class="n">some_struct</span><span class="o">&gt;</span><span class="p">)</span>
+</code></pre></div>
+<p>Both approaches are used in the kernel crate, so I wonder if we could have some guidelines on how to choose between these two and also on how to choose proper names for these.</p>
+<p>I'm asking because when prototyping a driver, at times I was passed in a pointer by some kernel callback, but there were instances where I found myself trying to instantiate the same object on the stack.</p>
+<p>I started naming the <code>struct Wrapper(&lt;some pointer&gt;)</code> variant as <code>struct FooRef(&lt;some_pointer&gt;)</code> to distinguish it from <code>struct Foo(UnsafeCell&lt;bindings::some_struct&gt;)</code>.</p>
+<p>Thoughts?</p>
+
+
+
+<a name="341809694"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Naming%20conventions%3F/near/341809694" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Naming.20conventions.3F.html#341809694">(Mar 14 2023 at 14:26)</a>:</h4>
+<p>I think overall the approach you are using is preferred, just note that if <code>some_struct</code> itself has a reference count, you may be able to  <code>impl AlwaysRefCounted for Foo</code>, and <code>FooRef</code> can be just <code>ARef&lt;Foo&gt;</code>.</p>
+
+
+
+<a name="341930185"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Naming%20conventions%3F/near/341930185" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Naming.20conventions.3F.html#341930185">(Mar 15 2023 at 00:02)</a>:</h4>
+<p>I'm not involved with RFL, but here's my 2cents from other FFI work:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[repr(transparent)]</span>
+<span class="k">struct</span> <span class="nc">SomeStruct</span><span class="p">(</span><span class="n">UnsafeCell</span><span class="o">&lt;</span><span class="n">bindings</span>::<span class="n">some_struct</span><span class="o">&gt;</span><span class="p">)</span>
+</code></pre></div>
+<p>This is typically the pattern to use when you want a representation of a C structure in Rust. If you're often working with pointers, you typically will want something like:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="w"> </span><span class="n">SomeStruct</span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="k">fn</span> <span class="nf">from_raw_ptr</span><span class="o">&lt;'</span><span class="na">p</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">bindings</span>::<span class="n">some_struct</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="o">'</span><span class="na">p</span> <span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">&amp;*</span><span class="n">ptr</span><span class="p">.</span><span class="n">cast</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The <code>&amp;Self</code> is equivalent to <code>some_struct*</code> or <code>struct Wrapper(&lt;some pointer&gt;)</code> and can be passed to C functions taking a pointer (with a cast). Writing the methods is more ergonmic this way.</p>
+<p>I think that something like <code>struct FooRef(&lt;some_pointer&gt;)</code>is typically only useful for cases where the pointer may not be valid and has to be checked somewhere else. But usually something like this should have a <code>PhantomData</code> lifetime - becauase otherwise, you could pass it around for use anywhere, even after the pointer is invalid</p>
+
+
+
+<a name="341930968"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Naming%20conventions%3F/near/341930968" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Naming.20conventions.3F.html#341930968">(Mar 15 2023 at 00:09)</a>:</h4>
+<p>But I believe a <code>Wrapper(&lt;some pointer&gt;)</code> does need to be used when you want to control drop behavior</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

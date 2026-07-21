@@ -1,0 +1,73 @@
+<html>
+<head><meta charset="utf-8"><title>Attribute macros for kernel version conditional compilation · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html">Attribute macros for kernel version conditional compilation</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="579797534"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Attribute%20macros%20for%20kernel%20version%20conditional%20compilation/near/579797534" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gilberto Bertin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html#579797534">(Mar 16 2026 at 20:49)</a>:</h4>
+<p>I played a bit with implementing attribute macros for conditional compilation based on kernel versions:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">kernel</span><span class="p">::</span><span class="n">macros</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+
+<span class="cp">#[before(7, 0, 0)]</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">call_kernel_fn</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// implementation for kernels &lt; 7.0.0</span>
+<span class="p">}</span>
+
+<span class="cp">#[since(7, 0, 0)]</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">call_kernel_fn</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// implementation for kernels &gt;= 7.0.0</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I think this can be useful for out-of-tree modules, as these can then target particular kernel versions' features, especially as more and more kernel APIs gets ported or wrapped with every new release.</p>
+<p>As this would be my first contribution here, before trying to send the patch I wanted to ask some questions and gather some preliminary feedback.</p>
+<p>First of all: do you also think there can be some value in this change?</p>
+<p>Next: at the moment everything lives in the <code>macros</code> crate: a couple of macros, an extra binding with related Makefile changes for <code>LINUX_VERSION_CODE</code> and some helpers to handle conversions between the <code>(major, patchlevel, sublevel)</code> and the <code>u32</code> kernel version format. </p>
+<p>For completeness I think these bindings and helpers should be exposed also in the <code>kernel</code> crate, so that a module can interact directly with the kernel version, but I'm unsure which approach would be best to follow:</p>
+<ul>
+<li>Duplicate the bindings and helpers in both the <code>kernel</code> and <code>macros</code> crates? Perhaps not, even if it's just a few LOCs</li>
+<li>Extract that logic into a separate crate shared between <code>kernel</code> and <code>macros</code>? Not sure if that would be useful for anything else in the future?</li>
+<li>Some other way to keep the bindings and helpers in the <code>kernel</code> crate and access them in the attribute macros in <code>macros</code>?</li>
+</ul>
+
+
+
+<a name="579842318"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Attribute%20macros%20for%20kernel%20version%20conditional%20compilation/near/579842318" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html#579842318">(Mar 17 2026 at 02:49)</a>:</h4>
+<p>Upstream kernel won't accept code (and the associated maintenance burden) just to make out-of-tree modules easier. Note that this macro will be completely dead-code for the upstream.</p>
+
+
+
+<a name="579867012"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Attribute%20macros%20for%20kernel%20version%20conditional%20compilation/near/579867012" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gilberto Bertin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html#579867012">(Mar 17 2026 at 07:25)</a>:</h4>
+<p>Makes sense, I thought this could be justified with the argument of  porting the <code>KERNEL_VERSION()</code>/ <code>LINUX_VERSION_CODE</code> API to Rust, as without a macro we can't really replicate the behavior of the  preprocessor eliminating unsupported code (and I don't think we can define attribute macros in out-of-tree modules?)</p>
+
+
+
+<a name="579880486"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Attribute%20macros%20for%20kernel%20version%20conditional%20compilation/near/579880486" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> David Rheinsberg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html#579880486">(Mar 17 2026 at 08:44)</a>:</h4>
+<p>You can always carry those in out-of-tree modules. But apart from symbol-licensing, I cannot think of any APIs that were merged exclusively for out-of-tree modules. There is just a general dislike of those in the kernel community.</p>
+
+
+
+<a name="579897960"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Attribute%20macros%20for%20kernel%20version%20conditional%20compilation/near/579897960" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gilberto Bertin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Attribute.20macros.20for.20kernel.20version.20conditional.20compilation.html#579897960">(Mar 17 2026 at 10:01)</a>:</h4>
+<blockquote>
+<p>There is just a general dislike of those in the kernel community.</p>
+</blockquote>
+<p>That's fair, and I can see the reasons why. </p>
+<blockquote>
+<p>You can always carry those in out-of-tree modules.</p>
+</blockquote>
+<p>I can always carry those symbols in out-of-tree modules, sure, but I cannot easily implement conditional compilation based on the kernel version without some bare support from the <code>macros</code> crate (I might be able to add some logic in the module's Makefile to turn the kernel version into a <code>--cfg kernel_ge_x_y_z</code> and pass it to <code>KBUILD_RUSTFLAGS</code> but that's not as clean as the initial proposal IMO).</p>
+<p>Anyway, thanks for the feedback, this was useful!</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,121 @@
+<html>
+<head><meta charset="utf-8"><title>Dropping uninitialized memory in DRM device · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html">Dropping uninitialized memory in DRM device</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="580451558"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580451558" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580451558">(Mar 19 2026 at 14:50)</a>:</h4>
+<p>Sashiko points out an issue in existing code (while reviewing <span class="user-mention silent" data-user-id="690399">Lyude</span> 's patchset): <a href="https://sashiko.dev/#/patchset/20260317213003.606088-1-lyude%40redhat.com">https://sashiko.dev/#/patchset/20260317213003.606088-1-lyude%40redhat.com</a></p>
+
+
+
+<a name="580451915"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580451915" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580451915">(Mar 19 2026 at 14:51)</a>:</h4>
+<p>It is interesting that it also figures out that Lyude's later patch fixes the bug</p>
+
+
+
+<a name="580707006"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707006" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707006">(Mar 20 2026 at 16:54)</a>:</h4>
+<p>I don't understand some of the slop coming back from this tbh:<br>
+"How can a Safe Rust driver export an early GEM object to userspace after the device registers? Because the Ctx is permanently encoded in the object's type, an object created early remains Object&lt;T, Uninit&gt;, When the driver attempts to use requires the trait bound D: drm: :Driver&lt;object&lt;Registered&gt; = Self&gt;."<br>
+It can't, because that's not how the API works. Even if it did, the upcast would be fine because if we can suddenly export the gem object to userspace that already implies registration</p>
+
+
+
+<a name="580707334"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707334" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707334">(Mar 20 2026 at 16:56)</a>:</h4>
+<p>Yeah, this is definitely nonsense. Overall I find that the review is generally useful however it lacks Rust specific understandings. It does not know the context pattern that we're using.</p>
+
+
+
+<a name="580707460"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707460" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707460">(Mar 20 2026 at 16:57)</a>:</h4>
+<p>"Does this type definition permanently lock the object to the Uninit typestate?<br>
+When accessing the device via the object later, calling .dev() will return<br>
+&amp;Device&lt;T::Driver, Uninit&gt;. Since Device&lt;..., Uninit&gt; does not implement<br>
+Deref&lt;Target = T::Data&gt;, the driver cannot safely access its private data<br>
+through the device pointer.<br>
+Would it be possible to provide a safe API (such as an into_registered()<br>
+or assume_ctx() method) to allow upgrading the object's context once the<br>
+device is registered?<br>
+Without a safe way to transition the typestate, drivers might be forced to<br>
+use unsafe blocks to interact with their early GEM objects in a registered<br>
+context." As well</p>
+
+
+
+<a name="580707803"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707803" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707803">(Mar 20 2026 at 16:58)</a>:</h4>
+<p>it's neat it found a bug but the impression I get is that this is probably not something I should be looking closely at</p>
+
+
+
+<a name="580707907"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707907" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707907">(Mar 20 2026 at 16:59)</a>:</h4>
+<p>It can catch some un-intended mistakes pretty well: <a href="https://sashiko.dev/#/patchset/20260316150720.1646109-1-gary%40kernel.org">https://sashiko.dev/#/patchset/20260316150720.1646109-1-gary%40kernel.org</a></p>
+
+
+
+<a name="580707951"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707951" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707951">(Mar 20 2026 at 16:59)</a>:</h4>
+<p>ok</p>
+
+
+
+<a name="580707956"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580707956" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580707956">(Mar 20 2026 at 16:59)</a>:</h4>
+<p>But something design-wise, I won't rely on it</p>
+
+
+
+<a name="580708088"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580708088" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580708088">(Mar 20 2026 at 16:59)</a>:</h4>
+<p>I just don't use tools like this :)</p>
+
+
+
+<a name="580708135"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580708135" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580708135">(Mar 20 2026 at 17:00)</a>:</h4>
+<p>It takes time to verify all of these things</p>
+
+
+
+<a name="580708183"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580708183" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580708183">(Mar 20 2026 at 17:00)</a>:</h4>
+<p>Fair enough, it just comes down to personal choice</p>
+
+
+
+<a name="580708733"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580708733" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580708733">(Mar 20 2026 at 17:02)</a>:</h4>
+<p>just be mindful of how much time it is taking for verifying stuff. The tricky thing about stuff like this is you can often waste more time trying to prove/disprove things it gives you then you'd have saved by just looking through stuff yourself.</p>
+
+
+
+<a name="580709455"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580709455" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580709455">(Mar 20 2026 at 17:05)</a>:</h4>
+<p>I'll look at the top thing it mentions today, or Monday. But human review would be really appreciated. Trying to figure out if I've still got the energy to work today, this week has been pretty awful</p>
+
+
+
+<a name="580748295"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580748295" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580748295">(Mar 20 2026 at 21:38)</a>:</h4>
+<p>yeah - the AI was correct on the very first issue I believe. going to write up and send out a fix for it</p>
+
+
+
+<a name="580749477"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Dropping%20uninitialized%20memory%20in%20DRM%20device/near/580749477" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Dropping.20uninitialized.20memory.20in.20DRM.20device.html#580749477">(Mar 20 2026 at 21:48)</a>:</h4>
+<p>It seems like the best fix is just going to be splitting the data_is_init addition into a separate patch, because once we call __drm_dev_alloc() there's not really any sensible way that we can drop the DRM device without release() being called</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

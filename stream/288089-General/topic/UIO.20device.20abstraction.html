@@ -1,0 +1,107 @@
+<html>
+<head><meta charset="utf-8"><title>UIO device abstraction · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/UIO.20device.20abstraction.html">UIO device abstraction</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="488653308"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/UIO%20device%20abstraction/near/488653308" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/UIO.20device.20abstraction.html#488653308">(Dec 12 2024 at 15:03)</a>:</h4>
+<p>Hi all! Yesterday, I sent a <a href="https://lore.kernel.org/rust-for-linux/tencent_6FBA3773CF74B276166B63D292CB2E8D3D07@qq.com/">patch</a>  about the UIO device abstraction, to support writing UIO driver in Rust. <br>
+I try reimplement <code>bio_cif.c</code> in rust, and got a problem: How to obtain <code>SampleDriver.bar0</code> in <code>SampleUioDevice </code>? <br>
+Maybe my abstraction is a bad design? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">struct</span><span class="w"> </span><span class="nc">SampleDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="nc">pci</span><span class="p">::</span><span class="n">Device</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_registration</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="n">uio</span><span class="p">::</span><span class="n">Registration</span><span class="o">&lt;</span><span class="n">SampleUioDevice</span><span class="o">&gt;&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_bar0</span><span class="p">:</span><span class="w"> </span><span class="nc">Devres</span><span class="o">&lt;</span><span class="n">Bar</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">kernel</span><span class="p">::</span><span class="n">pci_device_table</span><span class="o">!</span><span class="p">(</span><span class="o">..</span><span class="p">.);</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Driver</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SampleDriver</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">IdInfo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">ID_TABLE</span><span class="p">:</span><span class="w"> </span><span class="nc">pci</span><span class="p">::</span><span class="n">IdTable</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">PCI_TABLE</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">pci</span><span class="p">::</span><span class="n">Device</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Self</span><span class="p">::</span><span class="n">IdInfo</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">dev_dbg</span><span class="o">!</span><span class="p">(</span>
+<span class="w">            </span><span class="n">pdev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span>
+<span class="w">            </span><span class="s">"Probe Rust PCI driver sample (PCI ID: 0x{:x}, 0x{:x}).</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">pdev</span><span class="p">.</span><span class="n">vendor_id</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">pdev</span><span class="p">.</span><span class="n">device_id</span><span class="p">()</span>
+<span class="w">        </span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">pdev</span><span class="p">.</span><span class="n">enable_device_mem</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">bar0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">iomap_region_sized</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">c_str</span><span class="o">!</span><span class="p">(</span><span class="s">"rust_driver_pci0"</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">UioDeviceOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">c_str</span><span class="o">!</span><span class="p">(</span><span class="s">"0.0.1"</span><span class="p">));</span>
+
+<span class="w">        </span><span class="o">..</span><span class="p">.</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">registration</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="p">(</span>
+<span class="w">            </span><span class="n">uio</span><span class="p">::</span><span class="n">Registration</span><span class="p">::</span><span class="n">register</span><span class="p">(</span><span class="o">&amp;</span><span class="n">THIS_MODULE</span><span class="p">,</span><span class="w"> </span><span class="n">pdev</span><span class="p">.</span><span class="n">as_ref</span><span class="p">(),</span><span class="w"> </span><span class="n">options</span><span class="p">),</span>
+<span class="w">            </span><span class="n">GFP_KERNEL</span><span class="p">,</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">drvdata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">            </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">pdev</span><span class="p">:</span><span class="w"> </span><span class="nc">pdev</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                </span><span class="n">_registration</span><span class="p">:</span><span class="w"> </span><span class="nc">registration</span><span class="p">,</span>
+<span class="w">                </span><span class="n">_bar0</span><span class="p">:</span><span class="w"> </span><span class="nc">bar0</span><span class="p">,</span>
+<span class="w">            </span><span class="p">},</span>
+<span class="w">            </span><span class="n">GFP_KERNEL</span><span class="p">,</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">drvdata</span><span class="p">.</span><span class="n">into</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">SampleUioDevice</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+
+<span class="cp">#[vtable]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">uio</span><span class="p">::</span><span class="n">UioDevice</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">SampleUioDevice</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">type</span><span class="w"> </span><span class="nc">Ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pin</span><span class="o">&lt;</span><span class="n">KBox</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">open</span><span class="p">(</span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Info</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">::</span><span class="n">Ptr</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span><span class="p">.</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">KBox</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="n">into</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">handler</span><span class="p">(</span><span class="n">device</span><span class="p">:</span><span class="w"> </span><span class="nc">Pin</span><span class="o">&lt;&amp;</span><span class="n">SampleUioDevice</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">_info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Info</span><span class="p">,</span><span class="w"> </span><span class="n">_irq</span><span class="p">:</span><span class="w"> </span><span class="nc">ffi</span><span class="p">::</span><span class="n">c_int</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">IrqReturn</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// need to access `bar0` in the `SampleDriver `</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="488666568"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/UIO%20device%20abstraction/near/488666568" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/UIO.20device.20abstraction.html#488666568">(Dec 12 2024 at 15:59)</a>:</h4>
+<p>I suggest to have a look at Nova, which does the same thing, just with a DRM instead of UIO device.</p>
+<p>What I'm doing there is, put all the driver private data (including the <code>Devres&lt;pci::Bar&gt;)</code> into the DRM device and then put the DRM device into the PCI private driver data [1].</p>
+<p>Note that a DRM device is reference counted, so the lifetime of the DRM device is not bound on the PCI private driver data. Also note that <code>data</code> is an <code>Arc</code> because a DRM device is allowed to outlive the driver.</p>
+<p>[1] <a href="https://gitlab.freedesktop.org/drm/nova/-/blob/nova-next/drivers/gpu/drm/nova/driver.rs?ref_type=heads">https://gitlab.freedesktop.org/drm/nova/-/blob/nova-next/drivers/gpu/drm/nova/driver.rs?ref_type=heads</a></p>
+
+
+
+<a name="488748906"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/UIO%20device%20abstraction/near/488748906" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> JCKeep <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/UIO.20device.20abstraction.html#488748906">(Dec 13 2024 at 01:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> <a href="#narrow/channel/288089-General/topic/UIO.20device.20abstraction/near/488666568">said</a>:</p>
+<blockquote>
+<p>I suggest to have a look at Nova, which does the same thing, just with a DRM instead of UIO device.</p>
+<p>What I'm doing there is, put all the driver private data (including the <code>Devres&lt;pci::Bar&gt;)</code> into the DRM device and then put the DRM device into the PCI private driver data [1].</p>
+<p>Note that a DRM device is reference counted, so the lifetime of the DRM device is not bound on the PCI private driver data. Also note that <code>data</code> is an <code>Arc</code> because a DRM device is allowed to outlive the driver.</p>
+<p>[1] <a href="https://gitlab.freedesktop.org/drm/nova/-/blob/nova-next/drivers/gpu/drm/nova/driver.rs?ref_type=heads">https://gitlab.freedesktop.org/drm/nova/-/blob/nova-next/drivers/gpu/drm/nova/driver.rs?ref_type=heads</a></p>
+</blockquote>
+<p>This would work for me， I will try tonight</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

@@ -1,0 +1,282 @@
+<html>
+<head><meta charset="utf-8"><title>✔ How can I ask bindgen to not poke a &quot;static inline&quot; fun... · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html">✔ How can I ask bindgen to not poke a &quot;static inline&quot; fun...</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="497553017"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497553017" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497553017">(Feb 03 2025 at 23:38)</a>:</h4>
+<p>I have a bindgen issue, hope I can some help here. I add a C function as this in <code>include/linux/irqflags.h</code>, </p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="k">static</span><span class="w"> </span><span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">local_interrupt_enable</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">          </span><span class="kt">int</span><span class="w"> </span><span class="n">new_count</span><span class="p">;</span>
+
+<span class="w">          </span><span class="n">new_count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">hardirq_disable_exit</span><span class="p">();</span>
+
+<span class="w">          </span><span class="k">if</span><span class="w"> </span><span class="p">((</span><span class="n">new_count</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">HARDIRQ_DISABLE_MASK</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                  </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">flags</span><span class="p">;</span>
+
+<span class="w">                  </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">raw_cpu_read</span><span class="p">(</span><span class="n">local_interrupt_disable_state</span><span class="p">.</span><span class="n">flags</span><span class="p">);</span>
+<span class="w">                  </span><span class="n">local_irq_restore</span><span class="p">(</span><span class="n">flags</span><span class="p">);</span>
+<span class="w">                  </span><span class="cm">/*</span>
+<span class="cm">                   * TODO: re-read preempt count can be avoided, but it needs</span>
+<span class="cm">                   * should_resched() taking another parameter as the current</span>
+<span class="cm">                   * preempt count</span>
+<span class="cm">                   */</span>
+<span class="w">                  </span><span class="n">preempt_check_resched</span><span class="p">();</span>
+<span class="w">          </span><span class="p">}</span>
+<span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>and bindgen gives me an error:</p>
+<blockquote>
+<p>Unable to generate bindings: clang diagnosed error: ../include/linux/irqflags.h:294:3: error: call to undeclared function 'preempt_check_resched'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]</p>
+</blockquote>
+<p>because <code>preempt_check_resched()</code> is a C macro (defined in <code>include/linux/preempt.h</code> and I included it in <code>include/linux/irqflags.h</code>), and in this case <code>local_interrupt_enable()</code> is not supposed to be called by Rust code, so I don't want bindgen to generate binding for it at all. And yet, seems bindgen (or libclang) needs to parse function to some degree.</p>
+<p>My question is: is there a way to avoid this?</p>
+
+
+
+<a name="497598898"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497598898" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497598898">(Feb 04 2025 at 07:36)</a>:</h4>
+<p>You could explicitly exclude the function by name?</p>
+
+
+
+<a name="497759308"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497759308" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497759308">(Feb 04 2025 at 21:24)</a>:</h4>
+<p>It doesn't seem to work</p>
+
+
+
+<a name="497759380"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497759380" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497759380">(Feb 04 2025 at 21:24)</a>:</h4>
+<p>Yeah - I think what Andreas said is what you would want. <span class="user-mention" data-user-id="411647">@Boqun Feng</span> how are you excluding it at the moment?</p>
+
+
+
+<a name="497759420"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497759420" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497759420">(Feb 04 2025 at 21:25)</a>:</h4>
+<p>There should be a <code>--blocklist-function</code> argument that you can add to the arguments that we use with bindgen</p>
+
+
+
+<a name="497759663"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497759663" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497759663">(Feb 04 2025 at 21:27)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497759420">said</a>:</p>
+<blockquote>
+<p>There should be a <code>--blocklist-function</code> argument that you can add to the arguments that we use with bindgen</p>
+</blockquote>
+<p><code>--blocklist-function local_interrupt_enable</code> in <code>rust/bindgen_parameters</code> doesn't work.</p>
+
+
+
+<a name="497760075"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760075" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760075">(Feb 04 2025 at 21:29)</a>:</h4>
+<p>Hm.</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">      </span><span class="o">--</span><span class="n">wrap</span><span class="o">-</span><span class="k">static</span><span class="o">-</span><span class="n">fns</span>
+<span class="w">          </span><span class="n">Generate</span><span class="w"> </span><span class="n">wrappers</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="err">`</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="w"> </span><span class="n">inline</span><span class="err">`</span><span class="w"> </span><span class="n">functions</span>
+<span class="w">      </span><span class="o">--</span><span class="n">wrap</span><span class="o">-</span><span class="k">static</span><span class="o">-</span><span class="n">fns</span><span class="o">-</span><span class="n">path</span><span class="w"> </span><span class="o">&lt;</span><span class="n">PATH</span><span class="o">&gt;</span>
+<span class="w">          </span><span class="n">Sets</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">must</span><span class="w"> </span><span class="n">be</span><span class="w"> </span><span class="n">created</span><span class="w"> </span><span class="n">due</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">presence</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="err">`</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="w"> </span><span class="n">inline</span><span class="err">`</span><span class="w"> </span><span class="n">functions</span>
+<span class="w">      </span><span class="o">--</span><span class="n">wrap</span><span class="o">-</span><span class="k">static</span><span class="o">-</span><span class="n">fns</span><span class="o">-</span><span class="n">suffix</span><span class="w"> </span><span class="o">&lt;</span><span class="n">SUFFIX</span><span class="o">&gt;</span>
+<span class="w">          </span><span class="n">Sets</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">suffix</span><span class="w"> </span><span class="n">added</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="n">wrapper</span><span class="w"> </span><span class="n">functions</span><span class="w"> </span><span class="n">generated</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="err">`</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="err">`</span><span class="k">static</span><span class="w"> </span><span class="n">inline</span><span class="err">`</span><span class="w"> </span><span class="n">functions</span>
+<span class="w">      </span><span class="o">--</span><span class="n">default</span><span class="o">-</span><span class="n">visibility</span><span class="w"> </span><span class="o">&lt;</span><span class="n">VISIBILITY</span><span class="o">&gt;</span>
+<span class="w">          </span><span class="n">Set</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="n">visibility</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">fields</span><span class="p">,</span><span class="w"> </span><span class="n">including</span><span class="w"> </span><span class="n">bitfields</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">accessor</span><span class="w"> </span><span class="n">methods</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">bitfields</span><span class="p">.</span><span class="w"> </span><span class="n">This</span><span class="w"> </span><span class="n">flag</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">ignored</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="err">`</span><span class="o">--</span><span class="n">respect</span><span class="o">-</span><span class="n">cxx</span><span class="o">-</span><span class="n">access</span><span class="o">-</span><span class="n">specs</span><span class="err">`</span><span class="w"> </span><span class="n">flag</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">used</span>
+</code></pre></div>
+
+
+
+<a name="497760243"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760243" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760243">(Feb 04 2025 at 21:30)</a>:</h4>
+<p>what I want is quite the opposite, I want bindgen to ignore this "static inline" function</p>
+
+
+
+<a name="497760292"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760292" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760292">(Feb 04 2025 at 21:30)</a>:</h4>
+<p>yeah - I'm curious if we add some sort of suffix to it and if we need to block the function with the suffix added</p>
+
+
+
+<a name="497760340"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760340" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760340">(Feb 04 2025 at 21:31)</a>:</h4>
+<p><a href="https://github.com/fbq/linux/tree/dev/nested-irq-disable">https://github.com/fbq/linux/tree/dev/nested-irq-disable</a></p>
+
+
+
+<a name="497760354"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760354" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760354">(Feb 04 2025 at 21:31)</a>:</h4>
+<p>in case you want to play with it.</p>
+
+
+
+<a name="497760395"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760395" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760395">(Feb 04 2025 at 21:31)</a>:</h4>
+<p>yeah lemme see what I can do</p>
+
+
+
+<a name="497760510"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760510" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760510">(Feb 04 2025 at 21:32)</a>:</h4>
+<p>i get a strong feeling it isn't applying the static inlines to the normal function blocklist at all</p>
+
+
+
+<a name="497760853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497760853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497760853">(Feb 04 2025 at 21:34)</a>:</h4>
+<p>I'm going to try move <code>local_interrupt_disable/enable()</code> into <code>spinlock.h</code> to see if it makes any difference.</p>
+
+
+
+<a name="497762948"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497762948" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497762948">(Feb 04 2025 at 21:48)</a>:</h4>
+<p>realizing something: this is an error message from libclang itself having trouble parsing the translation unit, which would mean that it's unlikely the blocklist has any affect because the point that is likely applied comes after actually parsing the TUs using libclang</p>
+
+
+
+<a name="497762983"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497762983" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497762983">(Feb 04 2025 at 21:48)</a>:</h4>
+<p>Yeah</p>
+
+
+
+<a name="497762989"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497762989" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497762989">(Feb 04 2025 at 21:48)</a>:</h4>
+<p>So I think the solution might just be to make sure that function is defined</p>
+
+
+
+<a name="497763026"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763026" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763026">(Feb 04 2025 at 21:48)</a>:</h4>
+<p>Then hopefully it should parse and avoid spitting out the binding</p>
+
+
+
+<a name="497763083"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763083" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763083">(Feb 04 2025 at 21:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497762989">said</a>:</p>
+<blockquote>
+<p>So I think the solution might just be to make sure that function is defined</p>
+</blockquote>
+<p>That "function" is a macro, and it's defined.</p>
+
+
+
+<a name="497763108"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763108" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763108">(Feb 04 2025 at 21:49)</a>:</h4>
+<p>right right</p>
+
+
+
+<a name="497763630"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763630" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763630">(Feb 04 2025 at 21:52)</a>:</h4>
+<p>this is very strange</p>
+
+
+
+<a name="497763712"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763712" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763712">(Feb 04 2025 at 21:53)</a>:</h4>
+<p><span class="user-mention" data-user-id="582628">@Daniel Almeida</span> BTW ^ current blocker for spinlockirq, if you have any ideas it'd be appreciated. something strange is happening here</p>
+
+
+
+<a name="497763971"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497763971" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497763971">(Feb 04 2025 at 21:54)</a>:</h4>
+<p>I have a "#ifdef" work around.</p>
+
+
+
+<a name="497764207"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497764207" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497764207">(Feb 04 2025 at 21:56)</a>:</h4>
+<p>gotcha. can you show me it btw? I'm kind of curious what it looks like</p>
+
+
+
+<a name="497764273"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497764273" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497764273">(Feb 04 2025 at 21:57)</a>:</h4>
+<p>One sec, once it passed my unit test I'm going to share the branch</p>
+
+
+
+<a name="497774080"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497774080" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497774080">(Feb 04 2025 at 23:08)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="690399">Lyude</span> <a href="#narrow/channel/291565-Help/topic/How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20function/near/497764207">said</a>:</p>
+<blockquote>
+<p>gotcha. can you show me it btw? I'm kind of curious what it looks like</p>
+</blockquote>
+<p>branch updated, I also need to move some function into <code>spinlock.h</code> to avoid header file cyclic dependency on riscv</p>
+
+
+
+<a name="497901539"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497901539" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497901539">(Feb 05 2025 at 14:08)</a>:</h4>
+<p>Hi everybody, my understanding is that <span class="user-mention" data-user-id="411647">@Boqun Feng</span> has this figured out already? Sorry for the delay here.</p>
+
+
+
+<a name="497920662"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497920662" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497920662">(Feb 05 2025 at 15:30)</a>:</h4>
+<p>Not really, I have a work around, but still cannot figure out why bindgen does this.</p>
+
+
+
+<a name="497920690"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497920690" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497920690">(Feb 05 2025 at 15:30)</a>:</h4>
+<p>or libclang</p>
+
+
+
+<a name="497921277"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497921277" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497921277">(Feb 05 2025 at 15:33)</a>:</h4>
+<p>But bindgen parses the header like clang does, yes? So if bindgen rejects it, surely the C side of the kernel does not build either when that header is included?</p>
+
+
+
+<a name="497921393"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497921393" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497921393">(Feb 05 2025 at 15:34)</a>:</h4>
+<p>It was built successfully without Rust enabled.</p>
+
+
+
+<a name="497921625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497921625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497921625">(Feb 05 2025 at 15:34)</a>:</h4>
+<p>You probably are missing an include of some other header? I'm guessing the relevant <code>.c</code> files import the other header through other mechanisms but the bindgen helper header does not include the dependency header.</p>
+
+
+
+<a name="497922272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497922272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497922272">(Feb 05 2025 at 15:37)</a>:</h4>
+<p>Hmm... it happens when bindgen generating the bindings for a ".h" file, and we have the "#include" for the macro definition.</p>
+
+
+
+<a name="497922377"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497922377" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497922377">(Feb 05 2025 at 15:37)</a>:</h4>
+<p>Surely bindgen would not emit that error if the function is defined or a macro?</p>
+
+
+
+<a name="497922514"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497922514" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497922514">(Feb 05 2025 at 15:38)</a>:</h4>
+<p>Let me see if I can make a smaller reproduce.</p>
+
+
+
+<a name="497927477"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497927477" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boqun Feng <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497927477">(Feb 05 2025 at 15:58)</a>:</h4>
+<p>Ok, I find the root-cause, the macro I used is <code>#undef</code> explicityly if <code>MODULE</code> is defined, and we pass <code>-DMODULE</code> into bindgen command line. I think the code would not compile if a module is built, which is not in my test env.</p>
+
+
+
+<a name="497927537"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/%E2%9C%94%20How%20can%20I%20ask%20bindgen%20to%20not%20poke%20a%20%22static%20inline%22%20fun.../near/497927537" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/.E2.9C.94.20How.20can.20I.20ask.20bindgen.20to.20not.20poke.20a.20.22static.20inline.22.20fun.2E.2E.2E.html#497927537">(Feb 05 2025 at 15:58)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411647">Boqun Feng</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>

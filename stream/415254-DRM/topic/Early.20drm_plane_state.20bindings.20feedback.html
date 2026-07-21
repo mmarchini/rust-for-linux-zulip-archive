@@ -1,0 +1,250 @@
+<html>
+<head><meta charset="utf-8"><title>Early drm_plane_state bindings feedback · DRM · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/index.html">DRM</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html">Early drm_plane_state bindings feedback</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="420566853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420566853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420566853">(Feb 09 2024 at 00:35)</a>:</h4>
+<p>Hi! If anyone has a moment, I'd love it if someone could take a look at <a href="https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms-wip-02082024/rust/kernel/drm/kms/plane.rs?ref_type=tags#L113">https://gitlab.freedesktop.org/lyudess/linux/-/blob/rvkms-wip-02082024/rust/kernel/drm/kms/plane.rs?ref_type=tags#L113</a> - specifically <code>PlaneState</code> and <code>DriverPlaneState</code>. I'm mostly just curious if I've got the right idea with how this interface should look so far, if I'm correct in <code>PlaneState&lt;T&gt;</code> not needing to be pinned (my reasoning for which is mentioned in the commit message), etc.<br>
+I figured this would be the easiest place to ask since it's probably going to be a bit before I'm far enough with this that I can start testing things</p>
+
+
+
+<a name="420597711"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420597711" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420597711">(Feb 09 2024 at 07:22)</a>:</h4>
+<p>It's possible that you can get away without pinning or <code>Opaque</code> if the struct is only accessed via raw pointers for the entire duration in which it is used. But <code>Plane</code> should use <code>Opaque</code> instead of <code>UnsafeCell</code>.</p>
+
+
+
+<a name="420645375"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420645375" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420645375">(Feb 09 2024 at 12:44)</a>:</h4>
+<p>Also, the safety comment "must not be null" is not enough. I could pass a dangling but non-null pointer. Instead, require the pointer to point at a valid value.</p>
+
+
+
+<a name="420721142"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420721142" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420721142">(Feb 09 2024 at 19:54)</a>:</h4>
+<p>Thanks for the feedback! Re <code>Opaque</code>: I'm pretty sure we've gotta be able to access some of the fields (and, possibly write to some of them?) directly</p>
+
+
+
+<a name="420724353"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420724353" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420724353">(Feb 09 2024 at 20:17)</a>:</h4>
+<p>You can still do that.</p>
+
+
+
+<a name="420724395"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420724395" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420724395">(Feb 09 2024 at 20:17)</a>:</h4>
+<p>Get a raw pointer with the <code>get</code> method and use that.</p>
+
+
+
+<a name="420724611"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420724611" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420724611">(Feb 09 2024 at 20:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420724395">said</a>:</p>
+<blockquote>
+<p>Get a raw pointer with the <code>get</code> method and use that.</p>
+</blockquote>
+<p>Oh, huh. What's the effective difference then? I've seen <code>UnsafeCell&lt;T&gt;</code> used a few times with asahi's bindings</p>
+
+
+
+<a name="420726302"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420726302" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420726302">(Feb 09 2024 at 20:30)</a>:</h4>
+<p><code>Opaque</code> is allowed to be self-referential or be part of intrusive linked lists. UnsafeCell is not enough for that.</p>
+
+
+
+<a name="420730456"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420730456" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420730456">(Feb 09 2024 at 20:58)</a>:</h4>
+<p>OH! I didn't realize that, that would also explain why I might not need pinning then huh?</p>
+
+
+
+<a name="420730931"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420730931" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420730931">(Feb 09 2024 at 21:00)</a>:</h4>
+<p>The reason why you don't necessarily have to use pinning or Opaque is that those only really matter for structs that are accessed with a refernce or <code>Box</code>. If you never create those to the struct while it is in use, then it doesn't make a difference.</p>
+
+
+
+<a name="420731017"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420731017" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420731017">(Feb 09 2024 at 21:01)</a>:</h4>
+<p>But anything where the user of your library can have direct ownership of it cannot use that strategy.</p>
+
+
+
+<a name="420731416"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420731416" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lyude <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420731416">(Feb 09 2024 at 21:04)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420731017">said</a>:</p>
+<blockquote>
+<p>But anything where the user of your library can have direct ownership of it cannot use that strategy.</p>
+</blockquote>
+<p>So - if we're allocating structs like the example I mentioned, where the struct itself is in a Box&lt;&gt; but the ffi type in question is embedded in that struct, I assume that -does- require pinning?</p>
+
+
+
+<a name="420733488"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420733488" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420733488">(Feb 09 2024 at 21:19)</a>:</h4>
+<p>Basically, whenever the <code>Box</code> exists, you assert uniqueness over the allocation. That's incompatible with self-referential structs.</p>
+
+
+
+<a name="420735718"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420735718" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420735718">(Feb 09 2024 at 21:36)</a>:</h4>
+<p>But <code>Opaque</code> opts-out of that uniqueness assertion.</p>
+
+
+
+<a name="420781594"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420781594" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Gross <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420781594">(Feb 10 2024 at 08:18)</a>:</h4>
+<p>I wonder if there should be a rust-drm branch to collect this kind of work. With Nova, the Asahi driver, and rustgem, there is probably quite a bit of shared logic floating around</p>
+
+
+
+<a name="420789470"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420789470" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420789470">(Feb 10 2024 at 10:35)</a>:</h4>
+<p>Yeah, we talked with <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> et al. about that -- we can definitely add a branch if there is someone from those efforts willing to drive it. Of course, it can also be several people and/or several branches, as needed.</p>
+
+
+
+<a name="420791037"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420791037" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420791037">(Feb 10 2024 at 11:01)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="587349">Trevor Gross</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420781594">said</a>:</p>
+<blockquote>
+<p>I wonder if there should be a rust-drm branch to collect this kind of work. With Nova, the Asahi driver, and rustgem, there is probably quite a bit of shared logic floating around</p>
+</blockquote>
+<p>I feel that Asahi Linux branches are kind of the gathering of most of what we need for DRM. We just need to start upstreaming to have a solid base on upstream for new drivers.</p>
+
+
+
+<a name="420808707"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420808707" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420808707">(Feb 10 2024 at 15:30)</a>:</h4>
+<p><span class="user-mention" data-user-id="587349">@Trevor Gross</span> </p>
+<p>Yes, that's what I was proposing as well. Ultimately, I'd like to get to a common RfL branch that basically contains all staging Rust infrastructure required by drivers currently being in development.</p>
+<p>This doesn't mean we can't have branches like rust-pci, rust-drm, etc. as well, actually, I think it makes sense to have both.</p>
+<p><span class="user-mention" data-user-id="585781">@Maíra Canal</span> </p>
+<p>For DRM it's true that most of the infrastructure is in the Asahi tree. However, I'd like to avoid that we just wildy cherry-pick stuff from one driver tree to another and, instead, have a common baseline where we improve things collaboratively until we hit upstream.</p>
+<p>This way we avoid things diverging and getting scattered. Some drivers might extend improve things cherry-picked from somewhere else. Without a common baseline this will be very hard to handle. In the worst case we end up with every driver carrying it's own version of some piece of infrastructure.</p>
+<p>Plus it has the advantage that we only have to continuously rebase the common baseline against upstream instead of every driver rebasing the cherry-picked mess themselfes.</p>
+<p>I already contact <span class="user-mention" data-user-id="522295">@Asahi Lina</span> asking for her perspective on that. However, as she mentioned in the context of the last meeting, she seems to be enganged otherwise for a while.</p>
+<p>Hence, I planned to follow up on this either way in the coming week.</p>
+
+
+
+<a name="420809385"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420809385" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420809385">(Feb 10 2024 at 15:39)</a>:</h4>
+<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>
+
+
+
+<a name="420809652"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420809652" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420809652">(Feb 10 2024 at 15:42)</a>:</h4>
+<p>That's why I'm working on the XArray patch and I plan to start working on "rust: Add container_of and offset_of macros"</p>
+
+
+
+<a name="420809696"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420809696" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420809696">(Feb 10 2024 at 15:43)</a>:</h4>
+<blockquote>
+<p>Yes, that's what I was proposing as well. Ultimately, I'd like to get to a common RfL branch that basically contains all staging Rust infrastructure required by drivers currently being in development.</p>
+</blockquote>
+<p>If I understand correctly, you are asking for an integration branch. As I explained in the meeting, we already have (something like) that: the existing <a href="https://rust-for-linux.com/branches#rust-dev"><code>rust-dev</code></a> or, if Boqun prefers to keep <code>rust-dev</code> for things that have already at least been sent to the mailing list,  a similar one for not-yet-in-LKML things.</p>
+<p>The branch could merge the topic branches (this is similar to what Boqun already does with <code>rust-dev</code>, e.g. he takes patches/branches that are going through other non-<code>rust-next</code> trees in the kernel).</p>
+<p>From the webpage:</p>
+<blockquote>
+<p><a href="https://github.com/Rust-for-Linux/linux/tree/rust-dev"><code>rust-dev</code></a> is an experimental branch for integration purposes. It is a queue for patches that "look good enough".</p>
+<p>Its intended use cases are:</p>
+<p>- Finding merge/apply conflicts as early as possible.<br>
+  - Providing a common base for development that requires features that are not yet in mainline or <code>rust-next</code>, i.e. giving early access to features. This may include Rust-related changes from other subsystems.<br>
+  - Providing extra testing to patches by making them easily available to more developers.</p>
+<p>Note that this branch may be updated/rebased frequently and it might be gone in the future.</p>
+</blockquote>
+<p>How does that sound?</p>
+
+
+
+<a name="420809878"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420809878" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420809878">(Feb 10 2024 at 15:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="585781">Maíra Canal</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809652">said</a>:</p>
+<blockquote>
+<p>That's why I'm working on the XArray patch and I plan to start working on "rust: Add container_of and offset_of macros"</p>
+</blockquote>
+<p><code>container_of</code> was sent in the rbtree patch, and <code>offset_of</code> is now in std</p>
+
+
+
+<a name="420810307"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420810307" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420810307">(Feb 10 2024 at 15:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="585781">Maíra Canal</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809385">said</a>:</p>
+<blockquote>
+<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>
+</blockquote>
+<p>I think Danilo is referring to things that are yet WIP (so not ready for upstreaming) or that will take some time to reach upstream (for other reasons). Is that correct Danilo?</p>
+<p>For things that are ready for submission (and that kernel maintainers are willing to take already), I agree we should just try to upstream as soon as possible, thus sending them through their relevant tree in the kernel (<code>rust-next</code> or others), as you are saying (Maíra).</p>
+<p>Am I understanding both of you right?</p>
+
+
+
+<a name="420812523"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/420812523" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#420812523">(Feb 10 2024 at 16:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420810307">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="585781">Maíra Canal</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809385">said</a>:</p>
+<blockquote>
+<p>Personally, I was thinking of starting upstreaming the infrastructure and building the common baseline on the rust-next</p>
+</blockquote>
+<p>I think Danilo is referring to things that are yet WIP (so not ready for upstreaming) or that will take some time to reach upstream (for other reasons). Is that correct Danilo?</p>
+<p>For things that are ready for submission (and that kernel maintainers are willing to take already), I agree we should just try to upstream as soon as possible, thus sending them through their relevant tree in the kernel (<code>rust-next</code> or others), as you are saying (Maíra).</p>
+<p>Am I understanding both of you right?</p>
+</blockquote>
+<p>Absolutely agree! If it's ready to upstream and and folks are willing to take it, we should just do it! For everything else, topic branches plus an integration branch would be great. I'm also happy to take some efforts of that.</p>
+
+
+
+<a name="421431239"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/421431239" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#421431239">(Feb 14 2024 at 12:08)</a>:</h4>
+<p>We discussed whether to make this integration branch of the topic branches part of <code>rust-dev</code> or as a new branch: <code>rust-dev</code> will continue to be meant only for things already submitted to the LKML or present in upstream kernel subsystem trees (e.g. Boqun may merge trees from other maintainers sometimes when needed, but he is not expected to be merging our topic branches).</p>
+<p>So we can create a different integration branch for the topic branches -- essentially like a <code>linux-next</code> for the topic branches (a bit more relaxed in requirements) and like the old <code>rust</code> branch way. I would suggest we do that when we have at least 2 or 3 branches to integrate. Ideally one or more of the maintainers of the most active topic branches would maintain it, since those topic branches will be triggering most of the changes.</p>
+<p>By the way, the topic branches do not need to necessarily be in our repository: if an upstream maintainer is willing to have the development/topic branches in their own subsystem, that is ideal (and it is still possible to integrate those into the integration branch). Of course, this is meant for things that are not in <code>linux-next</code>, i.e. the point is not to recreate <code>linux-next</code>, so the usual branches that a subsystem already has there would not really be the target for this integration branch.</p>
+
+
+
+<a name="421738616"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/421738616" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#421738616">(Feb 15 2024 at 20:52)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/421431239">said</a>:</p>
+<blockquote>
+<p>We discussed whether to make this integration branch of the topic branches part of <code>rust-dev</code> or as a new branch: <code>rust-dev</code> will continue to be meant only for things already submitted to the LKML or present in upstream kernel subsystem trees (e.g. Boqun may merge trees from other maintainers sometimes when needed, but he is not expected to be merging our topic branches).</p>
+<p>So we can create a different integration branch for the topic branches -- essentially like a <code>linux-next</code> for the topic branches (a bit more relaxed in requirements) and like the old <code>rust</code> branch way. I would suggest we do that when we have at least 2 or 3 branches to integrate. Ideally one or more of the maintainers of the most active topic branches would maintain it, since those topic branches will be triggering most of the changes.</p>
+<p>By the way, the topic branches do not need to necessarily be in our repository: if an upstream maintainer is willing to have the development/topic branches in their own subsystem, that is ideal (and it is still possible to integrate those into the integration branch). Of course, this is meant for things that are not in <code>linux-next</code>, i.e. the point is not to recreate <code>linux-next</code>, so the usual branches that a subsystem already has there would not really be the target for this integration branch.</p>
+</blockquote>
+<p>I agree, that sounds good.</p>
+<p>Speaking of that, there is already a second branch that I'd like to request in this context: rust-drm-dev. As the name implies, it'd contain basic DRM device bindings. I checked with <span class="user-mention" data-user-id="670868">@Dave Airlie</span>  and we'd create it as a topic branch in drm-misc.</p>
+<p>The idea is to upstream Nova as stub driver making use of the PCI and basic DRM device bindings only. We then want to continue to develop Nova upstream and keep upstreaming more Rust bindings on the way to break the chicken and egg problem we'd have otherwise.</p>
+<p>Once we got it in place, I'd be great if we could create the corresponding integration branch.</p>
+<p><span class="user-mention" data-user-id="690399">@Lyude</span>  is currently working on rvkms, hence we might also want to have a branch for more DRM bindings at some point.</p>
+
+
+
+<a name="422021611"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/Early%20drm_plane_state%20bindings%20feedback/near/422021611" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Maíra Canal <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback.html#422021611">(Feb 17 2024 at 15:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="519727">Alice Ryhl</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809878">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="585781">Maíra Canal</span> <a href="#narrow/stream/415254-DRM/topic/Early.20drm_plane_state.20bindings.20feedback/near/420809652">said</a>:</p>
+<blockquote>
+<p>That's why I'm working on the XArray patch and I plan to start working on "rust: Add container_of and offset_of macros"</p>
+</blockquote>
+<p><code>container_of</code> was sent in the rbtree patch, and <code>offset_of</code> is now in std</p>
+</blockquote>
+<p>Could you take a look at the version of <code>container_of</code> that I sent today? I checked the rbtree version, but you need to use unsafe blocks for <code>container_of</code>. Lina's version doesn't have this dependency.</p>
+
+
+
+<hr><p>Last updated: Jul 21 2026 at 20:45 UTC</p>
+</html>
