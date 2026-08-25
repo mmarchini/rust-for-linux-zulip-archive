@@ -30,5 +30,84 @@
 
 
 
-<hr><p>Last updated: Aug 25 2026 at 07:42 UTC</p>
+<a name="618950397"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/SpinLock%3A%20Add%20support%20for%20try_pin_init%21%28%29/near/618950397" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/SpinLock.3A.20Add.20support.20for.20try_pin_init.21.28.29.html#618950397">(Aug 25 2026 at 07:53)</a>:</h4>
+<p>I found the patch below. But also see <a href="#narrow/channel/561532-pin-init/topic/.60init_zeroed.60.20and.20.60chain.60.20but.20fallible/with/590687400">this thread</a> on a related discussion on <code>pin_init_zeroed</code> where <span class="user-mention" data-user-id="546447">@Benno Lossin</span> suggest making the original function generic over the error type.</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="gh">diff --git a/rust/kernel/sync/lock.rs b/rust/kernel/sync/lock.rs</span>
+<span class="gh">index f390cd7ba0762..6025dd258ed35 100644</span>
+<span class="gd">--- a/rust/kernel/sync/lock.rs</span>
+<span class="gi">+++ b/rust/kernel/sync/lock.rs</span>
+<span class="gu">@@ -8,6 +8,7 @@</span>
+<span class="w"> </span>use super::LockClassKey;
+<span class="w"> </span>use crate::{
+<span class="w"> </span>    str::{CStr, CStrExt as _},
+<span class="gi">+    try_pin_init,</span>
+<span class="w"> </span>    types::{NotThreadSafe, Opaque, ScopeGuard},
+<span class="w"> </span>};
+<span class="w"> </span>use core::{cell::UnsafeCell, marker::PhantomPinned, pin::Pin};
+<span class="gu">@@ -143,6 +144,22 @@ pub fn new(</span>
+<span class="w"> </span>            }),
+<span class="w"> </span>        })
+<span class="w"> </span>    }
+<span class="gi">+</span>
+<span class="gi">+    pub fn try_new(</span>
+<span class="gi">+        t: T,</span>
+<span class="gi">+        name: &amp;'static CStr,</span>
+<span class="gi">+        key: Pin&lt;&amp;'static LockClassKey&gt;,</span>
+<span class="gi">+    ) -&gt; impl PinInit&lt;Self, kernel::error::Error&gt; {</span>
+<span class="gi">+        try_pin_init!(Self {</span>
+<span class="gi">+            data: UnsafeCell::new(t),</span>
+<span class="gi">+            _pin: PhantomPinned,</span>
+<span class="gi">+            // SAFETY: `slot` is valid while the closure is called and both `name` and `key` have</span>
+<span class="gi">+            // static lifetimes so they live indefinitely.</span>
+<span class="gi">+            state &lt;- Opaque::ffi_init(|slot| unsafe {</span>
+<span class="gi">+                B::init(slot, name.as_char_ptr(), key.as_ptr())</span>
+<span class="gi">+            }),</span>
+<span class="gi">+        })</span>
+<span class="gi">+    }</span>
+<span class="w"> </span>}
+
+<span class="w"> </span>impl&lt;B: Backend&gt; Lock&lt;(), B&gt; {
+<span class="gh">diff --git a/rust/kernel/sync/lock/mutex.rs b/rust/kernel/sync/lock/mutex.rs</span>
+<span class="gh">index 581cee7ab842a..f0fc062308983 100644</span>
+<span class="gd">--- a/rust/kernel/sync/lock/mutex.rs</span>
+<span class="gi">+++ b/rust/kernel/sync/lock/mutex.rs</span>
+<span class="gu">@@ -17,6 +17,15 @@ macro_rules! new_mutex {</span>
+<span class="w"> </span>}
+<span class="w"> </span>pub use new_mutex;
+
+<span class="gi">+#[macro_export]</span>
+<span class="gi">+macro_rules! try_new_mutex {</span>
+<span class="gi">+    ($inner:expr $(, $name:literal)? $(,)?) =&gt; {</span>
+<span class="gi">+        $crate::sync::Mutex::try_new(</span>
+<span class="gi">+            $inner, $crate::optional_name!($($name)?), $crate::static_lock_class!())</span>
+<span class="gi">+    };</span>
+<span class="gi">+}</span>
+<span class="gi">+pub use try_new_mutex;</span>
+<span class="gi">+</span>
+<span class="w"> </span>/// A mutual exclusion primitive.
+<span class="w"> </span>///
+<span class="w"> </span>/// Exposes the kernel's [`struct mutex`]. When multiple threads attempt to lock the same mutex,
+<span class="gh">diff --git a/rust/kernel/sync/lock/spinlock.rs b/rust/kernel/sync/lock/spinlock.rs</span>
+<span class="gh">index d7be38ccbdc7d..faa5dd70b7c95 100644</span>
+<span class="gd">--- a/rust/kernel/sync/lock/spinlock.rs</span>
+<span class="gi">+++ b/rust/kernel/sync/lock/spinlock.rs</span>
+<span class="gu">@@ -17,6 +17,15 @@ macro_rules! new_spinlock {</span>
+<span class="w"> </span>}
+<span class="w"> </span>pub use new_spinlock;
+
+<span class="gi">+#[macro_export]</span>
+<span class="gi">+macro_rules! try_new_spinlock {</span>
+<span class="gi">+    ($inner:expr $(, $name:literal)? $(,)?) =&gt; {</span>
+<span class="gi">+        $crate::sync::SpinLock::try_new(</span>
+<span class="gi">+            $inner, $crate::optional_name!($($name)?), $crate::static_lock_class!())</span>
+<span class="gi">+    };</span>
+<span class="gi">+}</span>
+<span class="gi">+pub use try_new_spinlock;</span>
+<span class="gi">+</span>
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Aug 25 2026 at 08:40 UTC</p>
 </html>
