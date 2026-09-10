@@ -1,0 +1,55 @@
+<html>
+<head><meta charset="utf-8"><title>Should add Data: Send/Sync bounds in configfs::Subsystem? · General · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/index.html">General</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Should.20add.20Data.3A.20Send.2FSync.20bounds.20in.20configfs.3A.3ASubsystem.3F.html">Should add Data: Send/Sync bounds in configfs::Subsystem?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="623192434"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Should%20add%20Data%3A%20Send/Sync%20bounds%20in%20configfs%3A%3ASubsystem%3F/near/623192434" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> yilin <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Should.20add.20Data.3A.20Send.2FSync.20bounds.20in.20configfs.3A.3ASubsystem.3F.html#623192434">(Sep 10 2026 at 15:49)</a>:</h4>
+<p>Hi,</p>
+<p>I am looking at rust/kernel/configfs.rs and noticed that Subsystem&lt;Data&gt; unconditionally implements Send and Sync:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// A configfs subsystem.</span>
+<span class="sd">///</span>
+<span class="sd">/// This is the top level entrypoint for a configfs hierarchy. To register</span>
+<span class="sd">/// with configfs, embed a field of this type into your kernel module struct.</span>
+<span class="cp">#[pin_data(PinnedDrop)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Subsystem</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">subsystem</span><span class="p">:</span><span class="w"> </span><span class="nc">Opaque</span><span class="o">&lt;</span><span class="n">bindings</span><span class="p">::</span><span class="n">configfs_subsystem</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="cp">#[pin]</span>
+<span class="w">    </span><span class="n">data</span><span class="p">:</span><span class="w"> </span><span class="nc">Data</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="c1">// SAFETY: We do not provide any operations on `Subsystem`.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Subsystem</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// SAFETY: Ownership of `Subsystem` can safely be transferred to other threads.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Subsystem</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+<p>However, Subsystem&lt;Data&gt; stores a real Data value, so its <code>Send</code> implementation should at least require <code>Data:Send</code>, and its <code>Sync</code> implementation should require <code>Data:Sync</code>.</p>
+<p>It seems possible to register Subsystem&lt;Cell&lt;_&gt;&gt; through safe Rust but Cell doesn't implement Send/Sync.</p>
+<p>I know little about this file, so I don't know whether what I say is right. If this is right, I think the minimal change is add Send/Sync bounds:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// SAFETY: `Subsystem&lt;Data&gt;` can only be shared between threads when `Data` is</span>
+<span class="c1">// safe to share between threads.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">Data</span><span class="p">:</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Sync</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Subsystem</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// SAFETY: Ownership of `Subsystem&lt;Data&gt;` can only be transferred to another</span>
+<span class="c1">// thread when ownership of `Data` can also be transferred.</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="k">impl</span><span class="o">&lt;</span><span class="n">Data</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">Subsystem</span><span class="o">&lt;</span><span class="n">Data</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+</code></pre></div>
+
+
+
+<a name="623220962"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/288089-General/topic/Should%20add%20Data%3A%20Send/Sync%20bounds%20in%20configfs%3A%3ASubsystem%3F/near/623220962" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/288089-General/topic/Should.20add.20Data.3A.20Send.2FSync.20bounds.20in.20configfs.3A.3ASubsystem.3F.html#623220962">(Sep 10 2026 at 17:46)</a>:</h4>
+<p>Sounds about right for <code>Send</code>. From the top of my head, not sure about <code>Sync</code>, because as the comment says, sharing  <code>&amp;Subsystem&lt;Data&gt;</code> does not share <code>&amp;Data</code>.</p>
+
+
+
+<hr><p>Last updated: Sep 10 2026 at 18:07 UTC</p>
+</html>
