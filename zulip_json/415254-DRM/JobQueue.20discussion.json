@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>Hi all,</p>\n<p>Today on the JobQueue call, we discussed moving from using the XArray as storage for jobs in the JobQueue to having ListArcs instead.</p>\n<p>So as we discussed on the call, my main worry is that, by switching to lists, we may eventually reintroduce problems that <span class=\"user-mention\" data-user-id=\"532207\">@Sami Tolvanen</span> has already fixed in the XArray JQ implementation. There was a lot of work there to make sure that CTS passes without splats and we remain as performant as Panthor in benchmarks. This work will probably transfer over to Nova, Asahi and others. By doing away with the core idea that the queue is a pipeline of jobs in different stages, whose position is tracked via the index allocated by the XArray, this <strong>may</strong> break in ways we will have to rediscover.</p>\n<p>If I understand correctly, there are issues with the current XArray, my proposal is that we fix them. Subsequently, my proposal is that we later switch to the Rust XArray that <span class=\"user-mention\" data-user-id=\"737725\">@Daniel Gomez</span> and <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> are working on, as that will probably not have these issues from the start if we deliberately try to avoid them.</p>\n<p>In any case, although I strongly prefer keeping the XArray design, I understand this may not be the consensus, which is completely understandable in upstream work. I therefore propose we use this topic to collectively discuss some of the issues while <span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> iterates on the ListArc code.</p>",
+        "id": 625733997,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1789996345
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"981233\">@Deborah Brouwer</span> <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> <span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span></p>",
+        "id": 625734408,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1789996443
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> The issue Daniel is referring to is that XArray does not free internal nodes if the index is ever-increasing, which is the case for Tyr's JobQueue draft.</p>\n<p>Another issue is that XArray runs into massively deep trees for large indices, even if you have few entries. Matthew Wilcox told me that for something approaching u32::max that will be like 11 pointer indirections for each ID lookup. That's also not cool in a job submission path <span aria-label=\"eyes\" class=\"emoji emoji-1f440\" role=\"img\" title=\"eyes\">:eyes:</span></p>",
+        "id": 625734969,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789996574
+    },
+    {
+        "content": "<p>IDK if the C xarray issue can be solved, because the internal nodes not being freed seems to be by-design. So I would <em>expect</em> that the C Xarray pushes back a gainst freeing those nodes.</p>\n<p>That would have to be determined by someone who hypothetically tries to make this change in C</p>",
+        "id": 625735572,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789996710
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span>, how many jobs can you have at once? In the roadmap we shared at Kangrejos, I briefly mentioned about the shrink/expand tree. <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> I wonder if we can have some sort of ring buffer node for this shrink/expand situations where we keep the tree in \"shrink\" mode as long as we do not have more than N entries.</p>",
+        "id": 625736624,
+        "sender_full_name": "Daniel Gomez",
+        "timestamp": 1789996955
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"737725\">@Daniel Gomez</span> Like we discussed, my proposal is that you take in the initial number of slots as an argument, and that you offer a <code>reserve()</code>-like API where this can be grown in the future if needed. Thus, if for some reason the initial value is not enough, it can be grown by the driver at a future point when it's safe to do so (i.e.: outside of the dma signaling path).</p>\n<p>I like this ring buffer design you propose, so long as it does not break the monotonically increasing nature of the indices.</p>",
+        "id": 625737209,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1789997087
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> I think you probably need two locks, see <a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/blob/tyr-dev/rust/kernel/drm/job_queue.rs?ref_type=heads#L75\">https://gitlab.freedesktop.org/panfrost/linux/-/blob/tyr-dev/rust/kernel/drm/job_queue.rs?ref_type=heads#L75</a> and <a href=\"https://gitlab.freedesktop.org/panfrost/linux/-/blob/tyr-dev/rust/kernel/drm/job_queue.rs?ref_type=heads#L79\">https://gitlab.freedesktop.org/panfrost/linux/-/blob/tyr-dev/rust/kernel/drm/job_queue.rs?ref_type=heads#L79</a>, otherwise you will probably reintroduce this deadlock:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">At</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">top</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">each</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">pipeline</span><span class=\"w\"> </span><span class=\"n\">drains</span><span class=\"w\"> </span><span class=\"n\">entries</span><span class=\"w\"> </span><span class=\"n\">from</span>\n<span class=\"n\">submitted_start</span><span class=\"o\">..</span><span class=\"n\">submitted_end</span><span class=\"w\"> </span><span class=\"n\">into</span><span class=\"w\"> </span><span class=\"n\">deps_range</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"n\">This</span><span class=\"w\"> </span><span class=\"n\">allows</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">queue</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">accept</span>\n<span class=\"n\">more</span><span class=\"w\"> </span><span class=\"n\">submissions</span><span class=\"w\"> </span><span class=\"k\">while</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">rest</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">queue</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">locked</span><span class=\"w\"> </span><span class=\"n\">due</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"w\"> </span><span class=\"n\">being</span><span class=\"w\"> </span><span class=\"k\">in</span>\n<span class=\"n\">progress</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"n\">Ignoring</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">separation</span><span class=\"w\"> </span><span class=\"n\">may</span><span class=\"w\"> </span><span class=\"n\">cause</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"n\">deadlock</span><span class=\"w\"> </span><span class=\"n\">because</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">driver</span><span class=\"o\">'</span><span class=\"na\">s</span>\n<span class=\"n\">submit</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"n\">path</span><span class=\"w\"> </span><span class=\"n\">may</span><span class=\"w\"> </span><span class=\"n\">take</span><span class=\"w\"> </span><span class=\"n\">driver</span><span class=\"w\"> </span><span class=\"n\">locks</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"n\">then</span><span class=\"w\"> </span><span class=\"n\">wait</span><span class=\"w\"> </span><span class=\"n\">on</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"w\"> </span><span class=\"n\">mutex</span><span class=\"w\"> </span><span class=\"n\">held</span><span class=\"w\"> </span><span class=\"n\">by</span>\n<span class=\"n\">tick</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"k\">while</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"n\">waits</span><span class=\"w\"> </span><span class=\"n\">on</span><span class=\"w\"> </span><span class=\"n\">said</span><span class=\"w\"> </span><span class=\"n\">driver</span><span class=\"w\"> </span><span class=\"n\">locks</span><span class=\"w\"> </span><span class=\"n\">during</span><span class=\"w\"> </span><span class=\"n\">handler</span><span class=\"p\">.</span><span class=\"n\">submit</span><span class=\"p\">().</span>\n\n<span class=\"n\">The</span><span class=\"w\"> </span><span class=\"n\">current</span><span class=\"w\"> </span><span class=\"n\">design</span><span class=\"w\"> </span><span class=\"n\">solves</span><span class=\"w\"> </span><span class=\"n\">this</span><span class=\"w\"> </span><span class=\"n\">lock</span><span class=\"w\"> </span><span class=\"n\">ordering</span><span class=\"w\"> </span><span class=\"n\">problem</span><span class=\"w\"> </span><span class=\"n\">by</span><span class=\"w\"> </span><span class=\"n\">splitting</span><span class=\"w\"> </span><span class=\"n\">submit</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"n\">and</span>\n<span class=\"n\">tick</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"w\"> </span><span class=\"n\">into</span><span class=\"w\"> </span><span class=\"n\">two</span><span class=\"w\"> </span><span class=\"n\">separate</span><span class=\"w\"> </span><span class=\"n\">locks</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">inbox</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">submission</span><span class=\"w\"> </span><span class=\"n\">path</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">and</span><span class=\"w\"> </span><span class=\"n\">state</span>\n<span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"w\"> </span><span class=\"n\">path</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"n\">The</span><span class=\"w\"> </span><span class=\"n\">inbox</span><span class=\"w\"> </span><span class=\"n\">mutex</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">only</span><span class=\"w\"> </span><span class=\"n\">held</span><span class=\"w\"> </span><span class=\"n\">briefly</span><span class=\"w\"> </span><span class=\"n\">at</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">top</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"n\">to</span>\n<span class=\"n\">drain</span><span class=\"w\"> </span><span class=\"n\">new</span><span class=\"w\"> </span><span class=\"n\">submissions</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">while</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">rest</span><span class=\"w\"> </span><span class=\"n\">of</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">tick</span><span class=\"w\"> </span><span class=\"n\">logic</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">including</span><span class=\"w\"> </span><span class=\"n\">calls</span><span class=\"w\"> </span><span class=\"n\">to</span><span class=\"w\"> </span><span class=\"n\">the</span>\n<span class=\"n\">driver</span><span class=\"o\">'</span><span class=\"na\">s</span><span class=\"w\"> </span><span class=\"n\">submit</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"n\">happens</span><span class=\"w\"> </span><span class=\"n\">under</span><span class=\"w\"> </span><span class=\"n\">the</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"w\"> </span><span class=\"n\">mutex</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">which</span><span class=\"w\"> </span><span class=\"n\">is</span><span class=\"w\"> </span><span class=\"n\">never</span><span class=\"w\"> </span><span class=\"n\">touched</span><span class=\"w\"> </span><span class=\"n\">by</span>\n<span class=\"n\">submit</span><span class=\"p\">().</span>\n</code></pre></div>",
+        "id": 625738201,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1789997300
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span> yes, I forgot it was you that suggested that. Yes, ring buffer honoring that constraint.</p>",
+        "id": 625738516,
+        "sender_full_name": "Daniel Gomez",
+        "timestamp": 1789997371
+    },
+    {
+        "content": "<p>Maybe we should discuss the lock issue in a separate thread?<br>\nI suggest focussing on xarray vs list for now</p>",
+        "id": 625738628,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789997393
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> the Rust xarray takes care of the entries when slots are dropped. I wonder if it makes sense to leverage this ring-buffer design idea to take care the nodes we leave behind to automatically drop them together with their entries.</p>",
+        "id": 625740091,
+        "sender_full_name": "Daniel Gomez",
+        "timestamp": 1789997707
+    },
+    {
+        "content": "<blockquote>\n<p>The issue Daniel is referring to is that XArray does not free internal nodes if the index is ever-increasing, which is the case for Tyr's JobQueue draft.</p>\n</blockquote>\n<p>OOC, is this a property of the C API, or something we encoded in the rust abstraction wrapping around it? It seemed to me that xa_erase() would remove internal nodes as you start collecting low indices. Seems that if it wasn't true, the \"The XArray is optimised for small indices, but still has good performance with large indices.\" in <a href=\"https://docs.kernel.org/core-api/xarray.html\">https://docs.kernel.org/core-api/xarray.html</a> wouldn't hold.</p>\n<blockquote>\n<p>Another issue is that XArray runs into massively deep trees for large indices, even if you have few entries. Matthew Wilcox told me that for something approaching u32::max that will be like 11 pointer indirections for each ID lookup. That's also not cool in a job submission path <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span> </p>\n</blockquote>\n<p>Again, that goes against this statement \"The XArray implementation is efficient when the indices used are densely clustered;\" in the same spec.</p>\n<p>My understanding was that xa_array is efficient as long as live indices do not exhibit holes, and the range of live indices is relatively small</p>\n<p>I wonder if the 11 indirections Matthew mentioned is for the case where index 0 and index ULONG_MAX are populated, which might not really happen in our case (job indices is a sliding window, where indices are retired from bottom to top)</p>",
+        "id": 625741812,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1789998129
+    },
+    {
+        "content": "<blockquote>\n<p>OOC, is this a property of the C API</p>\n</blockquote>\n<p>That's a on the C xarray</p>",
+        "id": 625742346,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789998257
+    },
+    {
+        "content": "<blockquote>\n<p>\"The XArray implementation is efficient when the indices used are densely clustered;\" in the same spec.</p>\n</blockquote>\n<p>Once you reached the end leaves. For accessing arbitrarily large indices, you will have to go through the depth of the internal nodes.</p>\n<p>Let's wait for <span class=\"user-mention\" data-user-id=\"498029\">@Andreas Hindborg</span> , he can edcuate us on that</p>",
+        "id": 625742788,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789998362
+    },
+    {
+        "content": "<p>BTW, isn't it exactly what <a href=\"https://elixir.bootlin.com/linux/v7.2.5/source/lib/test_xarray.c#L324\">https://elixir.bootlin.com/linux/v7.2.5/source/lib/test_xarray.c#L324</a> tests?</p>",
+        "id": 625746907,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1789999239
+    },
+    {
+        "content": "<p>I think the issue is that it does not free <strong>internal</strong> nodes. The leave nodes can get merged / shrink</p>",
+        "id": 625748440,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1789999549
+    },
+    {
+        "content": "<blockquote>\n<p>I wonder if the 11 indirections Matthew mentioned is for the case where index 0 and index ULONG_MAX are populated, which might not really happen in our case (job indices is a sliding window, where indices are retired from bottom to top)</p>\n</blockquote>\n<p>Scratch that, it will happen when you approach ULONG_MAX, because it wraps around and starts populating entries from zero while entries at the end of the xarray are still alive, but this is just a transient state</p>",
+        "id": 625748451,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1789999551
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/JobQueue.20discussion/near/625734969\">said</a> in <a class=\"stream-topic\" data-stream-id=\"415254\" href=\"/#narrow/channel/415254-DRM/topic/JobQueue.20discussion/with/625748451\">#DRM &gt; JobQueue discussion</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"498029\">Andreas Hindborg</span> The issue Daniel is referring to is that XArray does not free internal nodes if the index is ever-increasing, which is the case for Tyr's JobQueue draft.</p>\n<p>Another issue is that XArray runs into massively deep trees for large indices, even if you have few entries. Matthew Wilcox told me that for something approaching u32::max that will be like 11 pointer indirections for each ID lookup. That's also not cool in a job submission path <span aria-label=\"eyes\" class=\"emoji emoji-1f440\" role=\"img\" title=\"eyes\">:eyes:</span></p>\n</blockquote>\n<blockquote>\n<p>IDK if the C xarray issue can be solved, because the internal nodes not being freed seems to be by-design. So I would <em>expect</em> that the C Xarray pushes back a gainst freeing those nodes.</p>\n<p>That would have to be determined by someone who hypothetically tries to make this change in C</p>\n</blockquote>\n<p>Did you double check this? I was looking over the xarray C code last week with <span class=\"user-mention\" data-user-id=\"737725\">@Daniel Gomez</span> and we found code that will delete nodes and compact the tree.  Basically when you delete nodes by storing <code>NULL</code> to their location, they are <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/xarray.c?id=93f51579e7df248780214094418f205253383cc5#n829\">deleted and freed</a>.</p>",
+        "id": 625752558,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1790000436
+    },
+    {
+        "content": "<p>I'm not fully on top of this, so please check the code path.</p>",
+        "id": 625752754,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1790000480
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"582628\">Daniel Almeida</span> <a href=\"#narrow/channel/415254-DRM/topic/JobQueue.20discussion/near/625737209\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"737725\">Daniel Gomez</span> Like we discussed, my proposal is that you take in the initial number of slots as an argument, and that you offer a <code>reserve()</code>-like API where this can be grown in the future if needed. Thus, if for some reason the initial value is not enough, it can be grown by the driver at a future point when it's safe to do so (i.e.: outside of the dma signaling path).</p>\n<p>I like this ring buffer design you propose, so long as it does not break the monotonically increasing nature of the indices.</p>\n</blockquote>\n<p>I think we have room for a growable ring buffer data structure. It should be managable. I have a statically sized one on list.</p>",
+        "id": 625753207,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1790000578
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"692273\">Philipp Stanner</span> <a href=\"#narrow/channel/415254-DRM/topic/JobQueue.20discussion/near/625748440\">said</a>:</p>\n<blockquote>\n<p>I think the issue is that it does not free <strong>internal</strong> nodes. The leave nodes can get merged / shrink</p>\n</blockquote>\n<p>The test I pointed to checks the root node, so I don't know where the internal nodes would be if that was the case, unless they are purely and simply leaked...</p>",
+        "id": 625753294,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1790000595
+    },
+    {
+        "content": "<p>Unless there's some sideband storage I missed...</p>",
+        "id": 625753672,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1790000670
+    },
+    {
+        "content": "<p>As for u32::max being the max number of queued job, I guess we might want to make that smaller, 4billion of pending jobs sounds unrealistic to me, and we probably want some throttling to happen before that (will happen naturally because of lack of memory anyway)</p>",
+        "id": 625754775,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1790000885
+    },
+    {
+        "content": "<p>If you delete an entry it is accounted for <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/xarray.c?id=93f51579e7df248780214094418f205253383cc5#n832\">here</a> and when <code>update_node</code> is called after the operation <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/xarray.c?id=93f51579e7df248780214094418f205253383cc5#n755\">here</a>, if any node was deleted, the node is unlinked and freed if empty <a href=\"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/xarray.c?id=93f51579e7df248780214094418f205253383cc5#n489\">here</a> before return. If the delete operation changes the refcount on the root, the tree shrinker is invoked. </p>\n<p>So you will not have any empty nodes inside the tree dangling.</p>\n<p>But the tree shrinking is an optimization that removes tree levels when the indicies in the tree are small. So when your moving id range moves to the upper part of the tree, you get full depth, which is 6 levels in the normal server configuration, if I remember correctly.</p>",
+        "id": 625760368,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1790002040
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> I know I told you otherwise at an earlier occation. Turns out we were reading the code wrong. I did a deep dive with <span class=\"user-mention\" data-user-id=\"737725\">@Daniel Gomez</span> before Kangrejos, and we learned that we were mistaken.</p>",
+        "id": 625761202,
+        "sender_full_name": "Andreas Hindborg",
+        "timestamp": 1790002214
+    }
+]
