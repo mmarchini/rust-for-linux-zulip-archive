@@ -418,5 +418,71 @@
         "id": 626036086,
         "sender_full_name": "Daniel Almeida",
         "timestamp": 1790085479
+    },
+    {
+        "content": "<p>+cc <span class=\"user-mention\" data-user-id=\"532207\">@Sami Tolvanen</span> <span class=\"user-mention\" data-user-id=\"519727\">@Alice Ryhl</span> </p>\n<p>Hi Danilo, following through on what I had promised you on the last<br>\ncall, starting with the \"2 lock\" design.</p>\n<p>By the way, this was paged out for quite some time. In the process of<br>\ngoing through my notes, I realize that the issue was likely fixed by<br>\nrearranging a few data structures in Tyr. I will follow with the full<br>\nrationale just in case I missed something:</p>\n<p>The problem we originally encountered was that the queue had basically<br>\ntwo points of interaction with the driver, one in the submit ioctl<br>\n(where the driver would call prepare()+commit()) and one in the<br>\nQueueOps::submit() hook, where the JQ would ask the driver to submit<br>\nthe work to the ring after deciding it was time to do so.</p>\n<p>Let's call the queue's internal lock \"state\". The problem begins<br>\nbecause QueueOps::submit() is called with \"state\" held. I believe this<br>\nis also the direction Philipp is going with his own design, and it makes<br>\nsense: it's a simple lock that allows you to \"stop the world\" and get a<br>\n&amp;mut to the JQ's internal state when running the internal scheduling logic.</p>\n<p>So you end up with something like this:</p>\n<p>Progress-check JQ thread:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"n\">QueueOps</span><span class=\"p\">::</span><span class=\"n\">submit</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"c1\">// call the driver</span>\n</code></pre></div>\n<p>In order to submit to the ring, the driver needed to acquire its<br>\nown locks as well. Lets assume there's a \"Context\" driver type that<br>\nallows access to the ring buffer, to make things simpler:</p>\n<p>Progress-check JQ thread:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"n\">QueueOps</span><span class=\"p\">::</span><span class=\"n\">submit</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"c1\">// call the driver</span>\n<span class=\"w\">    </span><span class=\"c1\">// driver code:</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">context</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">driver</span><span class=\"p\">.</span><span class=\"n\">context</span><span class=\"p\">[</span><span class=\"n\">i</span><span class=\"p\">].</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"n\">context</span><span class=\"p\">.</span><span class=\"n\">ring</span><span class=\"p\">.</span><span class=\"n\">push</span><span class=\"p\">(</span><span class=\"o\">..</span><span class=\"p\">.);</span>\n</code></pre></div>\n<p>On the ioctl front, though, this lock was also needed to access the JQ<br>\nhandle itself:</p>\n<p>ioctl thread:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">context</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">driver</span><span class=\"p\">.</span><span class=\"n\">context</span><span class=\"p\">[</span><span class=\"n\">i</span><span class=\"p\">].</span><span class=\"n\">lock</span><span class=\"p\">();</span>\n<span class=\"w\">  </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">jq</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">context</span><span class=\"p\">.</span><span class=\"n\">job_queue</span><span class=\"p\">;</span>\n\n<span class=\"w\">  </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">job</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">jobs</span><span class=\"p\">:</span>\n<span class=\"w\">    </span><span class=\"nc\">jq</span><span class=\"p\">.</span><span class=\"n\">prepare</span><span class=\"p\">(</span><span class=\"n\">job</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// fallible step</span>\n\n<span class=\"w\">  </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">job</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">jobs</span><span class=\"p\">:</span>\n<span class=\"w\">    </span><span class=\"nc\">jq</span><span class=\"p\">.</span><span class=\"n\">commit</span><span class=\"p\">(</span><span class=\"n\">job</span><span class=\"p\">);</span><span class=\"w\"> </span><span class=\"c1\">// infallible step</span>\n</code></pre></div>\n<p>In commit(), the JQ must update its internal indices (or lists, or<br>\nwhatever ends up in the final version) to account for the<br>\nnewly-submitted work. At this point, it needs to take \"state\".</p>\n<p>So now in the progress-check JQ thread we have:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">context</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>In the ioctl-submit thread we have:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">context</span><span class=\"p\">)</span>\n<span class=\"w\">  </span><span class=\"n\">lock</span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>Naturally, when running this on the device, it eventually deadlocked,<br>\nand we started looking for solutions.</p>\n<p>Now, of course there are a few ways to solve this. One of them is to<br>\nrequire drivers to not acquire the same locks from any queue<br>\nentrypoint (such as commit() and others), and callbacks (such as<br>\nQueueOps::submit() and others). I consider this error-prone.</p>\n<p>A second solution is to not lock the queue from any entrypoint. This is<br>\nwhat we chose to do when prototyping. To do so, the indices controlling<br>\nthe first stage of the queue (i.e.: jobs which have just been submitted)<br>\nare protected under a separate mutex, which is never taken by the JQ's<br>\nscheduling logic. This was found to work fine on the board.</p>\n<p>However I see that we eventually moved the JQ to be a sibling field of<br>\n\"Context\" (which we call Group, in CSF parlance), since the JQ had its<br>\nown locking anyway. In this case, at least this lock would not<br>\ncontribute to a potential ABBA.</p>\n<p>I think the fundamental question is, do we want to make this situation<br>\npossible at all, to begin with? To have it possible for drivers to<br>\ninadvertently run into ABBA issues with the queue by not being careful<br>\nlike I described above?</p>",
+        "id": 627577155,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790635978
+    },
+    {
+        "content": "<p>^ <span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span></p>",
+        "id": 627577217,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790635996
+    },
+    {
+        "content": "<p>Why do you have to call <code>QueueOps::submit</code> with the JQ state lock held?</p>",
+        "id": 627577646,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1790636187
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> This is just one part of the JQ algorithm, and the whole tick logic assumes there is only one thread walking the the whole pipeline and updating the indices for all stages. I am not sure it has to be this way, but it sure is what most people would initially reach for.</p>\n<p>What happens if we drop the lock after submitting job N and then lose to a racing thread that manages to submit N+1? In this case, job N+1 would hit the ring before job N, which is a violation of the idea that jobs begin execution in submission order.</p>",
+        "id": 627580813,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790637399
+    },
+    {
+        "content": "<p>That can be quite easily solved by having a separate submission lock.</p>",
+        "id": 627581343,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1790637613
+    },
+    {
+        "content": "<p>Where?</p>",
+        "id": 627581396,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790637642
+    },
+    {
+        "content": "<p>The lock used to serialise submission doesn't necessarily have to be the lock to protect the shared data structure</p>",
+        "id": 627581410,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1790637653
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"413824\">@Gary Guo</span> that’s what we did btw, inside the JQ.</p>",
+        "id": 627582887,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790638378
+    },
+    {
+        "content": "<p>So how does this relate to XArray vs linked list?</p>",
+        "id": 627583025,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1790638426
+    },
+    {
+        "content": "<p>It doesn’t directly. What I am describing is why we had two locks, which seems to be what you are also suggesting</p>",
+        "id": 627583615,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1790638680
+    },
+    {
+        "content": "<p>I think it depends on implementation of job queue really. Say if JQ uses a single worker thread which gets waken up when job can be submitted, then it doesn't need to explicitly use a lock.</p>",
+        "id": 627584212,
+        "sender_full_name": "Gary Guo",
+        "timestamp": 1790638942
     }
 ]
