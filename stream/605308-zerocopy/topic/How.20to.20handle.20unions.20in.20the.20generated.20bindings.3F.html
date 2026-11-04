@@ -1,0 +1,108 @@
+<html>
+<head><meta charset="utf-8"><title>How to handle unions in the generated bindings? · zerocopy · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/index.html">zerocopy</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html">How to handle unions in the generated bindings?</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="637500993"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637500993" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> SeungJong Ha <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637500993">(Nov 04 2026 at 13:09)</a>:</h4>
+<p>Hello,</p>
+<p>I'm trying to migrate the kernel DMA API from <code>transmute.rs</code> to zerocopy, which<br>
+<span class="user-mention" data-user-id="1069135">@Alistair Popple</span> asked about in June [1]. The bound is on <code>Coherent&lt;T&gt;</code> itself,<br>
+so every <code>unsafe impl transmute::{AsBytes, FromBytes}</code> on a type used with it has to<br>
+become a zerocopy derive at once. That works on my tree (+16/-19), and the remaining<br>
+users are all in nova.</p>
+<p>The one I cannot solve is <code>GspFwWprMeta</code>, because it has two anonymous unions.<br>
+<code>#[derive(IntoBytes)]</code> on a union needs <code>--cfg zerocopy_derive_union_into_bytes</code>,<br>
+which the kernel does not pass, and the <code>most_traits</code> option <span class="user-mention" data-user-id="890884">@Alexandre Courbot</span><br>
+suggested in June [2] gives exactly the same error.</p>
+<p>So I think his other option, updating the generator, is the place to fix it. The two<br>
+variants of each union are layout-identical and nova only ever writes one, so if the<br>
+generator wrote that variant directly instead of a union, the problem would be gone<br>
+for r570 and r000 both. The r000 bindings are being added now [3], so this looks like<br>
+a good time.</p>
+<p>One question first, which I could not answer from the code: <span class="user-mention" data-user-id="671004">@Danilo Krummrich</span>,<br>
+does the allocation path of <code>Coherent&lt;T&gt;</code> really need the <code>AsBytes</code> half? The two<br>
+SAFETY comments that mention <code>T: AsBytes + FromBytes</code> do not rely on the <code>AsBytes</code><br>
+part, and I found no comment explaining it. If it is not needed there, none of the<br>
+above matters.</p>
+<p>If I missed something, please let me know.<br>
+Best regards, SeungJong</p>
+<p>[1] <a href="https://lore.kernel.org/all/20260628-dma-zerocopy-bridge-v1-0-9a2895ebe30d@gmail.com/">https://lore.kernel.org/all/20260628-dma-zerocopy-bridge-v1-0-9a2895ebe30d@gmail.com/</a><br>
+[2] <a href="https://lore.kernel.org/all/DJLCLH7GDSBW.28J4PZW0FD60B@nvidia.com/">https://lore.kernel.org/all/DJLCLH7GDSBW.28J4PZW0FD60B@nvidia.com/</a><br>
+[3] <a href="https://lore.kernel.org/all/20261103-r000_rebase_on_cmdq-rpc-v1-0-189f9ff3bfd2@nvidia.com/">https://lore.kernel.org/all/20261103-r000_rebase_on_cmdq-rpc-v1-0-189f9ff3bfd2@nvidia.com/</a></p>
+
+
+
+<a name="637544975"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637544975" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637544975">(Nov 04 2026 at 15:35)</a>:</h4>
+<p>Is there a reason we can't just pass <code>--cfg zerocopy_derive_union_into_bytes</code>?</p>
+
+
+
+<a name="637587272"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637587272" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637587272">(Nov 04 2026 at 17:47)</a>:</h4>
+<p><span class="user-mention" data-user-id="895178">@Josh Liebow-Feeser</span> <span class="user-mention" data-user-id="1065586">@Jack Wrenn</span> </p>
+<p>Is this part of the docs still accurate? i.e. how likely you think we can mess it up? I am asking since it seems to be from late 2024, so perhaps there are some good news? :)</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// # Unions</span>
+<span class="sd">///</span>
+<span class="sd">/// Currently, union bit validity is [up in the air][union-validity], and so</span>
+<span class="sd">/// zerocopy does not support `#[derive(IntoBytes)]` on unions by default.</span>
+<span class="sd">/// However, implementing `IntoBytes` on a union type is likely sound on all</span>
+<span class="sd">/// existing Rust toolchains - it's just that it may become unsound in the</span>
+<span class="sd">/// future. You can opt-in to `#[derive(IntoBytes)]` support on unions by</span>
+<span class="sd">/// passing the unstable `zerocopy_derive_union_into_bytes` cfg:</span>
+<span class="sd">///</span>
+<span class="sd">/// ```shell</span>
+<span class="sd">/// $ RUSTFLAGS='--cfg zerocopy_derive_union_into_bytes' cargo build</span>
+<span class="sd">/// ```</span>
+<span class="sd">///</span>
+<span class="sd">/// However, it is your responsibility to ensure that this derive is sound on</span>
+<span class="sd">/// the specific versions of the Rust toolchain you are using! We make no</span>
+<span class="sd">/// stability or soundness guarantees regarding this cfg, and may remove it at</span>
+<span class="sd">/// any point.</span>
+<span class="sd">///</span>
+<span class="sd">/// We are actively working with Rust to stabilize the necessary language</span>
+<span class="sd">/// guarantees to support this in a forwards-compatible way, which will enable</span>
+<span class="sd">/// us to remove the cfg gate. As part of this effort, we need to know how much</span>
+<span class="sd">/// demand there is for this feature. If you would like to use `IntoBytes` on</span>
+<span class="sd">/// unions, [please let us know][discussion].</span>
+<span class="sd">///</span>
+<span class="sd">/// [union-validity]: https://github.com/rust-lang/unsafe-code-guidelines/issues/438</span>
+<span class="sd">/// [discussion]: https://github.com/google/zerocopy/discussions/1802</span>
+</code></pre></div>
+<p>Thanks!</p>
+
+
+
+<a name="637587404"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637587404" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Miguel Ojeda <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637587404">(Nov 04 2026 at 17:48)</a>:</h4>
+<p>Let me move the topic to <a class="stream" data-stream-id="605308" href="/#narrow/channel/605308-zerocopy">#zerocopy</a>, by the way.</p>
+
+
+
+<a name="637587538"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637587538" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637587538">(Nov 04 2026 at 17:48)</a>:</h4>
+<p>This topic was moved here from <a class="stream-topic" data-stream-id="288089" href="/#narrow/channel/288089-General/topic/zerocopy.3A.20how.20to.20handle.20unions.20in.20the.20generated.20bindings.3F">#General &gt; zerocopy: how to handle unions in the generated bindings?</a> by <span class="user-mention silent" data-user-id="411477">Miguel Ojeda</span>.</p>
+
+
+
+<a name="637588225"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637588225" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Liebow-Feeser <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637588225">(Nov 04 2026 at 17:51)</a>:</h4>
+<p>It’s unfortunately still pretty up in the air: <a href="https://github.com/rust-lang/reference/pull/2340">https://github.com/rust-lang/reference/pull/2340</a></p>
+
+
+
+<a name="637588429"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/605308-zerocopy/topic/How%20to%20handle%20unions%20in%20the%20generated%20bindings%3F/near/637588429" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Josh Liebow-Feeser <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/605308-zerocopy/topic/How.20to.20handle.20unions.20in.20the.20generated.20bindings.3F.html#637588429">(Nov 04 2026 at 17:51)</a>:</h4>
+<p>The latest update is that Jack and I had a conversation after that PR got closed and we <em>think</em> we have a way of resolving the concerns raised there</p>
+
+
+
+<hr><p>Last updated: Nov 04 2026 at 22:25 UTC</p>
+</html>
