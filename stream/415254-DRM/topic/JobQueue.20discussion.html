@@ -1076,5 +1076,62 @@ So I would jump to check which of these three is free (pun) tomorrow and write h
 
 
 
-<hr><p>Last updated: Nov 13 2026 at 18:23 UTC</p>
+<a name="640171541"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640171541" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640171541">(Nov 13 2026 at 18:29)</a>:</h4>
+<p>Another option could be to have a periodic (delayed) work item with an intervall large enough that it catches many fence grace periods</p>
+<p>Decisions, decisions…</p>
+
+
+
+<a name="640172374"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640172374" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640172374">(Nov 13 2026 at 18:32)</a>:</h4>
+<p>What's the issue with just cond_synchronize_rcu?</p>
+
+
+
+<a name="640172577"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640172577" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640172577">(Nov 13 2026 at 18:33)</a>:</h4>
+<p>The only drawback is that it might occupy a kthread for a gp?</p>
+
+
+
+<a name="640173220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640173220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640173220">(Nov 13 2026 at 18:35)</a>:</h4>
+<blockquote>
+<p>The issue is – I assume – that if we only go with the Gary-solution.. the drop_worker gets kicked immediately after jobs got signaled, so I think it's unlikely that a GP has passed, so the fences will still do their (cond_)synchronize_rcu()</p>
+</blockquote>
+<p>^</p>
+
+
+
+<a name="640173395"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640173395" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Alice Ryhl <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640173395">(Nov 13 2026 at 18:36)</a>:</h4>
+<p>You can always schedule the work item to run after a grace period?</p>
+
+
+
+<a name="640173419"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640173419" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Gary Guo <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640173419">(Nov 13 2026 at 18:36)</a>:</h4>
+<p>That's a description of what will happen, not an issue?</p>
+
+
+
+<a name="640173984"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640173984" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640173984">(Nov 13 2026 at 18:39)</a>:</h4>
+<p>hm, right, probably only the <em>first</em> fence would wait for a GP, the following ones should rush through.<br>
+Let's test that.</p>
+
+
+
+<a name="640174010"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/640174010" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#640174010">(Nov 13 2026 at 18:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="692273">Philipp Stanner</span> <a href="#narrow/channel/415254-DRM/topic/JobQueue.20discussion/near/640051695">said</a>:</p>
+<blockquote>
+<p>Is it a problem if jobs' payload data gets dropped with a more or less arbitrary delay, <span class="user-mention silent" data-user-id="582628">Daniel Almeida</span> <span class="user-mention silent" data-user-id="671004">Danilo Krummrich</span> ?</p>
+</blockquote>
+<p>It might for instance keep PTE allocations alive for longer than necessary, how big of an issue that is would be implementation specific. In any case, I want to avoid drivers having to consider such a behavior.</p>
+
+
+
+<hr><p>Last updated: Nov 14 2026 at 00:10 UTC</p>
 </html>
