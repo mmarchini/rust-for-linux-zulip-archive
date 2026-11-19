@@ -1185,5 +1185,161 @@ I want to give it a spin on Tyr myself until our Thursday meeting.</p>
 
 
 
-<hr><p>Last updated: Nov 19 2026 at 16:18 UTC</p>
+<a name="641952920"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641952920" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641952920">(Nov 19 2026 at 16:55)</a>:</h4>
+<blockquote>
+<p>Panthor/tyr just return -EINVAL and keep going.</p>
+</blockquote>
+<p>who returns that error code through what mechanism to whom?</p>
+
+
+
+<a name="641956440"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641956440" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641956440">(Nov 19 2026 at 17:05)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> I chatted with <span class="user-mention" data-user-id="929978">@Boris Brezillon</span> about what we discussed in the call, which goes slightly beyond the context available here on zulip.</p>
+<p>So it seems like we are not opposed to the idea of having userspace own up its mistakes and recreate the context transparently, instead of having error recovery baked into the kernel driver via the CS_FAULT + ERROR_BARRIER mechanism. The thing we worry about is backwards compatibility across Vulkan and GL. I will be prototyping this and will let you know how things goes on the next meeting.</p>
+<p>One thing to discuss perhaps: did I understand you right that you intend to have kill() called:</p>
+<p>a) when something errors in the queue and also<br>
+b) when something errors in another queue, and the current queue has a job that depends on it?</p>
+
+
+
+<a name="641958501"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641958501" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641958501">(Nov 19 2026 at 17:13)</a>:</h4>
+<p>a) No. JobQueue cannot know whether something errors in the queue. The driver, who completes jobs on the JQ object, knows that. Thus, the driver would drop JQ with an error in that case<br>
+b) exactly. That's currently the only reason why <code>kill()</code> exists</p>
+
+
+
+<a name="641960424"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641960424" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641960424">(Nov 19 2026 at 17:18)</a>:</h4>
+<p>Re: Gary's suggestion against core::mem::forget…<br>
+I guess it <strong>could</strong> work.</p>
+<p>My teeth are just hurting because we now would need two mechanisms to track a Job's state: One is the nr of deps, another the Result of the last error</p>
+<p>So <a href="https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-v2-3/rust/kernel/drm/job_queue.rs?ref_type=heads#L158">here</a>:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">impl</span><span class="o">&lt;'</span><span class="na">b</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">:</span><span class="w"> </span><span class="nc">JobQueueOps</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;</span><span class="w"> </span><span class="n">FenceCallback</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">DependencyWaker</span><span class="o">&lt;'</span><span class="na">b</span><span class="p">,</span><span class="w"> </span><span class="o">'</span><span class="nb">_</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">on_signal</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">res</span><span class="p">:</span><span class="w"> </span><span class="nb">Result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">err</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="c1">// TODO: store error in job here</span>
+<span class="w">            </span><span class="k">return</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Last dependency kicks the worker.</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">nr_of_deps</span><span class="p">.</span><span class="n">fetch_sub</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">Relaxed</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// The drop-order of JobQueue ensures that all DependencyWakers are</span>
+<span class="w">            </span><span class="c1">// cancelled before the JobQueue itself is dropped.</span>
+<span class="w">            </span><span class="bp">self</span><span class="p">.</span><span class="n">jq</span><span class="p">.</span><span class="n">check_start_run_worker</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>And then some JQ party, like <code>JobQueueOps::run_job</code>, would have to check </p>
+<ol>
+<li>Is this job ready?</li>
+<li>Has an error been set? If yes ⇒ kill()</li>
+</ol>
+<p>That now becomes relatively fragile because you have to ensure ordering and synchronization.. could be that the last dep signals with an error, then the worker needs to be kicked, at the same time your job can be submitted any time.</p>
+<p>Or you'd have to consider locking the jobs a a whole.</p>
+<p>Making <code>add_dependency()</code> unsafe, however, would be congruent with the actual unsafe block that causes this, which we inherit from the dmaFence:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="w">                </span><span class="c1">// SAFETY: The `registration` is not forgotten. It drops with JobQueue.</span>
+<span class="w">                </span><span class="n">registration</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">FenceCallbackRegistration</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+</code></pre></div>
+<p>So it might be better to wait for mainline Rust to help us out with Move instead of accepting this complexity.</p>
+
+
+
+<a name="641961210"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641961210" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641961210">(Nov 19 2026 at 17:21)</a>:</h4>
+<p>If by "other queue" you mean a queue that's in a different context/process, then I don't think it flies, because a faulty app would basically be able to kill/stall the compositor if we were to do that. The very reason we want fences signalled when a JQ dies is so that it unblocks the other processes/devices waiting on it. If the consumer wants to check the error and kill itself when the error field is set, it's fine, but you shouldn't assume that every body wants that.</p>
+
+
+
+<a name="641962255"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641962255" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641962255">(Nov 19 2026 at 17:23)</a>:</h4>
+<blockquote>
+<p>The very reason we want fences signalled when a JQ dies</p>
+</blockquote>
+<p>That's exactly how it's implemented.</p>
+<blockquote>
+<p>If the consumer wants to check the error and kill itself when the error field is set, it's fine, but you shouldn't assume that every body wants that.</p>
+</blockquote>
+<p>Who's the "consumer"?<br>
+You just said that everyone wants that, i.e., stuff getting signaled on error</p>
+
+
+
+<a name="641962366"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641962366" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641962366">(Nov 19 2026 at 17:24)</a>:</h4>
+<p>And yes, it might be that the consumer gets garbage because of that, and it's not great, but that's what you get when you do buffer sharing, and the other end of the pipe doesn't deliver (usually it's a misrendered frame or a bunch of misrendered frames, until the other end has recovered and things start looking okay again)</p>
+
+
+
+<a name="641962622"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641962622" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641962622">(Nov 19 2026 at 17:25)</a>:</h4>
+<blockquote>
+<p>Who's the "consumer"?</p>
+</blockquote>
+<p>In my example, producer is an app rendering stuff in a buffer shared with the compositor, and the consumer is the compositor.</p>
+
+
+
+<a name="641963036"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641963036" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641963036">(Nov 19 2026 at 17:26)</a>:</h4>
+<p>composition itself is deferred to the GPU, so that's basically two GPU contexts enforcing deps when they want to use a shared buffer</p>
+
+
+
+<a name="641963467"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641963467" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641963467">(Nov 19 2026 at 17:27)</a>:</h4>
+<blockquote>
+<p>You just said that everyone wants that, i.e., stuff getting signaled on error</p>
+</blockquote>
+<p>That's what drivers do right now, and what we said we wanted baked in the JQ implementation, IIRC</p>
+
+
+
+<a name="641965012"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641965012" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641965012">(Nov 19 2026 at 17:32)</a>:</h4>
+<p><span class="user-mention" data-user-id="692273">@Philipp Stanner</span> Do we have a driver in-tree that kills the context on a dep which has <code>dma_fence::error != 0</code>? I don't remember seeing that, but I might be wrong.</p>
+
+
+
+<a name="641965400"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641965400" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641965400">(Nov 19 2026 at 17:33)</a>:</h4>
+<p>We certainly don't do that in panthor/panfrost, and I don't know of any option to tell drm_sched to do that actually</p>
+
+
+
+<a name="641966189"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641966189" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641966189">(Nov 19 2026 at 17:36)</a>:</h4>
+<p>here for instance, there's no error propagated from the dep to the entity =&gt; <a href="https://elixir.bootlin.com/linux/v7.3.1/source/drivers/gpu/drm/scheduler/sched_entity.c#L444">https://elixir.bootlin.com/linux/v7.3.1/source/drivers/gpu/drm/scheduler/sched_entity.c#L444</a>. If it's signalled, it's just consider progress, regardless of the error attached to the signalled fence.</p>
+
+
+
+<a name="641976836"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641976836" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641976836">(Nov 19 2026 at 18:09)</a>:</h4>
+<p>So what do you do, just ignore that your VM_BIND in another queue failed, just ignoring that failure, running straight ahead into a fault?</p>
+
+
+
+<a name="641977052"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641977052" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641977052">(Nov 19 2026 at 18:10)</a>:</h4>
+<p>Anyways, with the current design the driver can choose to ignore the error. What doesn't exist right now is functionality for having the JQ proceed with jobs with broken deps. But that should be easy to add</p>
+
+
+
+<a name="641978516"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641978516" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641978516">(Nov 19 2026 at 18:15)</a>:</h4>
+<p>Do we agree on this:</p>
+<ol>
+<li>In case of in irrecoverable fault (decided by the driver), the driver tears down the JQ</li>
+<li>In case of a recoverable fault, the driver doesn't tell JQ, recovers, continues completing jobs</li>
+</ol>
+<p>?</p>
+<p>If no neighboring JQ is killed, then also no dependencies will get signaled with an error. So only irrecoverable errors would propagate</p>
+
+
+
+<hr><p>Last updated: Nov 19 2026 at 23:24 UTC</p>
 </html>

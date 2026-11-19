@@ -808,5 +808,101 @@
         "id": 641909928,
         "sender_full_name": "Danilo Krummrich",
         "timestamp": 1795100895
+    },
+    {
+        "content": "<blockquote>\n<p>Panthor/tyr just return -EINVAL and keep going.</p>\n</blockquote>\n<p>who returns that error code through what mechanism to whom?</p>",
+        "id": 641952920,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795107308
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"671004\">@Danilo Krummrich</span> I chatted with <span class=\"user-mention\" data-user-id=\"929978\">@Boris Brezillon</span> about what we discussed in the call, which goes slightly beyond the context available here on zulip.</p>\n<p>So it seems like we are not opposed to the idea of having userspace own up its mistakes and recreate the context transparently, instead of having error recovery baked into the kernel driver via the CS_FAULT + ERROR_BARRIER mechanism. The thing we worry about is backwards compatibility across Vulkan and GL. I will be prototyping this and will let you know how things goes on the next meeting.</p>\n<p>One thing to discuss perhaps: did I understand you right that you intend to have kill() called:</p>\n<p>a) when something errors in the queue and also<br>\nb) when something errors in another queue, and the current queue has a job that depends on it?</p>",
+        "id": 641956440,
+        "sender_full_name": "Daniel Almeida",
+        "timestamp": 1795107953
+    },
+    {
+        "content": "<p>a) No. JobQueue cannot know whether something errors in the queue. The driver, who completes jobs on the JQ object, knows that. Thus, the driver would drop JQ with an error in that case<br>\nb) exactly. That's currently the only reason why <code>kill()</code> exists</p>",
+        "id": 641958501,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795108382
+    },
+    {
+        "content": "<p>Re: Gary's suggestion against core::mem::forget…<br>\nI guess it <strong>could</strong> work.</p>\n<p>My teeth are just hurting because we now would need two mechanisms to track a Job's state: One is the nr of deps, another the Result of the last error</p>\n<p>So <a href=\"https://gitlab.freedesktop.org/pstanner/linux-drm-work/-/blob/jobqueue-jobqueue-v2-3/rust/kernel/drm/job_queue.rs?ref_type=heads#L158\">here</a>:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"o\">&lt;'</span><span class=\"na\">b</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">JobQueueOps</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Send</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nb\">Sync</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"n\">FenceCallback</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">DependencyWaker</span><span class=\"o\">&lt;'</span><span class=\"na\">b</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"nb\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">on_signal</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">err</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">res</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">          </span><span class=\"c1\">// TODO: store error in job here</span>\n<span class=\"w\">            </span><span class=\"k\">return</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n\n<span class=\"w\">        </span><span class=\"c1\">// Last dependency kicks the worker.</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">nr_of_deps</span><span class=\"p\">.</span><span class=\"n\">fetch_sub</span><span class=\"p\">(</span><span class=\"mi\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Relaxed</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"c1\">// The drop-order of JobQueue ensures that all DependencyWakers are</span>\n<span class=\"w\">            </span><span class=\"c1\">// cancelled before the JobQueue itself is dropped.</span>\n<span class=\"w\">            </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">jq</span><span class=\"p\">.</span><span class=\"n\">check_start_run_worker</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>And then some JQ party, like <code>JobQueueOps::run_job</code>, would have to check </p>\n<ol>\n<li>Is this job ready?</li>\n<li>Has an error been set? If yes ⇒ kill()</li>\n</ol>\n<p>That now becomes relatively fragile because you have to ensure ordering and synchronization.. could be that the last dep signals with an error, then the worker needs to be kicked, at the same time your job can be submitted any time.</p>\n<p>Or you'd have to consider locking the jobs a a whole.</p>\n<p>Making <code>add_dependency()</code> unsafe, however, would be congruent with the actual unsafe block that causes this, which we inherit from the dmaFence:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">                </span><span class=\"c1\">// SAFETY: The `registration` is not forgotten. It drops with JobQueue.</span>\n<span class=\"w\">                </span><span class=\"n\">registration</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">FenceCallbackRegistration</span><span class=\"p\">::</span><span class=\"n\">new</span><span class=\"p\">(</span>\n</code></pre></div>\n<p>So it might be better to wait for mainline Rust to help us out with Move instead of accepting this complexity.</p>",
+        "id": 641960424,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795108732
+    },
+    {
+        "content": "<p>If by \"other queue\" you mean a queue that's in a different context/process, then I don't think it flies, because a faulty app would basically be able to kill/stall the compositor if we were to do that. The very reason we want fences signalled when a JQ dies is so that it unblocks the other processes/devices waiting on it. If the consumer wants to check the error and kill itself when the error field is set, it's fine, but you shouldn't assume that every body wants that.</p>",
+        "id": 641961210,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795108868
+    },
+    {
+        "content": "<blockquote>\n<p>The very reason we want fences signalled when a JQ dies</p>\n</blockquote>\n<p>That's exactly how it's implemented.</p>\n<blockquote>\n<p>If the consumer wants to check the error and kill itself when the error field is set, it's fine, but you shouldn't assume that every body wants that.</p>\n</blockquote>\n<p>Who's the \"consumer\"?<br>\nYou just said that everyone wants that, i.e., stuff getting signaled on error</p>",
+        "id": 641962255,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795109028
+    },
+    {
+        "content": "<p>And yes, it might be that the consumer gets garbage because of that, and it's not great, but that's what you get when you do buffer sharing, and the other end of the pipe doesn't deliver (usually it's a misrendered frame or a bunch of misrendered frames, until the other end has recovered and things start looking okay again)</p>",
+        "id": 641962366,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109052
+    },
+    {
+        "content": "<blockquote>\n<p>Who's the \"consumer\"?</p>\n</blockquote>\n<p>In my example, producer is an app rendering stuff in a buffer shared with the compositor, and the consumer is the compositor.</p>",
+        "id": 641962622,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109109
+    },
+    {
+        "content": "<p>composition itself is deferred to the GPU, so that's basically two GPU contexts enforcing deps when they want to use a shared buffer</p>",
+        "id": 641963036,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109193
+    },
+    {
+        "content": "<blockquote>\n<p>You just said that everyone wants that, i.e., stuff getting signaled on error</p>\n</blockquote>\n<p>That's what drivers do right now, and what we said we wanted baked in the JQ implementation, IIRC</p>",
+        "id": 641963467,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109276
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"692273\">@Philipp Stanner</span> Do we have a driver in-tree that kills the context on a dep which has <code>dma_fence::error != 0</code>? I don't remember seeing that, but I might be wrong.</p>",
+        "id": 641965012,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109557
+    },
+    {
+        "content": "<p>We certainly don't do that in panthor/panfrost, and I don't know of any option to tell drm_sched to do that actually</p>",
+        "id": 641965400,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109622
+    },
+    {
+        "content": "<p>here for instance, there's no error propagated from the dep to the entity =&gt; <a href=\"https://elixir.bootlin.com/linux/v7.3.1/source/drivers/gpu/drm/scheduler/sched_entity.c#L444\">https://elixir.bootlin.com/linux/v7.3.1/source/drivers/gpu/drm/scheduler/sched_entity.c#L444</a>. If it's signalled, it's just consider progress, regardless of the error attached to the signalled fence.</p>",
+        "id": 641966189,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795109790
+    },
+    {
+        "content": "<p>So what do you do, just ignore that your VM_BIND in another queue failed, just ignoring that failure, running straight ahead into a fault?</p>",
+        "id": 641976836,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795111795
+    },
+    {
+        "content": "<p>Anyways, with the current design the driver can choose to ignore the error. What doesn't exist right now is functionality for having the JQ proceed with jobs with broken deps. But that should be easy to add</p>",
+        "id": 641977052,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795111835
+    },
+    {
+        "content": "<p>Do we agree on this:</p>\n<ol>\n<li>In case of in irrecoverable fault (decided by the driver), the driver tears down the JQ</li>\n<li>In case of a recoverable fault, the driver doesn't tell JQ, recovers, continues completing jobs</li>\n</ol>\n<p>?</p>\n<p>If no neighboring JQ is killed, then also no dependencies will get signaled with an error. So only irrecoverable errors would propagate</p>",
+        "id": 641978516,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795112130
     }
 ]
