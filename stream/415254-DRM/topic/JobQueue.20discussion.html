@@ -1140,5 +1140,50 @@ I want to give it a spin on Tyr myself until our Thursday meeting.</p>
 
 
 
-<hr><p>Last updated: Nov 19 2026 at 06:01 UTC</p>
+<a name="641892711"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641892711" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Daniel Almeida <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641892711">(Nov 19 2026 at 14:15)</a>:</h4>
+<p><span class="user-mention" data-user-id="671004">@Danilo Krummrich</span> <span class="user-mention" data-user-id="692273">@Philipp Stanner</span> </p>
+<p>For the error handling in Tyr, which was asked last week:</p>
+<p>As I said, the firmware reports two error levels in a command stream.</p>
+<p><code>CS_FATAL</code> is documented as unrecoverable. Some IGT tests that caused it were unknown opcodes in the stream, stack overflows and access to unmapped memory. In these cases, we mark the context as dead.</p>
+<p><code>CS_FAULT</code> is documented as recoverable. Some IGT tests that caused it were garbage shader code, garbage framebuffer descriptors or waiting on a GPU sync object that was previously flagged by the firmware with an error.</p>
+<p>On <code>CS_FAULT</code>, the stream stops until the driver acknowledges the fault. The firmware then resumes it in a so-called recovery mode, in which instructions are processed but no further GPU work is dispatched. It remains in recovery mode until it finds an <code>ERROR_BARRIER</code> instruction. We have an <code>ERROR_BARRIER</code> right after we return from the user's CS, precisely so we can recover from errors at the job boundary, i.e.: this clears the error state and returns from recovery mode before subsequent jobs execute.</p>
+<p>When new jobs execute, they find the firmware in a predictable state that they can then resume from. Sure, the next job might have the failed job as a dependency, in which case the result is likely to not be correct, but this is recoverable regardless, and not a safety issue. Panthor/tyr just return -EINVAL and keep going.</p>
+<p>Here is a list of the two types of errors for completeness:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">CS_FAULT</span><span class="p">:</span>
+<span class="o">-</span><span class="w"> </span><span class="n">KABOOM</span><span class="p">:</span><span class="w"> </span><span class="nc">Shader</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="n">executed</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">KABOOM</span><span class="w"> </span><span class="n">instruction</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_RES_TERM</span><span class="p">:</span><span class="w"> </span><span class="nb">Iterator</span><span class="w"> </span><span class="nc">terminated</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_BUS_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">bus</span><span class="w"> </span><span class="n">error</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_INHERIT_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">A</span><span class="w"> </span><span class="n">fault</span><span class="w"> </span><span class="n">has</span><span class="w"> </span><span class="n">been</span><span class="w"> </span><span class="n">inherited</span>
+<span class="o">-</span><span class="w"> </span><span class="n">INSTR_INVALID_PC</span><span class="p">:</span><span class="w"> </span><span class="nc">Shader</span><span class="w"> </span><span class="n">invalid</span><span class="w"> </span><span class="n">Program</span><span class="w"> </span><span class="n">Counter</span>
+<span class="o">-</span><span class="w"> </span><span class="n">INSTR_INVALID_ENC</span><span class="p">:</span><span class="w"> </span><span class="nc">Shader</span><span class="w"> </span><span class="n">invalid</span><span class="w"> </span><span class="n">instruction</span>
+<span class="o">-</span><span class="w"> </span><span class="n">INSTR_BARRIER_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Shader</span><span class="w"> </span><span class="n">barrier</span><span class="w"> </span><span class="n">failure</span>
+<span class="o">-</span><span class="w"> </span><span class="n">DATA_INVALID_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Invalid</span><span class="w"> </span><span class="n">descriptor</span>
+<span class="o">-</span><span class="w"> </span><span class="n">TILE_RANGE_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Tile</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">bounds</span>
+<span class="o">-</span><span class="w"> </span><span class="n">ADDR_RANGE_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Address</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">bounds</span>
+<span class="o">-</span><span class="w"> </span><span class="n">IMPRECISE_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">No</span><span class="w"> </span><span class="n">detailed</span><span class="w"> </span><span class="n">error</span><span class="w"> </span><span class="n">information</span><span class="w"> </span><span class="n">available</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CSF_RES_EVICTION_TIMEOUT</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="w"> </span><span class="n">error</span>
+
+<span class="n">CS_FATAL</span><span class="p">:</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_CONFIG_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="n">invalid</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_UNRECOVERABLE</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">marked</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">unrecoverable</span><span class="p">.</span><span class="w"> </span><span class="n">The</span><span class="w"> </span><span class="n">firmware</span><span class="w"> </span><span class="n">will</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">resume</span><span class="w"> </span><span class="n">it</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_ENDPOINT_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">No</span><span class="w"> </span><span class="n">endpoints</span><span class="w"> </span><span class="n">available</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_BUS_FAULT</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">bus</span><span class="w"> </span><span class="n">error</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_INSTR_INVALID</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">invalid</span><span class="w"> </span><span class="n">instruction</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CS_CALL_STACK_OVERFLOW</span><span class="p">:</span><span class="w"> </span><span class="nc">Command</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="n">stack</span><span class="w"> </span><span class="n">overflow</span>
+<span class="o">-</span><span class="w"> </span><span class="n">CSF_FW_INTERNAL_ERROR</span><span class="p">:</span><span class="w"> </span><span class="nc">Firmware</span><span class="w"> </span><span class="n">error</span>
+</code></pre></div>
+
+
+
+<a name="641909928"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/641909928" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Danilo Krummrich <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#641909928">(Nov 19 2026 at 15:08)</a>:</h4>
+<blockquote>
+<p>When new jobs execute, they find the firmware in a predictable state that they can then resume from. Sure, the next job might have the failed job as a dependency, in which case the result is likely to not be correct, but this is recoverable regardless, and not a safety issue. Panthor/tyr just return -EINVAL and keep going.</p>
+</blockquote>
+<p>But what's the point to continue if no one can guarantee whether the result is still valid? What is userspace supposed to do in this case?</p>
+
+
+
+<hr><p>Last updated: Nov 19 2026 at 16:18 UTC</p>
 </html>
