@@ -1341,5 +1341,163 @@ You just said that everyone wants that, i.e., stuff getting signaled on error</p
 
 
 
-<hr><p>Last updated: Nov 20 2026 at 05:50 UTC</p>
+<a name="642125522"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642125522" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642125522">(Nov 20 2026 at 07:37)</a>:</h4>
+<blockquote>
+<p>So what do you do, just ignore that your VM_BIND in another queue failed, just ignoring that failure, running straight ahead into a fault?</p>
+</blockquote>
+<p>No, async VM_BIND failures are special in that they flag the VM as unusable, and that will result on groups using this VM being killed. But it's not detected through fence errors, it's distinct mechanism. The dependency I was describing was group -&gt; group dependency.</p>
+
+
+
+<a name="642126235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642126235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642126235">(Nov 20 2026 at 07:41)</a>:</h4>
+<blockquote>
+<p>the error. What doesn't exist right now is functionality for having the JQ proceed with jobs with broken deps.</p>
+</blockquote>
+<p>Yep, that's what we need.</p>
+<blockquote>
+<p>But that should be easy to add</p>
+</blockquote>
+<p>As long as we have a way to configure the JQ so that error checking is disabled, we should be good.</p>
+
+
+
+<a name="642127497"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642127497" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642127497">(Nov 20 2026 at 07:47)</a>:</h4>
+<p>Like, <em>all</em> errors? Under what circumstances would you want to tear a JQ down?</p>
+
+
+
+<a name="642128395"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642128395" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642128395">(Nov 20 2026 at 07:51)</a>:</h4>
+<p>My suggestion would be to implement it so that the driver can just ignore errors in <code>JobQueueOps::kill()</code> or return a "not an error, continue".</p>
+<p>That would result in the most flexible, somewhat universal implementation</p>
+
+
+
+<a name="642128535"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642128535" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642128535">(Nov 20 2026 at 07:52)</a>:</h4>
+<blockquote>
+<p>Do we agree on this:</p>
+</blockquote>
+<ol>
+<li>In case of in irrecoverable fault (decided by the driver), the driver tears down the JQ</li>
+<li>In case of a recoverable fault, the driver doesn't tell JQ, recovers, continues completing jobs<br>
+?</li>
+</ol>
+<p>That's more or less what happens at the moment. Except in case of 2, we also set an error on the fence before signalling it. But it won't kill the JQ.</p>
+<p>Now, the recoverable vs unrecoverable fault discussion is orthogonal to what we've been discussing above (JQ being killed if one of the dep on one of its job has an error set). As I told <span class="user-mention" data-user-id="582628">@Daniel Almeida</span>, I think we can make all recoverable faults fatal if we want to, either as an extra mode (new GROUP_CREATE flag), or just unconditionally.</p>
+<p>If we go for the unconditional version, we need to patch panthor so Tyr and Panthor are consistent in that regard. And we also need to make sure it doesn't regress the UMD. We have recovery logic in gallium(panfrost) that's supposed to save us when a group dies, but it's only been exercised on fatal faults so far. panvk is less of a problem, because we just happily report DEVICE_LOST and let the app deal with it.</p>
+
+
+
+<a name="642129138"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642129138" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642129138">(Nov 20 2026 at 07:55)</a>:</h4>
+<blockquote>
+<p>Like, <em>all</em> errors? Under what circumstances would you want to tear a JQ down?</p>
+</blockquote>
+<p>That's up to the driver. In Panthor (and thus Tyr), we kill the group and it's JQs if:</p>
+<ul>
+<li>the VM attached to it became unusable</li>
+<li>any of the queue under the group faced a fatal fault</li>
+<li>a timeout occurred</li>
+<li>the UMD destroyed the group (normal destruction path, so I don't think it qualifies as a kill, except for the fact it might kill and error+signal any jobs that were pending or in-flight)</li>
+</ul>
+
+
+
+<a name="642129493"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642129493" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642129493">(Nov 20 2026 at 07:56)</a>:</h4>
+<blockquote>
+<p>My suggestion would be to implement it so that the driver can just ignore errors in <code>JobQueueOps::kill()</code> or return a "not an error, continue".</p>
+</blockquote>
+<p>I think there are situations where we want to kill the JQ still, we just don't want it to be based on deps errors.</p>
+
+
+
+<a name="642129625"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642129625" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642129625">(Nov 20 2026 at 07:57)</a>:</h4>
+<p>But you do detect errors on neighboring queues through the fence error code, don't you?</p>
+
+
+
+<a name="642129660"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642129660" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642129660">(Nov 20 2026 at 07:57)</a>:</h4>
+<p>And I honestly doubt any driver will want that, otherwise it would be baked in drm_sched already</p>
+
+
+
+<a name="642130101"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642130101" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642130101">(Nov 20 2026 at 07:59)</a>:</h4>
+<p>With drm_sched everyone has his own solution for everything, see job resubmissions.</p>
+
+
+
+<a name="642130135"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642130135" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642130135">(Nov 20 2026 at 07:59)</a>:</h4>
+<p>Anyways, what you request can be provided, no problem</p>
+
+
+
+<a name="642131073"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642131073" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642131073">(Nov 20 2026 at 08:02)</a>:</h4>
+<blockquote>
+<p>But you do detect errors on neighboring queues through the fence error code, don't you?</p>
+</blockquote>
+<p>Assuming "neighbouring queues" is referring to queues that live under the same group, there's several internal mechanism for that. <code>CS_SYNC_{SET,ADD/WAIT}</code> is one of them =&gt; the error gets propagated from one queue to another, meaning a non-faulty queue immediately becomes faulty if it's waiting on the result produced by a queue that experienced a fault. That's all HW specific so you don't see it in panthor/tyr. The only way you could see it is by deassembling the CS buffer passed to the KMD.</p>
+
+
+
+<a name="642131182"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642131182" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642131182">(Nov 20 2026 at 08:02)</a>:</h4>
+<blockquote>
+<p>With drm_sched everyone has his own solution for everything, see job resubmissions.</p>
+</blockquote>
+<p>It's not the same as resubmission.</p>
+
+
+
+<a name="642133220"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642133220" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642133220">(Nov 20 2026 at 08:09)</a>:</h4>
+<p>We're really mixing two things here:</p>
+<ol>
+<li>how you detect GPU faults and flag the job and its fence as faulty, and also how you recover/resubmit when that happens</li>
+<li>what you do with this info on the other end (when a dep has an error set)</li>
+</ol>
+<p><a href="https://github.com/Rust-for-Linux/linux/issues/2">#2</a> is a driver decision, not something you should enforce at the JQ level. If we want to ask the driver what to do when an error exists on a fence, it's fine, but we shouldn't defacto consider it as the end of the road.</p>
+
+
+
+<a name="642134531"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642134531" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642134531">(Nov 20 2026 at 08:14)</a>:</h4>
+<p>So far, all drivers have been ignoring errors on deps. That's what drm_sched does, and I suspect it's done this way because there was a consensus that GPU drivers generally don't care if the content of a resource is correct or not, they just care about other users of this resource being done with it, so they can either get exclusive read-write access or shared read-only access.</p>
+
+
+
+<a name="642135235"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642135235" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642135235">(Nov 20 2026 at 08:17)</a>:</h4>
+<p>Sorry for the lengthy explanation, but I think it's important we all agree on what GPU drivers need, and why <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="642152417"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642152417" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642152417">(Nov 20 2026 at 09:22)</a>:</h4>
+<p>My proposal for now would be:</p>
+<ul>
+<li>JQ always progresses submitted jobs to run_job(), ignoring failed deps</li>
+<li>in run_job(), the driver gets some sort of list of dependency errors for this job</li>
+<li>The driver can then check them voluntarily, ignore them, or halt the JQ and tear it down</li>
+</ul>
+<p>That way we can get rid of the <code>kill()</code> callback altogether, would give maximum flexibility and have just 1 place where dependency errors might have to be evaluated (in run_job())</p>
+
+
+
+<a name="642174853"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/415254-DRM/topic/JobQueue%20discussion/near/642174853" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Boris Brezillon <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/415254-DRM/topic/JobQueue.20discussion.html#642174853">(Nov 20 2026 at 10:46)</a>:</h4>
+<p>keeping a list of errors means you have to allocate (which you can't do in the dma-signalling path) or keep the fences in the deps array. I guess the decision to continue/stop could be done when the fence is evaluated instead. That, or you just keep the first error seen. I doubt the error code itself matters much.</p>
+
+
+
+<hr><p>Last updated: Nov 20 2026 at 14:56 UTC</p>
 </html>

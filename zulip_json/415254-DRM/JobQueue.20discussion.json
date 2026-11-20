@@ -904,5 +904,113 @@
         "id": 641978516,
         "sender_full_name": "Philipp Stanner",
         "timestamp": 1795112130
+    },
+    {
+        "content": "<blockquote>\n<p>So what do you do, just ignore that your VM_BIND in another queue failed, just ignoring that failure, running straight ahead into a fault?</p>\n</blockquote>\n<p>No, async VM_BIND failures are special in that they flag the VM as unusable, and that will result on groups using this VM being killed. But it's not detected through fence errors, it's distinct mechanism. The dependency I was describing was group -&gt; group dependency.</p>",
+        "id": 642125522,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795160242
+    },
+    {
+        "content": "<blockquote>\n<p>the error. What doesn't exist right now is functionality for having the JQ proceed with jobs with broken deps.</p>\n</blockquote>\n<p>Yep, that's what we need.</p>\n<blockquote>\n<p>But that should be easy to add</p>\n</blockquote>\n<p>As long as we have a way to configure the JQ so that error checking is disabled, we should be good.</p>",
+        "id": 642126235,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795160464
+    },
+    {
+        "content": "<p>Like, <em>all</em> errors? Under what circumstances would you want to tear a JQ down?</p>",
+        "id": 642127497,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795160855
+    },
+    {
+        "content": "<p>My suggestion would be to implement it so that the driver can just ignore errors in <code>JobQueueOps::kill()</code> or return a \"not an error, continue\".</p>\n<p>That would result in the most flexible, somewhat universal implementation</p>",
+        "id": 642128395,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795161111
+    },
+    {
+        "content": "<blockquote>\n<p>Do we agree on this:</p>\n</blockquote>\n<ol>\n<li>In case of in irrecoverable fault (decided by the driver), the driver tears down the JQ</li>\n<li>In case of a recoverable fault, the driver doesn't tell JQ, recovers, continues completing jobs<br>\n?</li>\n</ol>\n<p>That's more or less what happens at the moment. Except in case of 2, we also set an error on the fence before signalling it. But it won't kill the JQ.</p>\n<p>Now, the recoverable vs unrecoverable fault discussion is orthogonal to what we've been discussing above (JQ being killed if one of the dep on one of its job has an error set). As I told <span class=\"user-mention\" data-user-id=\"582628\">@Daniel Almeida</span>, I think we can make all recoverable faults fatal if we want to, either as an extra mode (new GROUP_CREATE flag), or just unconditionally.</p>\n<p>If we go for the unconditional version, we need to patch panthor so Tyr and Panthor are consistent in that regard. And we also need to make sure it doesn't regress the UMD. We have recovery logic in gallium(panfrost) that's supposed to save us when a group dies, but it's only been exercised on fatal faults so far. panvk is less of a problem, because we just happily report DEVICE_LOST and let the app deal with it.</p>",
+        "id": 642128535,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161140
+    },
+    {
+        "content": "<blockquote>\n<p>Like, <em>all</em> errors? Under what circumstances would you want to tear a JQ down?</p>\n</blockquote>\n<p>That's up to the driver. In Panthor (and thus Tyr), we kill the group and it's JQs if:</p>\n<ul>\n<li>the VM attached to it became unusable</li>\n<li>any of the queue under the group faced a fatal fault</li>\n<li>a timeout occurred</li>\n<li>the UMD destroyed the group (normal destruction path, so I don't think it qualifies as a kill, except for the fact it might kill and error+signal any jobs that were pending or in-flight)</li>\n</ul>",
+        "id": 642129138,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161321
+    },
+    {
+        "content": "<blockquote>\n<p>My suggestion would be to implement it so that the driver can just ignore errors in <code>JobQueueOps::kill()</code> or return a \"not an error, continue\".</p>\n</blockquote>\n<p>I think there are situations where we want to kill the JQ still, we just don't want it to be based on deps errors.</p>",
+        "id": 642129493,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161416
+    },
+    {
+        "content": "<p>But you do detect errors on neighboring queues through the fence error code, don't you?</p>",
+        "id": 642129625,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795161454
+    },
+    {
+        "content": "<p>And I honestly doubt any driver will want that, otherwise it would be baked in drm_sched already</p>",
+        "id": 642129660,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161465
+    },
+    {
+        "content": "<p>With drm_sched everyone has his own solution for everything, see job resubmissions.</p>",
+        "id": 642130101,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795161576
+    },
+    {
+        "content": "<p>Anyways, what you request can be provided, no problem</p>",
+        "id": 642130135,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795161586
+    },
+    {
+        "content": "<blockquote>\n<p>But you do detect errors on neighboring queues through the fence error code, don't you?</p>\n</blockquote>\n<p>Assuming \"neighbouring queues\" is referring to queues that live under the same group, there's several internal mechanism for that. <code>CS_SYNC_{SET,ADD/WAIT}</code> is one of them =&gt; the error gets propagated from one queue to another, meaning a non-faulty queue immediately becomes faulty if it's waiting on the result produced by a queue that experienced a fault. That's all HW specific so you don't see it in panthor/tyr. The only way you could see it is by deassembling the CS buffer passed to the KMD.</p>",
+        "id": 642131073,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161720
+    },
+    {
+        "content": "<blockquote>\n<p>With drm_sched everyone has his own solution for everything, see job resubmissions.</p>\n</blockquote>\n<p>It's not the same as resubmission.</p>",
+        "id": 642131182,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795161740
+    },
+    {
+        "content": "<p>We're really mixing two things here:</p>\n<ol>\n<li>how you detect GPU faults and flag the job and its fence as faulty, and also how you recover/resubmit when that happens</li>\n<li>what you do with this info on the other end (when a dep has an error set)</li>\n</ol>\n<p><a href=\"https://github.com/Rust-for-Linux/linux/issues/2\">#2</a> is a driver decision, not something you should enforce at the JQ level. If we want to ask the driver what to do when an error exists on a fence, it's fine, but we shouldn't defacto consider it as the end of the road.</p>",
+        "id": 642133220,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795162178
+    },
+    {
+        "content": "<p>So far, all drivers have been ignoring errors on deps. That's what drm_sched does, and I suspect it's done this way because there was a consensus that GPU drivers generally don't care if the content of a resource is correct or not, they just care about other users of this resource being done with it, so they can either get exclusive read-write access or shared read-only access.</p>",
+        "id": 642134531,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795162481
+    },
+    {
+        "content": "<p>Sorry for the lengthy explanation, but I think it's important we all agree on what GPU drivers need, and why <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 642135235,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795162655
+    },
+    {
+        "content": "<p>My proposal for now would be:</p>\n<ul>\n<li>JQ always progresses submitted jobs to run_job(), ignoring failed deps</li>\n<li>in run_job(), the driver gets some sort of list of dependency errors for this job</li>\n<li>The driver can then check them voluntarily, ignore them, or halt the JQ and tear it down</li>\n</ul>\n<p>That way we can get rid of the <code>kill()</code> callback altogether, would give maximum flexibility and have just 1 place where dependency errors might have to be evaluated (in run_job())</p>",
+        "id": 642152417,
+        "sender_full_name": "Philipp Stanner",
+        "timestamp": 1795166579
+    },
+    {
+        "content": "<p>keeping a list of errors means you have to allocate (which you can't do in the dma-signalling path) or keep the fences in the deps array. I guess the decision to continue/stop could be done when the fence is evaluated instead. That, or you just keep the first error seen. I doubt the error code itself matters much.</p>",
+        "id": 642174853,
+        "sender_full_name": "Boris Brezillon",
+        "timestamp": 1795171610
     }
 ]
