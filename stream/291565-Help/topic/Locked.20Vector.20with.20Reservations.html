@@ -1,0 +1,61 @@
+<html>
+<head><meta charset="utf-8"><title>Locked Vector with Reservations · Help · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/index.html">Help</a></h2>
+<h3>Topic: <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Locked.20Vector.20with.20Reservations.html">Locked Vector with Reservations</a></h3>
+
+<hr>
+
+<base href="https://rust-for-linux.zulipchat.com">
+
+<head><link href="http://mmarchini.me/rust-for-linux-zulip-archive/style.css" rel="stylesheet"></head>
+
+<a name="643575974"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Locked%20Vector%20with%20Reservations/near/643575974" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Locked.20Vector.20with.20Reservations.html#643575974">(Nov 25 2026 at 13:17)</a>:</h4>
+<p>Let's say I would want sth like this</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// pseudocode</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">Stuff</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">:</span><span class="w"> </span><span class="nc">SpinLock</span><span class="o">&lt;</span><span class="n">KVec</span><span class="o">&lt;</span><span class="n">Foo</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">Wrapper</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">s</span><span class="p">:</span><span class="w"> </span><span class="nc">Stuff</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">stuff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">KBox</span><span class="p">::</span><span class="n">pin_init</span><span class="o">!</span><span class="p">(</span><span class="n">Stuff</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">new_spin_lock</span><span class="o">!</span><span class="p">(</span><span class="n">KVec</span><span class="p">::</span><span class="n">new</span><span class="p">())</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">);</span>
+
+<span class="n">stuff</span><span class="p">.</span><span class="n">inner</span><span class="p">.</span><span class="n">lock</span><span class="p">().</span><span class="n">reserve</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// Doesn't work, sleeps with lock held</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">wrapper</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Wrapper</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">stuff</span><span class="w"> </span><span class="p">};</span>
+
+<span class="n">wrapper</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">42</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_ATOMIC</span><span class="p">)</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// Takes lock, but never allocates because there's a reservation</span>
+</code></pre></div>
+<p>For an experiment of mine it would be handy to have a vector as a buffer that needs to reserve and then later gets wrapped. After wrapping, it doesn't need to allocate anymore, but can be accessed in parallel.<br>
+Before being wrapped, it needs to allocate, but cannot be accessed in parallel, so the spinlock is not yet necessary</p>
+<p>Is there a somewhat sane way how I could approach this? I suppose I could wait for a canonical Xarray::reserve <span aria-label="man shrugging" class="emoji emoji-1f937-200d-2642" role="img" title="man shrugging">:man_shrugging:</span> </p>
+<p>(in JobQueue we solve all the pre-allocation issues with carrying our list head and using lists, but that has certain negative aspects to it, too)</p>
+
+
+
+<a name="643579051"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Locked%20Vector%20with%20Reservations/near/643579051" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Locked.20Vector.20with.20Reservations.html#643579051">(Nov 25 2026 at 13:29)</a>:</h4>
+<p>Not sure how to solve this for <code>KVec</code>. For <code>XArray</code> we are going with <a href="https://lore.kernel.org/r/20261120-xarray-entry-send-v6-11-1f69d7385f70@kernel.org">sheafs</a>. You need an API that allows you to allocate the memory without taking the lock, and then passing in that memory during the operation under lock.</p>
+
+
+
+<a name="643579995"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Locked%20Vector%20with%20Reservations/near/643579995" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Andreas Hindborg <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Locked.20Vector.20with.20Reservations.html#643579995">(Nov 25 2026 at 13:32)</a>:</h4>
+<p>You could add a <code>KVec::reserve_from</code>, passing in an allocation that you can  set up before taking the lock.</p>
+
+
+
+<a name="643580374"></a>
+<h4><a href="https://rust-for-linux.zulipchat.com#narrow/stream/291565-Help/topic/Locked%20Vector%20with%20Reservations/near/643580374" class="zl"><img src="http://mmarchini.me/rust-for-linux-zulip-archive/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Philipp Stanner <a href="http://mmarchini.me/rust-for-linux-zulip-archive/stream/291565-Help/topic/Locked.20Vector.20with.20Reservations.html#643580374">(Nov 25 2026 at 13:34)</a>:</h4>
+<p>yoah, some idea like that was floating in my head, too.<br>
+In C you'd just not take the lock and reserve <span aria-label="shrug" class="emoji emoji-1f937" role="img" title="shrug">:shrug:</span> </p>
+<p>If you solve that with XArray, I suppose I can also wait for that as a battle-hardened central solution</p>
+
+
+
+<hr><p>Last updated: Nov 25 2026 at 13:54 UTC</p>
+</html>
